@@ -1,0 +1,9 @@
+[package]
+name = "playastation"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+arraydeque = "0.5.1"
+strum = { version = "0.28.0", features = ["derive"] }
+typewit = "1.14.2"
