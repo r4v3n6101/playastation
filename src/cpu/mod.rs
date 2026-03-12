@@ -18,7 +18,6 @@ impl Bus {
 
     pub fn read_word(&self, addr: u32) -> u32 {
         // TODO : check alignment
-        println!("{:?}", &self.memory[addr as usize..][..4]);
         u32::from_le_bytes([
             self.memory[addr as usize],
             self.memory[(addr + 1) as usize],
