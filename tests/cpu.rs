@@ -1,9 +1,11 @@
 use std::{fs, process::Command};
 
-use playastation::cpu::{Bus, Cpu};
+use playastation::{cpu::Cpu, mem::Bus};
 
 fn create_and_run_program(name: &'static str) -> (Cpu, Bus) {
-    let mut memory = vec![0u8; 1024 * 1024];
+    let mut bus = Bus::default();
+    let mut cpu = Cpu::default();
+    cpu.regs.pc = 0;
 
     let output = format!("{name}.bin");
     fs::File::create(&output).unwrap();
@@ -14,14 +16,8 @@ fn create_and_run_program(name: &'static str) -> (Cpu, Bus) {
         .wait()
         .unwrap();
     let program = fs::read(&output).unwrap();
-    memory[..program.len()].copy_from_slice(&program[..]);
+    bus.mem.storage[..program.len()].copy_from_slice(&program[..]);
     fs::remove_file(output).unwrap();
-
-    let mut bus = Bus { memory };
-    let mut cpu = Cpu {
-        regs: Default::default(),
-        pipeline: Default::default(),
-    };
 
     for _ in 0..1000 {
         cpu.cycle(&mut bus);
