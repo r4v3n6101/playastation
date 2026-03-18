@@ -1,7 +1,7 @@
 const MEMSIZE: usize = 2 * 1024 * 1024;
 
 pub struct Memory {
-    pub storage: Box<[u8; MEMSIZE]>,
+    pub storage: Box<[u8]>,
 }
 
 #[derive(Default)]
@@ -13,7 +13,7 @@ pub struct Bus {
 impl Default for Memory {
     fn default() -> Self {
         Self {
-            storage: Box::new([0; _]),
+            storage: vec![0; MEMSIZE].into_boxed_slice(),
         }
     }
 }

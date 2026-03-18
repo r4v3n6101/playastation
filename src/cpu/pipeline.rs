@@ -11,7 +11,7 @@ pub struct Pipeline {
     queue: ArrayDeque<Latch, 5, Wrapping>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 enum Latch {
     Flushed,
     Fetched(u32),
@@ -39,32 +39,44 @@ impl Pipeline {
     // TODO : fallible
     /// Decode and *possibly* evaluate.
     /// The correct behavior is to evaluate in EX (execute) stage,
-    /// but to keep the pipeline simple (w/o forwarding)
-    /// results are immediately written to register file.
-    pub fn decode(&mut self, regs: &mut Registers) {
+    /// but to keep the pipeline simple it's done in ID.
+    pub fn decode(&mut self, regs: &Registers) {
+        let stages = [
+            self.queue.get(4).copied(),
+            self.queue.get(3).copied(),
+            self.queue.get(2).copied(),
+        ];
         if let Some(stage @ &mut Latch::Fetched(ins)) = self.queue.get_mut(1) {
-            // TODO : don't set nop, instead bail an error or trap
-            let op = OpResult::decode_and_evaluate(ins, regs).unwrap_or_default();
+            let mut regs = regs.clone();
 
-            // This is kind of forwarding of Alu ops from EX/MEM stages
-            // (but we can actually write its results in ID)
-            match op {
-                OpResult::Alu { dest, res } => {
-                    // TODO : overflow trap
-                    regs.general[dest] = res.unwrap();
-
-                    // Always zero
-                    regs.general[0] = 0;
+            // Forwarding of arithmetic ops from the next stages into registers.
+            // Register file isn't touched, because the next ops may fall, so pipeline will run
+            // from the previous place (and with original registers).
+            for latch in stages {
+                let Some(
+                    Latch::Decoded(op) | Latch::Executed { op, .. } | Latch::Memory { op, .. },
+                ) = latch
+                else {
+                    continue;
+                };
+                match op {
+                    OpResult::Alu { dest, res } => {
+                        // TODO : overflow trap
+                        regs.general[dest] = res.unwrap();
+                        regs.general[0] = 0;
+                    }
+                    OpResult::MulDiv {
+                        res: Some((hi, lo)),
+                    } => {
+                        regs.hi = hi;
+                        regs.lo = lo;
+                    }
+                    _ => {}
                 }
-                OpResult::MulDiv {
-                    res: Some((hi, lo)),
-                } => {
-                    regs.hi = hi;
-                    regs.lo = lo;
-                }
-                _ => (),
             }
-            *stage = Latch::Decoded(op);
+
+            // TODO : don't set nop, instead bail an error or trap
+            *stage = Latch::Decoded(OpResult::decode_and_evaluate(ins, &regs).unwrap_or_default());
         }
     }
 
@@ -126,8 +138,8 @@ impl Pipeline {
                     StoreKind::Word(val) => {
                         bus.store_word(addr, val);
                     }
-                    StoreKind::WordLeft(val) => todo!(),
-                    StoreKind::WordRight(val) => todo!(),
+                    StoreKind::WordLeft(_) => todo!(),
+                    StoreKind::WordRight(_) => todo!(),
                 },
                 _ => {}
             }
@@ -149,6 +161,10 @@ impl Pipeline {
         }) = self.queue.get_mut(4)
         {
             match op {
+                OpResult::Alu { dest, res } => {
+                    // No overflow, because checked already
+                    regs.general[dest] = res.unwrap();
+                }
                 OpResult::Load { dest, .. } => {
                     regs.general[dest] = read;
                 }
@@ -161,6 +177,12 @@ impl Pipeline {
                     ..
                 } => {
                     regs.general[link_reg] = link_addr;
+                }
+                OpResult::MulDiv {
+                    res: Some((hi, lo)),
+                } => {
+                    regs.hi = hi;
+                    regs.lo = lo;
                 }
                 _ => {}
             }

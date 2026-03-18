@@ -467,7 +467,7 @@ impl OpResult {
                 let b = regs.general[rt].cast_signed();
                 Some(Self::MulDiv {
                     // Overflow or div by 0
-                    res: if (b == 0) || (a.cast_unsigned() == 0x80000000 && b == -1) {
+                    res: if (b == 0) || (a.cast_unsigned() == 0x8000_0000 && b == -1) {
                         None
                     } else {
                         let hi = (a % b) as u32;

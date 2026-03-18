@@ -14,7 +14,7 @@ pub struct Cpu {
     pub cop0: Cop0,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Registers {
     pub general: [u32; 32],
     // TODO : it's not 0x0, rather
@@ -42,7 +42,7 @@ impl Default for Cpu {
 impl Cpu {
     pub fn cycle(&mut self, bus: &mut Bus) {
         self.pipeline.fetch(&mut self.regs, bus);
-        self.pipeline.decode(&mut self.regs);
+        self.pipeline.decode(&self.regs);
         self.pipeline.execute(&mut self.regs);
         self.pipeline.memory(bus);
         self.pipeline.writeback(&mut self.regs);
