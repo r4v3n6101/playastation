@@ -1,12 +1,30 @@
 use arraydeque::{ArrayDeque, Wrapping};
 
+use crate::mem;
+
 use super::{
-    Bus, Registers,
+    Registers,
     ins::{LoadKind, OpResult, StoreKind},
 };
 
+#[derive(Debug)]
+pub struct Error {
+    pub pc: u32,
+    pub kind: ErrorKind,
+}
+
+#[derive(Debug)]
+pub enum ErrorKind {
+    AluOverflow,
+    InvalidInstruction(u32),
+    MemoryLoad(mem::Error),
+    MemoryStore(mem::Error),
+    Break,
+    Syscall,
+}
+
 /// Simplified and inaccurate implementation of MIPS pipeline.
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub struct Pipeline {
     queue: ArrayDeque<Latch, 5, Wrapping>,
 }
@@ -14,39 +32,49 @@ pub struct Pipeline {
 #[derive(Debug, Copy, Clone)]
 enum Latch {
     Flushed,
-    Fetched(u32),
-    Decoded(OpResult),
-    Executed {
-        op: OpResult,
-        link_addr: u32,
-    },
-    Memory {
-        op: OpResult,
-        link_addr: u32,
-        read: u32,
-    },
+    Fetched { pc: u32, ins: u32 },
+    Decoded { pc: u32, op: OpResult },
+    Executed { pc: u32, op: OpResult },
+    Memory { pc: u32, op: OpResult, read: u32 },
+    Writeback { pc: u32, op: OpResult },
+}
+
+impl Default for Pipeline {
+    fn default() -> Self {
+        Self {
+            queue: ArrayDeque::from([Latch::Flushed; 5]),
+        }
+    }
 }
 
 impl Pipeline {
-    /// Fetch as it should be.
-    /// Read an instruction and increment PC (program count).
-    pub fn fetch(&mut self, regs: &mut Registers, bus: &Bus) {
-        let ins = bus.read_word(regs.pc);
-        self.queue.push_front(Latch::Fetched(ins));
-        regs.pc = regs.pc.wrapping_add(4);
+    /// Fetch. Read an instruction and increment PC (program count).
+    pub fn fetch(&mut self, pc: &mut u32, bus: &mem::Bus) -> Result<(), Error> {
+        self.queue.push_front(Latch::Fetched {
+            pc: *pc,
+            ins: bus.read_word(*pc).map_err(|err| {
+                let pc = *pc;
+                Error {
+                    pc,
+                    kind: ErrorKind::MemoryLoad(err),
+                }
+            })?,
+        });
+        *pc = pc.wrapping_add(4);
+
+        Ok(())
     }
 
-    // TODO : fallible
     /// Decode and *possibly* evaluate.
     /// The correct behavior is to evaluate in EX (execute) stage,
-    /// but to keep the pipeline simple it's done in ID.
-    pub fn decode(&mut self, regs: &Registers) {
+    /// but to keep the pipeline simple and reduce additional if/matches it's done in ID.
+    pub fn decode(&mut self, regs: &Registers) -> Result<(), Error> {
         let stages = [
             self.queue.get(4).copied(),
             self.queue.get(3).copied(),
             self.queue.get(2).copied(),
         ];
-        if let Some(stage @ &mut Latch::Fetched(ins)) = self.queue.get_mut(1) {
+        if let stage @ &mut Latch::Fetched { pc, ins } = &mut self.queue[1] {
             let mut regs = regs.clone();
 
             // Forwarding of arithmetic ops from the next stages into registers.
@@ -54,14 +82,16 @@ impl Pipeline {
             // from the previous place (and with original registers).
             for latch in stages {
                 let Some(
-                    Latch::Decoded(op) | Latch::Executed { op, .. } | Latch::Memory { op, .. },
+                    Latch::Decoded { op, .. }
+                    | Latch::Executed { op, .. }
+                    | Latch::Memory { op, .. },
                 ) = latch
                 else {
                     continue;
                 };
                 match op {
                     OpResult::Alu { dest, res } => {
-                        // TODO : overflow trap
+                        // Forwarded results are already checked
                         regs.general[dest] = res.unwrap();
                         regs.general[0] = 0;
                     }
@@ -75,19 +105,47 @@ impl Pipeline {
                 }
             }
 
-            // TODO : don't set nop, instead bail an error or trap
-            *stage = Latch::Decoded(OpResult::decode_and_evaluate(ins, &regs).unwrap_or_default());
+            let op = OpResult::decode_and_evaluate(ins, &regs).ok_or(Error {
+                pc,
+                kind: ErrorKind::InvalidInstruction(ins),
+            })?;
+
+            match op {
+                OpResult::Alu { res: None, .. } => {
+                    return Err(Error {
+                        pc,
+                        kind: ErrorKind::AluOverflow,
+                    });
+                }
+                OpResult::Break => {
+                    return Err(Error {
+                        pc,
+                        kind: ErrorKind::Break,
+                    });
+                }
+                OpResult::Syscall => {
+                    return Err(Error {
+                        pc,
+                        kind: ErrorKind::Syscall,
+                    });
+                }
+                _ => (),
+            }
+
+            *stage = Latch::Decoded { pc, op };
         }
+
+        Ok(())
     }
 
     /// Execute jumps and branches.
     /// Used instead of emulating delay slot.
-    pub fn execute(&mut self, regs: &mut Registers) {
+    pub fn execute(&mut self, next_pc: &mut u32) {
         // To overcome borrow checker
         // Don't really want to split array into mutable parts
         let mut jump_addr = None;
 
-        if let Some(stage @ &mut Latch::Decoded(op)) = self.queue.get_mut(2) {
+        if let stage @ &mut Latch::Decoded { pc, op } = &mut self.queue[2] {
             match op {
                 OpResult::Jump { addr, .. } => {
                     jump_addr = Some(addr);
@@ -97,69 +155,88 @@ impl Pipeline {
                 }
                 _ => {}
             }
-            *stage = Latch::Executed {
-                op,
-                // Address of instruction to flush
-                link_addr: regs.pc - 4,
-            };
+            *stage = Latch::Executed { pc, op };
         }
 
         if let Some(addr) = jump_addr {
             // Flush pre-fetched, but keep decoded (so called delay slot)
             self.queue[0] = Latch::Flushed;
-            regs.pc = addr;
+            *next_pc = addr;
         }
     }
 
     /// Operations w/ memory like load/store.
     /// Eliminate need for load-delay slot, immitating the real CPU pipeline.
-    pub fn memory(&mut self, bus: &mut Bus) {
-        if let Some(stage @ &mut Latch::Executed { op, link_addr }) = self.queue.get_mut(3) {
+    pub fn memory(&mut self, bus: &mut mem::Bus) -> Result<(), Error> {
+        if let stage @ &mut Latch::Executed { pc, op } = &mut self.queue[3] {
             let mut read = 0;
             match op {
                 OpResult::Load { addr, kind, .. } => {
                     read = match kind {
-                        LoadKind::IByte => bus.read_byte(addr).cast_signed() as u32,
-                        LoadKind::IHalf => bus.read_half(addr).cast_signed() as u32,
-                        LoadKind::UByte => bus.read_byte(addr) as u32,
-                        LoadKind::UHalf => bus.read_half(addr) as u32,
-                        LoadKind::Word => bus.read_word(addr),
+                        LoadKind::IByte => bus
+                            .read_byte(addr)
+                            .map_err(|err| Error {
+                                pc,
+                                kind: ErrorKind::MemoryLoad(err),
+                            })?
+                            .cast_signed() as u32,
+                        LoadKind::IHalf => bus
+                            .read_half(addr)
+                            .map_err(|err| Error {
+                                pc,
+                                kind: ErrorKind::MemoryLoad(err),
+                            })?
+                            .cast_signed() as u32,
+                        LoadKind::UByte => u32::from(bus.read_byte(addr).map_err(|err| Error {
+                            pc,
+                            kind: ErrorKind::MemoryLoad(err),
+                        })?),
+                        LoadKind::UHalf => u32::from(bus.read_half(addr).map_err(|err| Error {
+                            pc,
+                            kind: ErrorKind::MemoryLoad(err),
+                        })?),
+                        LoadKind::Word => bus.read_word(addr).map_err(|err| Error {
+                            pc,
+                            kind: ErrorKind::MemoryLoad(err),
+                        })?,
                         LoadKind::WordLeft => todo!(),
                         LoadKind::WordRight => todo!(),
                     };
                 }
                 OpResult::Store { addr, kind } => match kind {
                     StoreKind::Byte(val) => {
-                        bus.store_byte(addr, val);
+                        bus.store_byte(addr, val).map_err(|err| Error {
+                            pc,
+                            kind: ErrorKind::MemoryStore(err),
+                        })?;
                     }
                     StoreKind::Half(val) => {
-                        bus.store_half(addr, val);
+                        bus.store_half(addr, val).map_err(|err| Error {
+                            pc,
+                            kind: ErrorKind::MemoryStore(err),
+                        })?;
                     }
                     StoreKind::Word(val) => {
-                        bus.store_word(addr, val);
+                        bus.store_word(addr, val).map_err(|err| Error {
+                            pc,
+                            kind: ErrorKind::MemoryStore(err),
+                        })?;
                     }
                     StoreKind::WordLeft(_) => todo!(),
                     StoreKind::WordRight(_) => todo!(),
                 },
                 _ => {}
             }
-            *stage = Latch::Memory {
-                op,
-                link_addr,
-                read,
-            };
+            *stage = Latch::Memory { pc, op, read };
         }
+
+        Ok(())
     }
 
     /// Write to register file.
     /// Result of ALU ops are written in ID emulating forwarding of ops.
     pub fn writeback(&mut self, regs: &mut Registers) {
-        if let Some(&mut Latch::Memory {
-            op,
-            link_addr,
-            read,
-        }) = self.queue.get_mut(4)
-        {
+        if let stage @ &mut Latch::Memory { pc, op, read } = &mut self.queue[4] {
             match op {
                 OpResult::Alu { dest, res } => {
                     // No overflow, because checked already
@@ -169,14 +246,14 @@ impl Pipeline {
                     regs.general[dest] = read;
                 }
                 OpResult::Branch { link: true, .. } => {
-                    regs.general[31] = link_addr;
+                    regs.general[31] = pc + 8;
                 }
                 OpResult::Jump {
                     link: true,
                     link_reg,
                     ..
                 } => {
-                    regs.general[link_reg] = link_addr;
+                    regs.general[link_reg] = pc + 8;
                 }
                 OpResult::MulDiv {
                     res: Some((hi, lo)),
@@ -189,6 +266,33 @@ impl Pipeline {
 
             // Always zero
             regs.general[0] = 0;
+
+            *stage = Latch::Writeback { pc, op };
         }
+    }
+
+    /// Flush the pipeline with [`count`] of instructions.
+    /// If the next stage is branch or jump, flush it too.
+    /// Returns PC of parent branch/jump or [`None`]
+    // TODO : I don't like this return
+    pub fn flush(&mut self, count: usize) -> Option<u32> {
+        debug_assert!(count < 5);
+
+        for i in 0..count {
+            self.queue[i] = Latch::Flushed;
+        }
+
+        // Flush branch/jump operation older than failed delay slot and save its PC
+        let mut parent = None;
+        if let (1, stage @ &mut Latch::Decoded { pc, op, .. })
+        | (2, stage @ &mut Latch::Executed { pc, op, .. })
+        | (4, stage @ &mut Latch::Writeback { pc, op }) = (count, &mut self.queue[count])
+            && op.has_delay_slot()
+        {
+            parent = Some(pc);
+            *stage = Latch::Flushed;
+        }
+
+        parent
     }
 }

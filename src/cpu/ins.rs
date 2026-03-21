@@ -31,6 +31,10 @@ pub enum OpResult {
     },
     /// Multiple and divide (uses extra registers HI/LO)
     MulDiv { res: Option<(u32, u32)> },
+    /// Break
+    Break,
+    /// Syscall (2 variants of enum for differing when choosing an exception)
+    Syscall,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -449,7 +453,7 @@ impl OpResult {
             Opcode::Mult => {
                 let a = i64::from(regs.general[rs].cast_signed());
                 let b = i64::from(regs.general[rt].cast_signed());
-                let res = (a * b) as u64;
+                let res = (a * b).cast_unsigned();
                 Some(Self::MulDiv {
                     res: Some(((res >> 32) as u32, res as u32)),
                 })
@@ -493,7 +497,14 @@ impl OpResult {
                 link: true,
                 link_reg: rd,
             }),
+            Opcode::Break => Some(Self::Break),
+            Opcode::Syscall => Some(Self::Syscall),
             _ => None,
         }
+    }
+
+    /// Branch or jump delay slot
+    pub fn has_delay_slot(&self) -> bool {
+        matches!(self, Self::Jump { .. } | Self::Branch { .. })
     }
 }
