@@ -201,3 +201,17 @@ fn test_misaligned_sw_exception() {
     assert_eq!(cpu.cop0.regs[14], 12);
     assert_eq!(cpu.cop0.cause_exc_code(), 5);
 }
+
+#[test]
+fn test_mtc0_basic() {
+    let (cpu, _) = create_and_run_program("mtc0_basic", 100);
+
+    assert_eq!(cpu.cop0.regs[14], 0x1234_5678);
+}
+
+#[test]
+fn test_mfc0_basic() {
+    let (cpu, _) = create_and_run_program("mfc0_basic", 12);
+
+    assert_eq!(cpu.regs.general[3], 0x1234_5678);
+}

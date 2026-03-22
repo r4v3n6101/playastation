@@ -1,3 +1,5 @@
+use strum::{EnumDiscriminants, IntoDiscriminant};
+
 /// Simplified Cop0 (coprocessor 0) with the logic used in PSX.
 /// It's not fully implemented, because PSX doesn't use TLB for example.
 #[derive(Default, Debug)]
@@ -5,7 +7,7 @@ pub struct Cop0 {
     pub regs: [u32; 32],
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(EnumDiscriminants, Debug, Copy, Clone)]
 #[repr(u32)]
 pub enum Exception {
     Interrupt = 0x00,
@@ -17,13 +19,6 @@ pub enum Exception {
     Break = 0x09,
     ReservedInstruction = 0x0A,
     Overflow = 0x0C,
-}
-
-impl Exception {
-    fn discriminant(&self) -> u32 {
-        // https://doc.rust-lang.org/std/mem/fn.discriminant.html#accessing-the-numeric-value-of-the-discriminant
-        unsafe { *<*const _>::from(self).cast::<u32>() }
-    }
 }
 
 impl Cop0 {
@@ -74,7 +69,7 @@ impl Cop0 {
 
         let cause = &mut self.regs[Self::CAUSE_IDX];
         *cause &= !((0b11111 << 2) | (1 << 31));
-        *cause |= (excode.discriminant() & 0b11111) << 2;
+        *cause |= (excode.discriminant() as u32 & 0b11111) << 2;
         *cause |= (in_delay_slot as u32) << 31;
 
         if let Exception::UnalignedLoad { bad_vaddr }

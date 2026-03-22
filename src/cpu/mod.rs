@@ -43,7 +43,7 @@ impl Cpu {
         let fetch = self.pipeline.fetch(&mut self.regs.pc, &self.cop0, bus);
         let decode = self.pipeline.decode(&self.regs, &mut self.cop0);
         self.pipeline.execute(&mut self.regs.pc);
-        let mem = self.pipeline.memory(bus);
+        let mem = self.pipeline.memory(bus, &mut self.cop0);
         self.pipeline.writeback(&mut self.regs);
 
         let (err, flush_count) = if let Err(err) = mem {

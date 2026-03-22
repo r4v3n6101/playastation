@@ -29,6 +29,10 @@ pub enum OpResult {
     },
     /// Multiple and divide (uses extra registers HI/LO)
     MulDiv { res: Option<(u32, u32)> },
+    /// Move from coprocessor 0
+    Mfc0 { dest: usize, from: usize },
+    /// Move to coprocessor 0
+    Mtc0 { dest: usize, res: u32 },
     /// Break
     Break,
     /// Syscall (2 variants of enum for differing when choosing an exception)
@@ -496,6 +500,11 @@ impl OpResult {
                 addr: regs.general[rs],
                 link: true,
                 link_reg: rd,
+            }),
+            Opcode::Mfc0 => Some(Self::Mfc0 { dest: rt, from: rd }),
+            Opcode::Mtc0 => Some(Self::Mtc0 {
+                dest: rd,
+                res: regs.general[rt],
             }),
             Opcode::Break => Some(Self::Break),
             Opcode::Syscall => Some(Self::Syscall),

@@ -102,7 +102,6 @@ impl Pipeline {
                     OpResult::Alu { dest, res } => {
                         // Forwarded results are already checked
                         regs.general[dest] = res.unwrap();
-                        regs.general[0] = 0;
                     }
                     OpResult::MulDiv {
                         res: Some((hi, lo)),
@@ -110,8 +109,14 @@ impl Pipeline {
                         regs.hi = hi;
                         regs.lo = lo;
                     }
+                    OpResult::Mfc0 { dest, from } => {
+                        regs.general[dest] = cop0.regs[from];
+                    }
                     _ => {}
                 }
+
+                // Always
+                regs.general[0] = 0;
             }
 
             let op = OpResult::decode_and_evaluate(ins, &regs).ok_or(Error {
@@ -179,7 +184,7 @@ impl Pipeline {
 
     /// Operations w/ memory like load/store.
     /// Eliminate need for load-delay slot, immitating the real CPU pipeline.
-    pub fn memory(&mut self, bus: &mut mem::Bus) -> Result<(), Error> {
+    pub fn memory(&mut self, bus: &mut mem::Bus, cop0: &mut Cop0) -> Result<(), Error> {
         if let stage @ &mut Latch::Executed { pc, op } = &mut self.queue[3] {
             let mut read = 0;
             match op {
@@ -237,6 +242,12 @@ impl Pipeline {
                     StoreKind::WordLeft(_) => todo!(),
                     StoreKind::WordRight(_) => todo!(),
                 },
+                OpResult::Mfc0 { from, .. } => {
+                    read = cop0.regs[from];
+                }
+                OpResult::Mtc0 { dest, res } => {
+                    cop0.regs[dest] = res;
+                }
                 _ => {}
             }
             *stage = Latch::Memory { pc, op, read };
@@ -254,8 +265,11 @@ impl Pipeline {
                     // No overflow, because checked already
                     regs.general[dest] = res.unwrap();
                 }
-                OpResult::Load { dest, .. } => {
-                    regs.general[dest] = read;
+                OpResult::MulDiv {
+                    res: Some((hi, lo)),
+                } => {
+                    regs.hi = hi;
+                    regs.lo = lo;
                 }
                 OpResult::Branch { link: true, .. } => {
                     regs.general[31] = pc + 8;
@@ -267,11 +281,8 @@ impl Pipeline {
                 } => {
                     regs.general[link_reg] = pc + 8;
                 }
-                OpResult::MulDiv {
-                    res: Some((hi, lo)),
-                } => {
-                    regs.hi = hi;
-                    regs.lo = lo;
+                OpResult::Load { dest, .. } | OpResult::Mfc0 { dest, .. } => {
+                    regs.general[dest] = read;
                 }
                 _ => {}
             }
