@@ -40,13 +40,12 @@ impl Default for Cpu {
 
 impl Cpu {
     pub fn cycle(&mut self, bus: &mut mem::Bus) {
-        let fetch = self.pipeline.fetch(&mut self.regs.pc, bus);
+        let fetch = self.pipeline.fetch(&mut self.regs.pc, &self.cop0, bus);
         let decode = self.pipeline.decode(&self.regs, &mut self.cop0);
         self.pipeline.execute(&mut self.regs.pc);
         let mem = self.pipeline.memory(bus);
         self.pipeline.writeback(&mut self.regs);
 
-        // TODO : log errors
         let (err, flush_count) = if let Err(err) = mem {
             (err, 4)
         } else if let Err(err) = decode {
@@ -61,11 +60,13 @@ impl Cpu {
             .pipeline
             .flush(flush_count)
             .map_or((err.pc, false), |res| (res, true));
+
         let exception = match err.kind {
             PipelineErrorKind::InvalidInstruction(_) => Exception::ReservedInstruction,
             PipelineErrorKind::AluOverflow => Exception::Overflow,
             PipelineErrorKind::Break => Exception::Break,
             PipelineErrorKind::Syscall => Exception::Syscall,
+            PipelineErrorKind::Interrupt => Exception::Interrupt,
 
             PipelineErrorKind::MemoryLoad(mem::Error {
                 bad_vaddr,

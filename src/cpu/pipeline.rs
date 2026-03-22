@@ -23,6 +23,7 @@ pub enum ErrorKind {
     MemoryStore(mem::Error),
     Break,
     Syscall,
+    Interrupt,
 }
 
 /// Simplified and inaccurate implementation of MIPS pipeline.
@@ -51,7 +52,16 @@ impl Default for Pipeline {
 
 impl Pipeline {
     /// Fetch. Read an instruction and increment PC (program count).
-    pub fn fetch(&mut self, pc: &mut u32, bus: &mem::Bus) -> Result<(), Error> {
+    /// May be interrupted from the outside.
+    pub fn fetch(&mut self, pc: &mut u32, cop0: &Cop0, bus: &mem::Bus) -> Result<(), Error> {
+        // Here for simplicity, will be handled as an exception (IF's PC is saved to EPC)
+        if cop0.interrupt_pending() {
+            return Err(Error {
+                pc: *pc,
+                kind: ErrorKind::Interrupt,
+            });
+        }
+
         self.queue.push_front(Latch::Fetched {
             pc: *pc,
             ins: bus.read_word(*pc).map_err(|err| {
@@ -281,8 +291,6 @@ impl Pipeline {
     /// Returns PC of parent branch/jump or [`None`]
     // TODO : I don't like this return
     pub fn flush(&mut self, count: usize) -> Option<u32> {
-        debug_assert!(count < 5);
-
         for i in 0..count {
             self.queue[i] = Latch::Flushed;
         }

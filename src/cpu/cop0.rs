@@ -36,28 +36,12 @@ impl Cop0 {
         self.regs[Self::STATUS_IDX] & 0x1 != 0
     }
 
-    pub fn status_kuc(&self) -> bool {
-        self.regs[Self::STATUS_IDX] & 0x2 != 0
-    }
-
-    pub fn status_iep(&self) -> bool {
-        self.regs[Self::STATUS_IDX] & 0x4 != 0
-    }
-
-    pub fn status_kup(&self) -> bool {
-        self.regs[Self::STATUS_IDX] & 0x8 != 0
-    }
-
-    pub fn status_ieo(&self) -> bool {
-        self.regs[Self::STATUS_IDX] & 0x10 != 0
-    }
-
-    pub fn status_kuo(&self) -> bool {
-        self.regs[Self::STATUS_IDX] & 0x20 != 0
-    }
-
     pub fn status_bev(&self) -> bool {
         self.regs[Self::STATUS_IDX] & 0x400000 != 0
+    }
+
+    pub fn status_imask(&self) -> u32 {
+        (self.regs[Self::STATUS_IDX] >> 8) & 0xFF
     }
 
     pub fn status_mode_bits(&self) -> u32 {
@@ -69,11 +53,11 @@ impl Cop0 {
     }
 
     pub fn cause_ip(&self) -> u32 {
-        (self.regs[Self::CAUSE_IDX] & 0xFF00) >> 8
+        (self.regs[Self::CAUSE_IDX] >> 8) & 0xFF
     }
 
     pub fn cause_exc_code(&self) -> u32 {
-        (self.regs[Self::CAUSE_IDX] & 0b1111100) >> 2
+        (self.regs[Self::CAUSE_IDX] >> 2) & 0b11111
     }
 
     pub fn exception_handler(&self) -> u32 {
@@ -88,10 +72,10 @@ impl Cop0 {
     pub fn exception_enter(&mut self, excode: Exception, epc: u32, in_delay_slot: bool) {
         self.regs[Self::EPC_IDX] = epc;
 
-        let mut cause = self.regs[Self::CAUSE_IDX] & !((0b11111 << 2) | (1 << 31));
-        cause |= (excode.discriminant() & 0b11111) << 2;
-        cause |= (in_delay_slot as u32) << 31;
-        self.regs[Self::CAUSE_IDX] = cause;
+        let cause = &mut self.regs[Self::CAUSE_IDX];
+        *cause &= !((0b11111 << 2) | (1 << 31));
+        *cause |= (excode.discriminant() & 0b11111) << 2;
+        *cause |= (in_delay_slot as u32) << 31;
 
         if let Exception::UnalignedLoad { bad_vaddr }
         | Exception::UnalignedStore { bad_vaddr }
@@ -102,7 +86,7 @@ impl Cop0 {
         }
 
         let sr = &mut self.regs[Self::STATUS_IDX];
-        *sr = (*sr & !0x3F) | (((*sr & 0x3F) << 2) & 0x3F);
+        *sr = (*sr & !0b111111) | (((*sr & 0b111111) << 2) & 0b111111);
     }
 
     /// Pop the status stack: restore IEc/KUc from IEp/KUp and IEp/KUp from IEo/KUo
@@ -110,5 +94,13 @@ impl Cop0 {
         let sr = &mut self.regs[Self::STATUS_IDX];
         let low6 = *sr & 0b111111;
         *sr = (*sr & !0b111111) | (low6 & 0b110000) | ((low6 >> 2) & 0b1111);
+    }
+
+    pub fn interrupt_pending(&self) -> bool {
+        let iec = self.status_iec();
+        let pending = self.cause_ip();
+        let mask = self.status_imask();
+
+        iec && ((pending & mask) != 0)
     }
 }
