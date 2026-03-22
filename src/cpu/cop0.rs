@@ -9,8 +9,10 @@ pub struct Cop0 {
 #[repr(u32)]
 pub enum Exception {
     Interrupt = 0x00,
-    AddressLoad { bad_vaddr: u32 } = 0x04,
-    AddressStore { bad_vaddr: u32 } = 0x05,
+    UnalignedLoad { bad_vaddr: u32 } = 0x04,
+    UnalignedStore { bad_vaddr: u32 } = 0x05,
+    InstructionBus { bad_vaddr: u32 } = 0x06,
+    DataBus { bad_vaddr: u32 } = 0x07,
     Syscall = 0x08,
     Break = 0x09,
     ReservedInstruction = 0x0A,
@@ -25,80 +27,53 @@ impl Exception {
 }
 
 impl Cop0 {
-    const BAD_VADDR_IDX: usize = 8;
-    const STATUS_IDX: usize = 12;
-    const CAUSE_IDX: usize = 13;
-    const EPC_IDX: usize = 14;
-
-    const STATUS_MODE_BITS_MASK: u32 = 0x3F;
-    const STATUS_IEC_BIT: u32 = 1 << 0;
-    const STATUS_KUC_BIT: u32 = 1 << 1;
-    const STATUS_IEP_BIT: u32 = 1 << 2;
-    const STATUS_KUP_BIT: u32 = 1 << 3;
-    const STATUS_IEO_BIT: u32 = 1 << 4;
-    const STATUS_KUO_BIT: u32 = 1 << 5;
-    const STATUS_BEV_BIT: u32 = 1 << 22;
-    const CAUSE_EXCCODE_MASK: u32 = 0x1F << 2;
-    const CAUSE_IP_MASK: u32 = 0xFF << 8;
-    const CAUSE_BD_BIT: u32 = 1 << 31;
-
-    pub fn status(&self) -> u32 {
-        self.regs[Self::STATUS_IDX]
-    }
-
-    pub fn cause(&self) -> u32 {
-        self.regs[Self::CAUSE_IDX]
-    }
-    pub fn bad_vaddr(&self) -> u32 {
-        self.regs[Self::BAD_VADDR_IDX]
-    }
-
-    pub fn epc(&self) -> u32 {
-        self.regs[Self::EPC_IDX]
-    }
+    pub const BAD_VADDR_IDX: usize = 8;
+    pub const STATUS_IDX: usize = 12;
+    pub const CAUSE_IDX: usize = 13;
+    pub const EPC_IDX: usize = 14;
 
     pub fn status_iec(&self) -> bool {
-        self.status() & Self::STATUS_IEC_BIT != 0
+        self.regs[Self::STATUS_IDX] & 0x1 != 0
     }
 
     pub fn status_kuc(&self) -> bool {
-        self.status() & Self::STATUS_KUC_BIT != 0
+        self.regs[Self::STATUS_IDX] & 0x2 != 0
     }
 
     pub fn status_iep(&self) -> bool {
-        self.status() & Self::STATUS_IEP_BIT != 0
+        self.regs[Self::STATUS_IDX] & 0x4 != 0
     }
 
     pub fn status_kup(&self) -> bool {
-        self.status() & Self::STATUS_KUP_BIT != 0
+        self.regs[Self::STATUS_IDX] & 0x8 != 0
     }
 
     pub fn status_ieo(&self) -> bool {
-        self.status() & Self::STATUS_IEO_BIT != 0
+        self.regs[Self::STATUS_IDX] & 0x10 != 0
     }
 
     pub fn status_kuo(&self) -> bool {
-        self.status() & Self::STATUS_KUO_BIT != 0
+        self.regs[Self::STATUS_IDX] & 0x20 != 0
     }
 
     pub fn status_bev(&self) -> bool {
-        self.status() & Self::STATUS_BEV_BIT != 0
+        self.regs[Self::STATUS_IDX] & 0x400000 != 0
     }
 
     pub fn status_mode_bits(&self) -> u32 {
-        self.status() & Self::STATUS_MODE_BITS_MASK
+        self.regs[Self::STATUS_IDX] & 0b111111
     }
 
     pub fn cause_bd(&self) -> bool {
-        self.cause() & Self::CAUSE_BD_BIT != 0
+        self.regs[Self::CAUSE_IDX] & 0x80000000 != 0
     }
 
     pub fn cause_ip(&self) -> u32 {
-        (self.cause() & Self::CAUSE_IP_MASK) >> 8
+        (self.regs[Self::CAUSE_IDX] & 0xFF00) >> 8
     }
 
     pub fn cause_exc_code(&self) -> u32 {
-        (self.cause() & Self::CAUSE_EXCCODE_MASK) >> 2
+        (self.regs[Self::CAUSE_IDX] & 0b1111100) >> 2
     }
 
     pub fn exception_handler(&self) -> u32 {
@@ -109,41 +84,31 @@ impl Cop0 {
         }
     }
 
-    pub fn exception_enter(
-        &mut self,
-        excode: Exception,
-        fault_pc: u32,
-        in_delay_slot: bool,
-        pc: &mut u32,
-    ) {
-        self.regs[Self::EPC_IDX] = fault_pc;
+    /// Push IEc/KUc to IEp/KUp and IEp/KUp to IEo/KUo, then clear current mode
+    pub fn exception_enter(&mut self, excode: Exception, epc: u32, in_delay_slot: bool) {
+        self.regs[Self::EPC_IDX] = epc;
 
-        let mut cause =
-            self.regs[Self::CAUSE_IDX] & !(Self::CAUSE_EXCCODE_MASK | Self::CAUSE_BD_BIT);
-        cause |= (excode.discriminant() & 0x1F) << 2;
-        if in_delay_slot {
-            cause |= Self::CAUSE_BD_BIT;
-        }
+        let mut cause = self.regs[Self::CAUSE_IDX] & !((0b11111 << 2) | (1 << 31));
+        cause |= (excode.discriminant() & 0b11111) << 2;
+        cause |= (in_delay_slot as u32) << 31;
         self.regs[Self::CAUSE_IDX] = cause;
 
-        if let Exception::AddressLoad { bad_vaddr } | Exception::AddressStore { bad_vaddr } = excode
+        if let Exception::UnalignedLoad { bad_vaddr }
+        | Exception::UnalignedStore { bad_vaddr }
+        | Exception::InstructionBus { bad_vaddr }
+        | Exception::DataBus { bad_vaddr } = excode
         {
             self.regs[Self::BAD_VADDR_IDX] = bad_vaddr;
         }
 
         let sr = &mut self.regs[Self::STATUS_IDX];
-        *sr = (*sr & !Self::STATUS_MODE_BITS_MASK)
-            | ((*sr & Self::STATUS_MODE_BITS_MASK) << 2 & Self::STATUS_MODE_BITS_MASK);
-
-        // Jump to exception handler
-        *pc = self.exception_handler();
+        *sr = (*sr & !0x3F) | (((*sr & 0x3F) << 2) & 0x3F);
     }
 
-    pub fn exception_leave(&mut self, pc: &mut u32) {
+    /// Pop the status stack: restore IEc/KUc from IEp/KUp and IEp/KUp from IEo/KUo
+    pub fn exception_leave(&mut self) {
         let sr = &mut self.regs[Self::STATUS_IDX];
-        *sr = (*sr & !Self::STATUS_MODE_BITS_MASK) | (*sr & Self::STATUS_MODE_BITS_MASK) >> 2;
-
-        // Jump back
-        *pc = self.regs[Self::EPC_IDX];
+        let low6 = *sr & 0b111111;
+        *sr = (*sr & !0b111111) | (low6 & 0b110000) | ((low6 >> 2) & 0b1111);
     }
 }

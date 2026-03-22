@@ -35,6 +35,8 @@ pub enum OpResult {
     Break,
     /// Syscall (2 variants of enum for differing when choosing an exception)
     Syscall,
+    /// Return from exception
+    Rfe,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -499,6 +501,7 @@ impl OpResult {
             }),
             Opcode::Break => Some(Self::Break),
             Opcode::Syscall => Some(Self::Syscall),
+            Opcode::Rfe => Some(Self::Rfe),
             _ => None,
         }
     }

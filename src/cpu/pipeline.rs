@@ -4,6 +4,7 @@ use crate::mem;
 
 use super::{
     Registers,
+    cop0::Cop0,
     ins::{LoadKind, OpResult, StoreKind},
 };
 
@@ -17,6 +18,7 @@ pub struct Error {
 pub enum ErrorKind {
     AluOverflow,
     InvalidInstruction(u32),
+    InsLoad(mem::Error),
     MemoryLoad(mem::Error),
     MemoryStore(mem::Error),
     Break,
@@ -56,7 +58,7 @@ impl Pipeline {
                 let pc = *pc;
                 Error {
                     pc,
-                    kind: ErrorKind::MemoryLoad(err),
+                    kind: ErrorKind::InsLoad(err),
                 }
             })?,
         });
@@ -68,7 +70,7 @@ impl Pipeline {
     /// Decode and *possibly* evaluate.
     /// The correct behavior is to evaluate in EX (execute) stage,
     /// but to keep the pipeline simple and reduce additional if/matches it's done in ID.
-    pub fn decode(&mut self, regs: &Registers) -> Result<(), Error> {
+    pub fn decode(&mut self, regs: &Registers, cop0: &mut Cop0) -> Result<(), Error> {
         let stages = [
             self.queue.get(4).copied(),
             self.queue.get(3).copied(),
@@ -128,6 +130,9 @@ impl Pipeline {
                         pc,
                         kind: ErrorKind::Syscall,
                     });
+                }
+                OpResult::Rfe => {
+                    cop0.exception_leave();
                 }
                 _ => (),
             }

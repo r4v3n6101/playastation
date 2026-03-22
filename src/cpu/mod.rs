@@ -41,7 +41,7 @@ impl Default for Cpu {
 impl Cpu {
     pub fn cycle(&mut self, bus: &mut mem::Bus) {
         let fetch = self.pipeline.fetch(&mut self.regs.pc, bus);
-        let decode = self.pipeline.decode(&self.regs);
+        let decode = self.pipeline.decode(&self.regs, &mut self.cop0);
         self.pipeline.execute(&mut self.regs.pc);
         let mem = self.pipeline.memory(bus);
         self.pipeline.writeback(&mut self.regs);
@@ -64,16 +64,34 @@ impl Cpu {
         let exception = match err.kind {
             PipelineErrorKind::InvalidInstruction(_) => Exception::ReservedInstruction,
             PipelineErrorKind::AluOverflow => Exception::Overflow,
-            PipelineErrorKind::MemoryStore(mem::Error { bad_vaddr, .. }) => {
-                Exception::AddressStore { bad_vaddr }
-            }
-            PipelineErrorKind::MemoryLoad(mem::Error { bad_vaddr, .. }) => {
-                Exception::AddressLoad { bad_vaddr }
-            }
             PipelineErrorKind::Break => Exception::Break,
             PipelineErrorKind::Syscall => Exception::Syscall,
+
+            PipelineErrorKind::MemoryLoad(mem::Error {
+                bad_vaddr,
+                kind: mem::ErrorKind::UnalignedAddr,
+            })
+            | PipelineErrorKind::InsLoad(mem::Error {
+                bad_vaddr,
+                kind: mem::ErrorKind::UnalignedAddr,
+            }) => Exception::UnalignedLoad { bad_vaddr },
+
+            PipelineErrorKind::MemoryStore(mem::Error {
+                bad_vaddr,
+                kind: mem::ErrorKind::UnalignedAddr,
+            }) => Exception::UnalignedStore { bad_vaddr },
+
+            PipelineErrorKind::InsLoad(mem::Error { bad_vaddr, .. }) => {
+                Exception::InstructionBus { bad_vaddr }
+            }
+            PipelineErrorKind::MemoryLoad(mem::Error { bad_vaddr, .. })
+            | PipelineErrorKind::MemoryStore(mem::Error { bad_vaddr, .. }) => {
+                Exception::DataBus { bad_vaddr }
+            }
         };
+
         self.cop0
-            .exception_enter(exception, fault_pc, has_delay_slot, &mut self.regs.pc);
+            .exception_enter(exception, fault_pc, has_delay_slot);
+        self.regs.pc = self.cop0.exception_handler();
     }
 }

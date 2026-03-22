@@ -132,7 +132,7 @@ fn test_alu_to_branch_dep() {
 fn test_syscall_exception() {
     let (cpu, _) = create_and_run_program("syscall_exception", 2);
 
-    assert_eq!(cpu.cop0.epc(), 0);
+    assert_eq!(cpu.cop0.regs[14], 0);
     assert_eq!(cpu.cop0.cause_exc_code(), 8);
 }
 
@@ -140,7 +140,7 @@ fn test_syscall_exception() {
 fn test_break_exception() {
     let (cpu, _) = create_and_run_program("break_exception", 2);
 
-    assert_eq!(cpu.cop0.epc(), 0);
+    assert_eq!(cpu.cop0.regs[14], 0);
     assert_eq!(cpu.cop0.cause_exc_code(), 9);
 }
 
@@ -149,7 +149,7 @@ fn test_overflow_exception() {
     let (cpu, _) = create_and_run_program("overflow_exception", 5);
 
     assert_eq!(cpu.regs.general[3], 0);
-    assert_eq!(cpu.cop0.epc(), 12);
+    assert_eq!(cpu.cop0.regs[14], 12);
     assert_eq!(cpu.cop0.cause_exc_code(), 12);
 }
 
@@ -157,7 +157,7 @@ fn test_overflow_exception() {
 fn test_reserved_instruction_exception() {
     let (cpu, _) = create_and_run_program("reserved_instruction_exception", 2);
 
-    assert_eq!(cpu.cop0.epc(), 0);
+    assert_eq!(cpu.cop0.regs[14], 0);
     assert_eq!(cpu.cop0.cause_exc_code(), 10);
 }
 
@@ -181,7 +181,7 @@ fn test_div_by_zero() {
 fn test_delay_slot_exception_bd() {
     let (cpu, _) = create_and_run_program("delay_slot_exception_bd", 3);
 
-    assert_eq!(cpu.cop0.epc(), 0);
+    assert_eq!(cpu.cop0.regs[14], 0);
     assert_eq!(cpu.cop0.cause_exc_code(), 8);
     assert!(cpu.cop0.cause_bd());
 }
@@ -190,7 +190,7 @@ fn test_delay_slot_exception_bd() {
 fn test_misaligned_lw_exception() {
     let (cpu, _) = create_and_run_program("misaligned_lw_exception", 6);
 
-    assert_eq!(cpu.cop0.epc(), 8);
+    assert_eq!(cpu.cop0.regs[14], 8);
     assert_eq!(cpu.cop0.cause_exc_code(), 4);
 }
 
@@ -198,6 +198,6 @@ fn test_misaligned_lw_exception() {
 fn test_misaligned_sw_exception() {
     let (cpu, _) = create_and_run_program("misaligned_sw_exception", 7);
 
-    assert_eq!(cpu.cop0.epc(), 12);
+    assert_eq!(cpu.cop0.regs[14], 12);
     assert_eq!(cpu.cop0.cause_exc_code(), 5);
 }
