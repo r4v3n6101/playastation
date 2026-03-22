@@ -64,12 +64,9 @@ impl Pipeline {
 
         self.queue.push_front(Latch::Fetched {
             pc: *pc,
-            ins: bus.read_word(*pc).map_err(|err| {
-                let pc = *pc;
-                Error {
-                    pc,
-                    kind: ErrorKind::InsLoad(err),
-                }
+            ins: bus.read_word(*pc).map_err(|err| Error {
+                pc: *pc,
+                kind: ErrorKind::InsLoad(err),
             })?,
         });
         *pc = pc.wrapping_add(4);

@@ -5,10 +5,8 @@ use super::Registers;
 /// Operation decoded from a word and evaluated if possible.
 /// Evaluation proceeds primarily in the `Exec` and `Mem` stages, but we can do it earlier,
 /// because registers are read and aren't changed after `Decode` stage.
-#[derive(Debug, Default, Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub enum OpResult {
-    #[default]
-    Nop,
     /// Arithmetic ops like ADD, SUB, OR, etc. and shifts too
     /// [`res`] may be [`Option::None`] if overflow happened
     Alu { dest: usize, res: Option<u32> },
