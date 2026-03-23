@@ -28,7 +28,7 @@ fn create_and_run_program(name: &'static str, cycles: usize) -> (Cpu, Bus) {
 
 #[test]
 fn test_basic_alu() {
-    let (cpu, _) = create_and_run_program("alu_basic", 100);
+    let (cpu, _) = create_and_run_program("alu_basic", 11);
 
     assert_eq!(cpu.regs.general[1], 5);
     assert_eq!(cpu.regs.general[2], 7);
@@ -130,7 +130,7 @@ fn test_alu_to_branch_dep() {
 
 #[test]
 fn test_syscall_exception() {
-    let (cpu, _) = create_and_run_program("syscall_exception", 2);
+    let (cpu, _) = create_and_run_program("syscall_exception", 3);
 
     assert_eq!(cpu.cop0.regs[14], 0);
     assert_eq!(cpu.cop0.cause_exc_code(), 8);
@@ -138,7 +138,7 @@ fn test_syscall_exception() {
 
 #[test]
 fn test_break_exception() {
-    let (cpu, _) = create_and_run_program("break_exception", 2);
+    let (cpu, _) = create_and_run_program("break_exception", 3);
 
     assert_eq!(cpu.cop0.regs[14], 0);
     assert_eq!(cpu.cop0.cause_exc_code(), 9);
@@ -146,7 +146,7 @@ fn test_break_exception() {
 
 #[test]
 fn test_overflow_exception() {
-    let (cpu, _) = create_and_run_program("overflow_exception", 5);
+    let (cpu, _) = create_and_run_program("overflow_exception", 6);
 
     assert_eq!(cpu.regs.general[3], 0);
     assert_eq!(cpu.cop0.regs[14], 12);
@@ -179,7 +179,7 @@ fn test_div_by_zero() {
 
 #[test]
 fn test_delay_slot_exception_bd() {
-    let (cpu, _) = create_and_run_program("delay_slot_exception_bd", 3);
+    let (cpu, _) = create_and_run_program("delay_slot_exception_bd", 4);
 
     assert_eq!(cpu.cop0.regs[14], 0);
     assert_eq!(cpu.cop0.cause_exc_code(), 8);

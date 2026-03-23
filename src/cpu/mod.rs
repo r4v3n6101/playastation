@@ -4,7 +4,6 @@ use pipeline::{ErrorKind as PipelineErrorKind, Pipeline};
 use crate::mem;
 
 mod cop0;
-mod ins;
 mod pipeline;
 
 #[derive(Debug)]
@@ -14,7 +13,7 @@ pub struct Cpu {
     pub cop0: Cop0,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub struct Registers {
     pub general: [u32; 32],
     pub pc: u32,
@@ -22,7 +21,7 @@ pub struct Registers {
     pub lo: u32,
 }
 
-/// Reset the state of the CPU.
+/// Reset state of the CPU.
 impl Default for Cpu {
     fn default() -> Self {
         Self {
@@ -41,13 +40,15 @@ impl Default for Cpu {
 impl Cpu {
     pub fn cycle(&mut self, bus: &mut mem::Bus) {
         let fetch = self.pipeline.fetch(&mut self.regs.pc, &self.cop0, bus);
-        let decode = self.pipeline.decode(&self.regs, &mut self.cop0);
-        self.pipeline.execute(&mut self.regs.pc);
+        let decode = self.pipeline.decode(&self.regs);
+        let execute = self.pipeline.execute(&mut self.regs.pc, &mut self.cop0);
         let mem = self.pipeline.memory(bus, &mut self.cop0);
         self.pipeline.writeback(&mut self.regs);
 
         let (err, flush_count) = if let Err(err) = mem {
             (err, 4)
+        } else if let Err(err) = execute {
+            (err, 3)
         } else if let Err(err) = decode {
             (err, 2)
         } else if let Err(err) = fetch {
@@ -56,10 +57,7 @@ impl Cpu {
             return;
         };
 
-        let (fault_pc, has_delay_slot) = self
-            .pipeline
-            .flush(flush_count)
-            .map_or((err.pc, false), |res| (res, true));
+        let has_delay_slot = self.pipeline.flush(flush_count);
 
         let exception = match err.kind {
             PipelineErrorKind::InvalidInstruction(_) => Exception::ReservedInstruction,
@@ -91,8 +89,7 @@ impl Cpu {
             }
         };
 
-        self.cop0
-            .exception_enter(exception, fault_pc, has_delay_slot);
+        self.cop0.exception_enter(exception, err.pc, has_delay_slot);
         self.regs.pc = self.cop0.exception_handler();
     }
 }

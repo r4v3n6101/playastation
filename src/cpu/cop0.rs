@@ -64,13 +64,17 @@ impl Cop0 {
     }
 
     /// Push IEc/KUc to IEp/KUp and IEp/KUp to IEo/KUo, then clear current mode
-    pub fn exception_enter(&mut self, excode: Exception, epc: u32, in_delay_slot: bool) {
-        self.regs[Self::EPC_IDX] = epc;
+    pub fn exception_enter(&mut self, excode: Exception, fault_pc: u32, in_delay_slot: bool) {
+        self.regs[Self::EPC_IDX] = if in_delay_slot {
+            fault_pc.wrapping_sub(4)
+        } else {
+            fault_pc
+        };
 
         let cause = &mut self.regs[Self::CAUSE_IDX];
         *cause &= !((0b11111 << 2) | (1 << 31));
         *cause |= (excode.discriminant() as u32 & 0b11111) << 2;
-        *cause |= (in_delay_slot as u32) << 31;
+        *cause |= u32::from(in_delay_slot) << 31;
 
         if let Exception::UnalignedLoad { bad_vaddr }
         | Exception::UnalignedStore { bad_vaddr }

@@ -2,77 +2,6 @@ use strum::FromRepr;
 
 use super::Registers;
 
-/// Operation decoded from a word and evaluated if possible.
-/// Evaluation proceeds primarily in the `Exec` and `Mem` stages, but we can do it earlier,
-/// because registers are read and aren't changed after `Decode` stage.
-#[derive(Debug, Copy, Clone)]
-pub enum OpResult {
-    /// Arithmetic ops like ADD, SUB, OR, etc. and shifts too
-    /// [`res`] may be [`Option::None`] if overflow happened
-    Alu { dest: usize, res: Option<u32> },
-    /// Load from memory, store into register
-    Load {
-        dest: usize,
-        addr: u32,
-        kind: LoadKind,
-    },
-    /// Store in memory value from instruction
-    Store { addr: u32, kind: StoreKind },
-    /// Conditions
-    /// [`addr`] is [`Option::None`] when comparison failed
-    Branch { addr: Option<u32>, link: bool },
-    /// Jump!
-    Jump {
-        addr: u32,
-        link: bool,
-        link_reg: usize,
-    },
-    /// Multiple and divide (uses extra registers HI/LO)
-    MulDiv { res: Option<(u32, u32)> },
-    /// Move from coprocessor 0
-    Mfc0 { dest: usize, from: usize },
-    /// Move to coprocessor 0
-    Mtc0 { dest: usize, res: u32 },
-    /// Break
-    Break,
-    /// Syscall (2 variants of enum for differing when choosing an exception)
-    Syscall,
-    /// Return from exception
-    Rfe,
-}
-
-#[derive(Debug, Copy, Clone)]
-pub enum LoadKind {
-    /// Byte (signed).
-    IByte,
-    /// Halfword (signed).
-    IHalf,
-    /// Byte (unsigned).
-    UByte,
-    /// Halfword (unsigned).
-    UHalf,
-    /// Word.
-    Word,
-    /// Word left.
-    WordLeft,
-    /// Word right.
-    WordRight,
-}
-
-#[derive(Debug, Copy, Clone)]
-pub enum StoreKind {
-    /// Byte.
-    Byte(u8),
-    /// Halfword.
-    Half(u16),
-    /// Word.
-    Word(u32),
-    /// Word left.
-    WordLeft(u32),
-    /// Word right.
-    WordRight(u32),
-}
-
 #[derive(Debug, Copy, Clone, FromRepr)]
 #[repr(u16)]
 pub enum Opcode {
@@ -210,26 +139,99 @@ pub enum Opcode {
     Swr = 0x00_2E,
 }
 
-impl OpResult {
-    pub fn decode_and_evaluate(ins: u32, regs: &Registers) -> Option<Self> {
+#[derive(Debug, Copy, Clone)]
+pub enum ExecRes {
+    /// Arithmetic ops like ADD, SUB, OR, etc. and shifts too
+    /// [`res`] may be [`Option::None`] if overflow happened.
+    Alu { dest: usize, res: Option<u32> },
+    /// Load from memory, store into register.
+    Load {
+        dest: usize,
+        addr: u32,
+        kind: LoadKind,
+    },
+    /// Store in memory value from instruction.
+    Store { addr: u32, kind: StoreKind },
+    /// Conditions.
+    /// [`addr`] is [`Option::None`] when comparison failed.
+    Branch { addr: Option<u32>, link: bool },
+    /// Jump!
+    Jump {
+        addr: u32,
+        link: bool,
+        link_reg: usize,
+    },
+    /// Multiple and divide (uses extra registers HI/LO).
+    MulDiv { hi: u32, lo: u32 },
+    /// Move from coprocessor 0.
+    Mfc0 { dest: usize, from: usize },
+    /// Move to coprocessor 0.
+    Mtc0 { dest: usize, res: u32 },
+    /// Break.
+    Break,
+    /// Syscall.
+    Syscall,
+    /// Return from exception.
+    Rfe,
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum LoadKind {
+    /// Byte (signed).
+    IByte,
+    /// Halfword (signed).
+    IHalf,
+    /// Byte (unsigned).
+    UByte,
+    /// Halfword (unsigned).
+    UHalf,
+    /// Word.
+    Word,
+    /// Word left.
+    WordLeft,
+    /// Word right.
+    WordRight,
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum StoreKind {
+    /// Byte.
+    Byte(u8),
+    /// Halfword.
+    Half(u16),
+    /// Word.
+    Word(u32),
+    /// Word left.
+    WordLeft(u32),
+    /// Word right.
+    WordRight(u32),
+}
+
+impl Opcode {
+    pub fn decode(ins: u32) -> Option<Self> {
         let opcode = (ins >> 26) as u16;
         let rs = ((ins >> 21) & 0x1F) as usize;
         let rt = ((ins >> 16) & 0x1F) as usize;
-        let rd = ((ins >> 11) & 0x1F) as usize;
-        let shamt = (ins >> 6) & 0x1F;
         let funct = ins & 0x3F;
-        let imm = ins & 0xFFFF;
-        let imm_sext = (imm as u16).cast_signed() as u32;
-        let target = ins & 0x03FF_FFFF;
-
         let tag = match opcode {
             0x00 => ((funct as u16) << 8) | opcode,
             0x01 => ((rt as u16) << 8) | opcode,
             0x10 => ((rs as u16) << 8) | opcode,
             _ => opcode,
         };
-        match Opcode::from_repr(tag)? {
-            Opcode::Add => Some(Self::Alu {
+        Self::from_repr(tag)
+    }
+
+    pub fn execute(self, ins: u32, regs: &Registers) -> ExecRes {
+        let rs = ((ins >> 21) & 0x1F) as usize;
+        let rt = ((ins >> 16) & 0x1F) as usize;
+        let rd = ((ins >> 11) & 0x1F) as usize;
+        let shamt = (ins >> 6) & 0x1F;
+        let imm = ins & 0xFFFF;
+        let imm_sext = (imm as u16).cast_signed() as u32;
+        let target = ins & 0x03FF_FFFF;
+        match self {
+            Opcode::Add => ExecRes::Alu {
                 dest: rd,
                 res: {
                     regs.general[rs]
@@ -237,12 +239,12 @@ impl OpResult {
                         .checked_add(regs.general[rt].cast_signed())
                         .map(i32::cast_unsigned)
                 },
-            }),
-            Opcode::Addu => Some(Self::Alu {
+            },
+            Opcode::Addu => ExecRes::Alu {
                 dest: rd,
                 res: Some(regs.general[rs].wrapping_add(regs.general[rt])),
-            }),
-            Opcode::Sub => Some(Self::Alu {
+            },
+            Opcode::Sub => ExecRes::Alu {
                 dest: rd,
                 res: {
                     regs.general[rs]
@@ -250,271 +252,282 @@ impl OpResult {
                         .checked_sub(regs.general[rt].cast_signed())
                         .map(i32::cast_unsigned)
                 },
-            }),
-            Opcode::Subu => Some(Self::Alu {
+            },
+            Opcode::Subu => ExecRes::Alu {
                 dest: rd,
                 res: Some(regs.general[rs].wrapping_sub(regs.general[rt])),
-            }),
-            Opcode::And => Some(Self::Alu {
+            },
+            Opcode::And => ExecRes::Alu {
                 dest: rd,
                 res: Some(regs.general[rs] & regs.general[rt]),
-            }),
-            Opcode::Or => Some(Self::Alu {
+            },
+            Opcode::Or => ExecRes::Alu {
                 dest: rd,
                 res: Some(regs.general[rs] | regs.general[rt]),
-            }),
-            Opcode::Xor => Some(Self::Alu {
+            },
+            Opcode::Xor => ExecRes::Alu {
                 dest: rd,
                 res: Some(regs.general[rs] ^ regs.general[rt]),
-            }),
-            Opcode::Nor => Some(Self::Alu {
+            },
+            Opcode::Nor => ExecRes::Alu {
                 dest: rd,
                 res: Some(!(regs.general[rs] | regs.general[rt])),
-            }),
-            Opcode::Slt => Some(Self::Alu {
+            },
+            Opcode::Slt => ExecRes::Alu {
                 dest: rd,
                 res: Some((regs.general[rs].cast_signed() < regs.general[rt].cast_signed()).into()),
-            }),
-            Opcode::Sltu => Some(Self::Alu {
+            },
+            Opcode::Sltu => ExecRes::Alu {
                 dest: rd,
                 res: Some((regs.general[rs] < regs.general[rt]).into()),
-            }),
-            Opcode::Sll => Some(Self::Alu {
+            },
+            Opcode::Sll => ExecRes::Alu {
                 dest: rd,
                 res: Some(regs.general[rt] << shamt),
-            }),
-            Opcode::Srl => Some(Self::Alu {
+            },
+            Opcode::Srl => ExecRes::Alu {
                 dest: rd,
                 res: Some(regs.general[rt] >> shamt),
-            }),
-            Opcode::Sra => Some(Self::Alu {
+            },
+            Opcode::Sra => ExecRes::Alu {
                 dest: rd,
                 res: Some((regs.general[rt].cast_signed() >> shamt).cast_unsigned()),
-            }),
-            Opcode::Sllv => Some(Self::Alu {
+            },
+            Opcode::Sllv => ExecRes::Alu {
                 dest: rd,
                 res: Some(regs.general[rt] << (regs.general[rs] & 0x1F)),
-            }),
-            Opcode::Srlv => Some(Self::Alu {
+            },
+            Opcode::Srlv => ExecRes::Alu {
                 dest: rd,
                 res: Some(regs.general[rt] >> (regs.general[rs] & 0x1F)),
-            }),
-            Opcode::Srav => Some(Self::Alu {
+            },
+            Opcode::Srav => ExecRes::Alu {
                 dest: rd,
                 res: Some(
                     (regs.general[rt].cast_signed() >> (regs.general[rs] & 0x1F)).cast_unsigned(),
                 ),
-            }),
-            Opcode::Addi => Some(Self::Alu {
+            },
+            Opcode::Addi => ExecRes::Alu {
                 dest: rt,
                 res: {
                     let a = regs.general[rs].cast_signed();
                     let b = imm_sext as i16 as i32;
                     a.checked_add(b).map(i32::cast_unsigned)
                 },
-            }),
-            Opcode::Addiu => Some(Self::Alu {
+            },
+            Opcode::Addiu => ExecRes::Alu {
                 dest: rt,
                 res: Some(regs.general[rs].wrapping_add(imm_sext)),
-            }),
-            Opcode::Slti => Some(Self::Alu {
+            },
+            Opcode::Slti => ExecRes::Alu {
                 dest: rt,
                 res: Some((regs.general[rs].cast_signed() < imm_sext.cast_signed()).into()),
-            }),
-            Opcode::Sltiu => Some(Self::Alu {
+            },
+            Opcode::Sltiu => ExecRes::Alu {
                 dest: rt,
                 res: Some((regs.general[rs] < imm_sext).into()),
-            }),
-            Opcode::Andi => Some(Self::Alu {
+            },
+            Opcode::Andi => ExecRes::Alu {
                 dest: rt,
                 res: Some(regs.general[rs] & imm),
-            }),
-            Opcode::Ori => Some(Self::Alu {
+            },
+            Opcode::Ori => ExecRes::Alu {
                 dest: rt,
                 res: Some(regs.general[rs] | imm),
-            }),
-            Opcode::Xori => Some(Self::Alu {
+            },
+            Opcode::Xori => ExecRes::Alu {
                 dest: rt,
                 res: Some(regs.general[rs] ^ imm),
-            }),
-            Opcode::Lui => Some(Self::Alu {
+            },
+            Opcode::Lui => ExecRes::Alu {
                 dest: rt,
                 res: Some(imm << 16),
-            }),
-            Opcode::Lw => Some(Self::Load {
+            },
+            Opcode::Lw => ExecRes::Load {
                 dest: rt,
                 addr: regs.general[rs].wrapping_add(imm_sext),
                 kind: LoadKind::Word,
-            }),
-            Opcode::Lh => Some(Self::Load {
+            },
+            Opcode::Lh => ExecRes::Load {
                 dest: rt,
                 addr: regs.general[rs].wrapping_add(imm_sext),
                 kind: LoadKind::IHalf,
-            }),
-            Opcode::Lhu => Some(Self::Load {
+            },
+            Opcode::Lhu => ExecRes::Load {
                 dest: rt,
                 addr: regs.general[rs].wrapping_add(imm_sext),
                 kind: LoadKind::UHalf,
-            }),
-            Opcode::Lb => Some(Self::Load {
+            },
+            Opcode::Lb => ExecRes::Load {
                 dest: rt,
                 addr: regs.general[rs].wrapping_add(imm_sext),
                 kind: LoadKind::IByte,
-            }),
-            Opcode::Lbu => Some(Self::Load {
+            },
+            Opcode::Lbu => ExecRes::Load {
                 dest: rt,
                 addr: regs.general[rs].wrapping_add(imm_sext),
                 kind: LoadKind::UByte,
-            }),
-            Opcode::Lwl => Some(Self::Load {
+            },
+            Opcode::Lwl => ExecRes::Load {
                 dest: rt,
                 addr: regs.general[rs].wrapping_add(imm_sext),
                 kind: LoadKind::WordLeft,
-            }),
-            Opcode::Lwr => Some(Self::Load {
+            },
+            Opcode::Lwr => ExecRes::Load {
                 dest: rt,
                 addr: regs.general[rs].wrapping_add(imm_sext),
                 kind: LoadKind::WordRight,
-            }),
-            Opcode::Sw => Some(Self::Store {
+            },
+            Opcode::Sw => ExecRes::Store {
                 addr: regs.general[rs].wrapping_add(imm_sext),
                 kind: StoreKind::Word(regs.general[rt]),
-            }),
-            Opcode::Sh => Some(Self::Store {
+            },
+            Opcode::Sh => ExecRes::Store {
                 addr: regs.general[rs].wrapping_add(imm_sext),
                 kind: StoreKind::Half(regs.general[rt] as u16),
-            }),
-            Opcode::Sb => Some(Self::Store {
+            },
+            Opcode::Sb => ExecRes::Store {
                 addr: regs.general[rs].wrapping_add(imm_sext),
                 kind: StoreKind::Byte(regs.general[rt] as u8),
-            }),
-            Opcode::Swl => Some(Self::Store {
+            },
+            Opcode::Swl => ExecRes::Store {
                 addr: regs.general[rs].wrapping_add(imm_sext),
                 kind: StoreKind::WordLeft(regs.general[rt]),
-            }),
-            Opcode::Swr => Some(Self::Store {
+            },
+            Opcode::Swr => ExecRes::Store {
                 addr: regs.general[rs].wrapping_add(imm_sext),
                 kind: StoreKind::WordRight(regs.general[rt]),
-            }),
-            Opcode::Beq => Some(Self::Branch {
+            },
+            Opcode::Beq => ExecRes::Branch {
                 addr: (regs.general[rs] == regs.general[rt])
                     .then_some((regs.pc - 4).wrapping_add(imm_sext << 2)),
                 link: false,
-            }),
-            Opcode::Bne => Some(Self::Branch {
+            },
+            Opcode::Bne => ExecRes::Branch {
                 addr: (regs.general[rs] != regs.general[rt])
                     .then_some((regs.pc - 4).wrapping_add(imm_sext << 2)),
                 link: false,
-            }),
-            Opcode::Blez => Some(Self::Branch {
+            },
+            Opcode::Blez => ExecRes::Branch {
                 addr: (regs.general[rs].cast_signed() <= 0)
                     .then_some((regs.pc - 4).wrapping_add(imm_sext << 2)),
                 link: false,
-            }),
-            Opcode::Bgtz => Some(Self::Branch {
+            },
+            Opcode::Bgtz => ExecRes::Branch {
                 addr: (regs.general[rs].cast_signed() > 0)
                     .then_some((regs.pc - 4).wrapping_add(imm_sext << 2)),
                 link: false,
-            }),
-            Opcode::Bltz => Some(Self::Branch {
+            },
+            Opcode::Bltz => ExecRes::Branch {
                 addr: (regs.general[rs].cast_signed() < 0)
                     .then_some((regs.pc - 4).wrapping_add(imm_sext << 2)),
                 link: false,
-            }),
-            Opcode::Bgez => Some(Self::Branch {
+            },
+            Opcode::Bgez => ExecRes::Branch {
                 addr: (regs.general[rs].cast_signed() >= 0)
                     .then_some((regs.pc - 4).wrapping_add(imm_sext << 2)),
                 link: false,
-            }),
-            Opcode::Bltzal => Some(Self::Branch {
+            },
+            Opcode::Bltzal => ExecRes::Branch {
                 addr: (regs.general[rs].cast_signed() < 0)
                     .then_some((regs.pc - 4).wrapping_add(imm_sext << 2)),
                 link: true,
-            }),
-            Opcode::Bgezal => Some(Self::Branch {
+            },
+            Opcode::Bgezal => ExecRes::Branch {
                 addr: (regs.general[rs].cast_signed() >= 0)
                     .then_some((regs.pc - 4).wrapping_add(imm_sext << 2)),
                 link: true,
-            }),
-            Opcode::J => Some(Self::Jump {
+            },
+            Opcode::J => ExecRes::Jump {
                 addr: ((regs.pc - 4) & 0xF000_0000) | (target << 2),
                 link: false,
                 link_reg: 31,
-            }),
-            Opcode::Jal => Some(Self::Jump {
+            },
+            Opcode::Jal => ExecRes::Jump {
                 addr: ((regs.pc - 4) & 0xF000_0000) | (target << 2),
                 link: true,
                 link_reg: 31,
-            }),
-            Opcode::Mfhi => Some(Self::Alu {
+            },
+            Opcode::Mfhi => ExecRes::Alu {
                 dest: rd,
                 res: Some(regs.hi),
-            }),
-            Opcode::Mflo => Some(Self::Alu {
+            },
+            Opcode::Mflo => ExecRes::Alu {
                 dest: rd,
                 res: Some(regs.lo),
-            }),
+            },
             Opcode::Mult => {
                 let a = i64::from(regs.general[rs].cast_signed());
                 let b = i64::from(regs.general[rt].cast_signed());
                 let res = (a * b).cast_unsigned();
-                Some(Self::MulDiv {
-                    res: Some(((res >> 32) as u32, res as u32)),
-                })
+                ExecRes::MulDiv {
+                    hi: (res >> 32) as u32,
+                    lo: res as u32,
+                }
             }
             Opcode::Multu => {
                 let a = u64::from(regs.general[rs]);
                 let b = u64::from(regs.general[rt]);
                 let res = a * b;
-                Some(Self::MulDiv {
-                    res: Some(((res >> 32) as u32, res as u32)),
-                })
+                ExecRes::MulDiv {
+                    hi: (res >> 32) as u32,
+                    lo: res as u32,
+                }
             }
             Opcode::Div => {
                 let a = regs.general[rs].cast_signed();
                 let b = regs.general[rt].cast_signed();
-                Some(Self::MulDiv {
-                    // Overflow or div by 0
-                    res: if (b == 0) || (a.cast_unsigned() == 0x8000_0000 && b == -1) {
-                        None
-                    } else {
-                        let hi = (a % b) as u32;
-                        let lo = (a / b) as u32;
-                        Some((hi, lo))
-                    },
-                })
+                // Overflow or div by 0
+                let (hi, lo) = if (b == 0) || (a.cast_unsigned() == 0x8000_0000 && b == -1) {
+                    (a.cast_unsigned(), b.cast_unsigned())
+                } else {
+                    ((a % b).cast_unsigned(), (a / b).cast_unsigned())
+                };
+                ExecRes::MulDiv { hi, lo }
             }
             Opcode::Divu => {
                 let a = regs.general[rs];
                 let b = regs.general[rt];
-                Some(Self::MulDiv {
-                    res: if b == 0 { None } else { Some((a % b, a / b)) },
-                })
+                let (hi, lo) = if b == 0 { (a, b) } else { (a % b, a / b) };
+                ExecRes::MulDiv { hi, lo }
             }
-            Opcode::Jr => Some(Self::Jump {
+            Opcode::Jr => ExecRes::Jump {
                 addr: regs.general[rs],
                 link: false,
                 link_reg: 31,
-            }),
-            Opcode::Jalr => Some(Self::Jump {
+            },
+            Opcode::Jalr => ExecRes::Jump {
                 addr: regs.general[rs],
                 link: true,
                 link_reg: rd,
-            }),
-            Opcode::Mfc0 => Some(Self::Mfc0 { dest: rt, from: rd }),
-            Opcode::Mtc0 => Some(Self::Mtc0 {
+            },
+            Opcode::Mfc0 => ExecRes::Mfc0 { dest: rt, from: rd },
+            Opcode::Mtc0 => ExecRes::Mtc0 {
                 dest: rd,
                 res: regs.general[rt],
-            }),
-            Opcode::Break => Some(Self::Break),
-            Opcode::Syscall => Some(Self::Syscall),
-            Opcode::Rfe => Some(Self::Rfe),
-            _ => None,
+            },
+            Opcode::Break => ExecRes::Break,
+            Opcode::Syscall => ExecRes::Syscall,
+            Opcode::Rfe => ExecRes::Rfe,
+            _ => unimplemented!(),
         }
     }
 
-    /// Branch or jump delay slot
-    pub fn has_delay_slot(&self) -> bool {
-        matches!(self, Self::Jump { .. } | Self::Branch { .. })
+    pub fn branch_delay(self) -> bool {
+        matches!(
+            self,
+            Self::J
+                | Self::Jal
+                | Self::Jr
+                | Self::Jalr
+                | Self::Beq
+                | Self::Bne
+                | Self::Blez
+                | Self::Bgtz
+                | Self::Bltz
+                | Self::Bgez
+                | Self::Bltzal
+                | Self::Bgezal
+        )
     }
 }
