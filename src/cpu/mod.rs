@@ -1,7 +1,7 @@
 use cop0::{Cop0, Exception};
 use pipeline::{ErrorKind as PipelineErrorKind, Pipeline};
 
-use crate::mem;
+use crate::interconnect::{Bus, BusError, BusErrorKind};
 
 mod cop0;
 mod pipeline;
@@ -38,7 +38,7 @@ impl Default for Cpu {
 }
 
 impl Cpu {
-    pub fn cycle(&mut self, bus: &mut mem::Bus) {
+    pub fn cycle(&mut self, bus: &mut Bus) {
         let fetch = self.pipeline.fetch(&mut self.regs.pc, &self.cop0, bus);
         let decode = self.pipeline.decode(&self.regs);
         let execute = self.pipeline.execute(&mut self.regs.pc, &mut self.cop0);
@@ -66,25 +66,25 @@ impl Cpu {
             PipelineErrorKind::Syscall => Exception::Syscall,
             PipelineErrorKind::Interrupt => Exception::Interrupt,
 
-            PipelineErrorKind::MemoryLoad(mem::Error {
+            PipelineErrorKind::MemoryLoad(BusError {
                 bad_vaddr,
-                kind: mem::ErrorKind::UnalignedAddr,
+                kind: BusErrorKind::UnalignedAddr,
             })
-            | PipelineErrorKind::InsLoad(mem::Error {
+            | PipelineErrorKind::InsLoad(BusError {
                 bad_vaddr,
-                kind: mem::ErrorKind::UnalignedAddr,
+                kind: BusErrorKind::UnalignedAddr,
             }) => Exception::UnalignedLoad { bad_vaddr },
 
-            PipelineErrorKind::MemoryStore(mem::Error {
+            PipelineErrorKind::MemoryStore(BusError {
                 bad_vaddr,
-                kind: mem::ErrorKind::UnalignedAddr,
+                kind: BusErrorKind::UnalignedAddr,
             }) => Exception::UnalignedStore { bad_vaddr },
 
-            PipelineErrorKind::InsLoad(mem::Error { bad_vaddr, .. }) => {
+            PipelineErrorKind::InsLoad(BusError { bad_vaddr, .. }) => {
                 Exception::InstructionBus { bad_vaddr }
             }
-            PipelineErrorKind::MemoryLoad(mem::Error { bad_vaddr, .. })
-            | PipelineErrorKind::MemoryStore(mem::Error { bad_vaddr, .. }) => {
+            PipelineErrorKind::MemoryLoad(BusError { bad_vaddr, .. })
+            | PipelineErrorKind::MemoryStore(BusError { bad_vaddr, .. }) => {
                 Exception::DataBus { bad_vaddr }
             }
         };

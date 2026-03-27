@@ -1,7 +1,7 @@
 use arraydeque::{ArrayDeque, Wrapping};
 use ins::{ExecRes, LoadKind, Opcode, StoreKind};
 
-use crate::mem;
+use crate::interconnect::{Bus, BusError};
 
 use super::{Registers, cop0::Cop0};
 
@@ -17,9 +17,9 @@ pub struct Error {
 pub enum ErrorKind {
     AluOverflow,
     InvalidInstruction(u32),
-    InsLoad(mem::Error),
-    MemoryLoad(mem::Error),
-    MemoryStore(mem::Error),
+    InsLoad(BusError),
+    MemoryLoad(BusError),
+    MemoryStore(BusError),
     Break,
     Syscall,
     Interrupt,
@@ -71,7 +71,7 @@ impl Default for Pipeline {
 impl Pipeline {
     /// Fetch. Read an instruction and increment PC (program count).
     /// May be interrupted from the outside.
-    pub fn fetch(&mut self, pc: &mut u32, cop0: &Cop0, bus: &mem::Bus) -> Result<(), Error> {
+    pub fn fetch(&mut self, pc: &mut u32, cop0: &Cop0, bus: &Bus) -> Result<(), Error> {
         // Here for simplicity, will be handled as an exception
         // (IF's PC is saved to EPC, or ID if branch)
         if cop0.interrupt_pending() {
@@ -210,7 +210,7 @@ impl Pipeline {
     }
 
     /// Operations with memory like load/store. Eliminate need for load-delay slot.
-    pub fn memory(&mut self, bus: &mut mem::Bus, cop0: &mut Cop0) -> Result<(), Error> {
+    pub fn memory(&mut self, bus: &mut Bus, cop0: &mut Cop0) -> Result<(), Error> {
         if let stage @ &mut Latch::Executed { pc, opcode, exec } = &mut self.queue[3] {
             let mut read = 0;
             match exec {
