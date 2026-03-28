@@ -1,15 +1,17 @@
-use cop0::{Cop0, Exception};
 use pipeline::{ErrorKind as PipelineErrorKind, Pipeline};
 
 use crate::interconnect::{Bus, BusError, BusErrorKind};
+
+pub use cop0::{Cause, Cop0, Exception, Status};
 
 mod cop0;
 mod pipeline;
 
 #[derive(Debug)]
 pub struct Cpu {
+    // TODO : skip from Debug
+    pipeline: Pipeline,
     pub regs: Registers,
-    pub pipeline: Pipeline,
     pub cop0: Cop0,
 }
 

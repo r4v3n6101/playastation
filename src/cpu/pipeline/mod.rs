@@ -3,7 +3,7 @@ use ins::{ExecRes, LoadKind, Opcode, StoreKind};
 
 use crate::interconnect::{Bus, BusError};
 
-use super::{Registers, cop0::Cop0};
+use super::{Cop0, Registers};
 
 mod ins;
 

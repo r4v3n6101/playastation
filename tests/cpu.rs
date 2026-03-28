@@ -1,6 +1,9 @@
 use std::{fs, process::Command};
 
-use playastation::{cpu::Cpu, interconnect::Bus};
+use playastation::{
+    cpu::{Cause, Cpu},
+    interconnect::Bus,
+};
 
 fn create_and_run_program(name: &'static str, cycles: usize) -> (Cpu, Bus) {
     let mut bus = Bus::default();
@@ -133,7 +136,7 @@ fn test_syscall_exception() {
     let (cpu, _) = create_and_run_program("syscall_exception", 3);
 
     assert_eq!(cpu.cop0.regs[14], 0);
-    assert_eq!(cpu.cop0.cause_exc_code(), 8);
+    assert_eq!(cpu.cop0.cause_reg().read(Cause::EXCCODE), 8);
 }
 
 #[test]
@@ -141,7 +144,7 @@ fn test_break_exception() {
     let (cpu, _) = create_and_run_program("break_exception", 3);
 
     assert_eq!(cpu.cop0.regs[14], 0);
-    assert_eq!(cpu.cop0.cause_exc_code(), 9);
+    assert_eq!(cpu.cop0.cause_reg().read(Cause::EXCCODE), 9);
 }
 
 #[test]
@@ -150,7 +153,7 @@ fn test_overflow_exception() {
 
     assert_eq!(cpu.regs.general[3], 0);
     assert_eq!(cpu.cop0.regs[14], 12);
-    assert_eq!(cpu.cop0.cause_exc_code(), 12);
+    assert_eq!(cpu.cop0.cause_reg().read(Cause::EXCCODE), 12);
 }
 
 #[test]
@@ -158,7 +161,7 @@ fn test_reserved_instruction_exception() {
     let (cpu, _) = create_and_run_program("reserved_instruction_exception", 2);
 
     assert_eq!(cpu.cop0.regs[14], 0);
-    assert_eq!(cpu.cop0.cause_exc_code(), 10);
+    assert_eq!(cpu.cop0.cause_reg().read(Cause::EXCCODE), 10);
 }
 
 #[test]
@@ -174,7 +177,7 @@ fn test_div_by_zero() {
     let (cpu, _) = create_and_run_program("div_by_zero", 100);
 
     // No exception
-    assert_eq!(cpu.cop0.cause_exc_code(), 0);
+    assert_eq!(cpu.cop0.cause_reg().read(Cause::EXCCODE), 0);
 }
 
 #[test]
@@ -182,8 +185,8 @@ fn test_delay_slot_exception_bd() {
     let (cpu, _) = create_and_run_program("delay_slot_exception_bd", 4);
 
     assert_eq!(cpu.cop0.regs[14], 0);
-    assert_eq!(cpu.cop0.cause_exc_code(), 8);
-    assert!(cpu.cop0.cause_bd());
+    assert_eq!(cpu.cop0.cause_reg().read(Cause::EXCCODE), 8);
+    assert!(cpu.cop0.cause_reg().is_set(Cause::BD));
 }
 
 #[test]
@@ -191,7 +194,7 @@ fn test_misaligned_lw_exception() {
     let (cpu, _) = create_and_run_program("misaligned_lw_exception", 6);
 
     assert_eq!(cpu.cop0.regs[14], 8);
-    assert_eq!(cpu.cop0.cause_exc_code(), 4);
+    assert_eq!(cpu.cop0.cause_reg().read(Cause::EXCCODE), 4);
 }
 
 #[test]
@@ -199,7 +202,7 @@ fn test_misaligned_sw_exception() {
     let (cpu, _) = create_and_run_program("misaligned_sw_exception", 7);
 
     assert_eq!(cpu.cop0.regs[14], 12);
-    assert_eq!(cpu.cop0.cause_exc_code(), 5);
+    assert_eq!(cpu.cop0.cause_reg().read(Cause::EXCCODE), 5);
 }
 
 #[test]

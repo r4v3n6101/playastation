@@ -1,4 +1,34 @@
 use strum::{EnumDiscriminants, IntoDiscriminant};
+use tock_registers::LocalRegisterCopy;
+
+tock_registers::register_bitfields![u32,
+    pub Status [
+        IEC OFFSET(0) NUMBITS(1) [],
+        KUC OFFSET(1) NUMBITS(1) [],
+
+        IEP OFFSET(2) NUMBITS(1) [],
+        KUP OFFSET(3) NUMBITS(1) [],
+
+        IEO OFFSET(4) NUMBITS(1) [],
+        KUO OFFSET(5) NUMBITS(1) [],
+
+        IM OFFSET(8) NUMBITS(8) [],
+
+        BEV OFFSET(22) NUMBITS(1) []
+    ],
+
+    pub Cause [
+        EXCCODE OFFSET(2) NUMBITS(5) [],
+
+        IP OFFSET(8) NUMBITS(8) [
+            SW0 = 0,
+            SW1 = 1,
+            HW = 2,
+        ],
+
+        BD OFFSET(31) NUMBITS(1) []
+    ]
+];
 
 /// Simplified Cop0 (coprocessor 0) with the logic used in PSX.
 /// It's not fully implemented, because PSX doesn't use TLB for example.
@@ -27,36 +57,18 @@ impl Cop0 {
     pub const CAUSE_IDX: usize = 13;
     pub const EPC_IDX: usize = 14;
 
-    pub fn status_iec(&self) -> bool {
-        self.regs[Self::STATUS_IDX] & 0x1 != 0
+    pub fn status_reg(&self) -> LocalRegisterCopy<u32, Status::Register> {
+        LocalRegisterCopy::new(self.regs[Self::STATUS_IDX])
     }
 
-    pub fn status_bev(&self) -> bool {
-        self.regs[Self::STATUS_IDX] & 0x400000 != 0
-    }
-
-    pub fn status_imask(&self) -> u32 {
-        (self.regs[Self::STATUS_IDX] >> 8) & 0xFF
-    }
-
-    pub fn status_mode_bits(&self) -> u32 {
-        self.regs[Self::STATUS_IDX] & 0b111111
-    }
-
-    pub fn cause_bd(&self) -> bool {
-        self.regs[Self::CAUSE_IDX] & 0x80000000 != 0
-    }
-
-    pub fn cause_ip(&self) -> u32 {
-        (self.regs[Self::CAUSE_IDX] >> 8) & 0xFF
-    }
-
-    pub fn cause_exc_code(&self) -> u32 {
-        (self.regs[Self::CAUSE_IDX] >> 2) & 0b11111
+    pub fn cause_reg(&self) -> LocalRegisterCopy<u32, Cause::Register> {
+        LocalRegisterCopy::new(self.regs[Self::CAUSE_IDX])
     }
 
     pub fn exception_handler(&self) -> u32 {
-        if self.status_bev() {
+        let status = self.status_reg();
+
+        if status.is_set(Status::BEV) {
             0xBFC0_0180
         } else {
             0x8000_0080
@@ -96,10 +108,21 @@ impl Cop0 {
     }
 
     pub fn interrupt_pending(&self) -> bool {
-        let iec = self.status_iec();
-        let pending = self.cause_ip();
-        let mask = self.status_imask();
+        let status = self.status_reg();
+        let cause = self.cause_reg();
 
-        iec && ((pending & mask) != 0)
+        status.is_set(Status::IEC) && ((cause.read(Cause::IP) & status.read(Status::IM)) != 0)
+    }
+
+    pub fn update_irq_line(&mut self, pending: bool) {
+        let mut cause = self.cause_reg();
+
+        if pending {
+            cause.modify(Cause::IP::HW);
+        } else {
+            cause.modify(Cause::IP::CLEAR);
+        }
+
+        self.regs[Self::CAUSE_IDX] = cause.get();
     }
 }
