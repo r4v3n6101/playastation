@@ -40,6 +40,8 @@ impl Default for Cpu {
 
 impl Cpu {
     pub fn cycle(&mut self, bus: &mut Bus) {
+        self.cop0.set_hw_irq(bus.int_ctrl.pending());
+
         let fetch = self.pipeline.fetch(&mut self.regs.pc, &self.cop0, bus);
         let decode = self.pipeline.decode(&self.regs);
         let execute = self.pipeline.execute(&mut self.regs.pc, &mut self.cop0);

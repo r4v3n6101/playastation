@@ -2,7 +2,7 @@ use std::ops::Range;
 
 use bytes::BytesMut;
 
-mod mmio;
+use crate::devices::{Mmio, int::InterruptController};
 
 // MIPS uses segmented memory, but PSX ignore them and treat all segments as mirror to each other
 const KUSEG: Range<u32> = 0x0000_0000..0x7FFF_FFFF;
@@ -13,7 +13,10 @@ const KSEG1: Range<u32> = 0xA000_0000..0xBFFF_FFFF;
 const RAM: Range<u32> = 0x0000_0000..0x001F_FFFF;
 const EXPANSION1: Range<u32> = 0x1F00_0000..0x1F7F_FFFF;
 const SCRATCHPAD: Range<u32> = 0x1F80_0000..0x1F80_03FF;
-const HW_REGS: Range<u32> = 0x1F80_1000..0x1F80_1FFF;
+
+// Hardware registers regions
+const INT_CTRL: Range<u32> = 0x1F801070..0x1F801078;
+
 const MISC: Range<u32> = 0x1F80_2000..0x1F80_2FFF;
 const EXPANSION2: Range<u32> = 0x1FA0_0000..0x1FA1_FFFF;
 const BIOS: Range<u32> = 0x1FC0_0000..0x1FC7_FFFF;
@@ -31,16 +34,15 @@ pub enum BusErrorKind {
 }
 
 pub struct Bus {
-    bios: BytesMut,
-    ram: BytesMut,
-    misc: BytesMut,
-    scratchpad: BytesMut,
-    expansion1: BytesMut,
-    expansion2: BytesMut,
+    pub bios: BytesMut,
+    pub ram: BytesMut,
+    pub misc: BytesMut,
+    pub scratchpad: BytesMut,
+    pub expansion1: BytesMut,
+    pub expansion2: BytesMut,
 
-    /// Hardware registers (I call this MMIO)
-    mmio: mmio::Mmio,
-    // TODO : cache_control
+    // Devices
+    pub int_ctrl: InterruptController,
 }
 
 impl Default for Bus {
@@ -61,16 +63,13 @@ impl Default for Bus {
             scratchpad: buf.split_to(SCRATCHPAD.len()),
             expansion1: buf.split_to(EXPANSION1.len()),
             expansion2: buf.split_to(EXPANSION2.len()),
-            mmio: Default::default(),
+
+            int_ctrl: Default::default(),
         }
     }
 }
 
 impl Bus {
-    pub fn ram_mut(&mut self) -> &mut [u8] {
-        &mut self.ram
-    }
-
     pub fn read_byte(&self, addr: u32) -> Result<u8, BusError> {
         let mut bytes = [0; 1];
         self.memread(&mut bytes, addr)?;
@@ -156,8 +155,8 @@ impl Bus {
             x if BIOS.contains(&x) => {
                 dest.copy_from_slice(&self.bios[(x - BIOS.start) as usize..][..dest.len()]);
             }
-            x if HW_REGS.contains(&x) => {
-                self.mmio.read(dest, x);
+            x if INT_CTRL.contains(&x) => {
+                self.int_ctrl.read(dest, x);
             }
             _ => {
                 return Err(BusError {
@@ -193,8 +192,8 @@ impl Bus {
             x if BIOS.contains(&x) => {
                 self.bios[(x - BIOS.start) as usize..][..value.len()].copy_from_slice(value);
             }
-            x if HW_REGS.contains(&x) => {
-                self.mmio.write(addr, value);
+            x if INT_CTRL.contains(&x) => {
+                self.int_ctrl.write(addr, value);
             }
             _ => {
                 return Err(BusError {

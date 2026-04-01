@@ -16,7 +16,7 @@ fn create_and_run_program(name: &'static str, cycles: usize) -> (Cpu, Bus) {
         .wait()
         .unwrap();
     let program = fs::read(&output).unwrap();
-    bus.ram_mut()[..program.len()].copy_from_slice(&program);
+    bus.ram[..program.len()].copy_from_slice(&program);
     fs::remove_file(output).unwrap();
 
     for _ in 0..cycles {

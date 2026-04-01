@@ -117,7 +117,7 @@ impl Cop0 {
         iec && ((ip & im) != 0)
     }
 
-    pub fn set_ip(&mut self, active: bool) {
+    pub fn set_hw_irq(&mut self, active: bool) {
         let mut cause = self.cause();
         let mut ip = cause.ip();
         if active {
