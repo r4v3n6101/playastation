@@ -5,7 +5,7 @@ bitfield::bitfield! {
     pub struct Status(u32);
     impl Debug;
 
-    // IE/KU stack (you NEED all 6 for RFE)
+    // IE/KU stack
     pub iec, _: 0;
     pub kuc, _: 1;
     pub iep, _: 2;
@@ -13,10 +13,10 @@ bitfield::bitfield! {
     pub ieo, _: 4;
     pub kuo, _: 5;
 
-    // Interrupt mask (only real thing you care about)
+    // Interrupt mask
     pub im, _: 15, 8;
 
-    // Boot vector select (used on reset/exception entry)
+    // Boot vector select
     pub bev, _: 22;
 }
 
