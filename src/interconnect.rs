@@ -49,20 +49,26 @@ impl Default for Bus {
     fn default() -> Self {
         let mut buf = BytesMut::zeroed(
             RAM.len()
+                + 1
                 + EXPANSION1.len()
+                + 1
                 + SCRATCHPAD.len()
+                + 1
                 + MISC.len()
+                + 1
                 + EXPANSION2.len()
-                + BIOS.len(),
+                + 1
+                + BIOS.len()
+                + 1,
         );
 
         Self {
-            bios: buf.split_to(BIOS.len()),
-            ram: buf.split_to(RAM.len()),
-            misc: buf.split_to(MISC.len()),
-            scratchpad: buf.split_to(SCRATCHPAD.len()),
-            expansion1: buf.split_to(EXPANSION1.len()),
-            expansion2: buf.split_to(EXPANSION2.len()),
+            bios: buf.split_to(BIOS.len() + 1),
+            ram: buf.split_to(RAM.len() + 1),
+            misc: buf.split_to(MISC.len() + 1),
+            scratchpad: buf.split_to(SCRATCHPAD.len() + 1),
+            expansion1: buf.split_to(EXPANSION1.len() + 1),
+            expansion2: buf.split_to(EXPANSION2.len() + 1),
 
             int_ctrl: Default::default(),
         }
