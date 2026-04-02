@@ -36,7 +36,7 @@ bitfield::bitfield! {
 
 /// Simplified Cop0 (coprocessor 0) with the logic used in PSX.
 /// It's not fully implemented, because PSX doesn't use TLB for example.
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub struct Cop0 {
     pub regs: [u32; 32],
 }
@@ -53,6 +53,17 @@ pub enum Exception {
     Break = 0x09,
     ReservedInstruction = 0x0A,
     Overflow = 0x0C,
+}
+
+impl Default for Cop0 {
+    fn default() -> Self {
+        let mut regs = <[_; _]>::default();
+
+        // Status.BEV = 1, everything else 0
+        regs[Self::STATUS_IDX] = 0x0040_0000;
+
+        Self { regs }
+    }
 }
 
 impl Cop0 {
