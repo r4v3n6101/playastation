@@ -35,22 +35,42 @@ impl InterruptController {
 
 impl Mmio for InterruptController {
     fn read(&self, dest: &mut [u8], addr: u32) {
-        // TODO
-        let reg = match addr {
-            0x1F801070 => self.i_stat.bits(),
-            0x1F801074 => self.i_mask.bits(),
-            _ => unreachable!(),
-        };
+        match (addr, dest.len()) {
+            (0x0, 4) => {
+                dest.copy_from_slice(&u32::from(self.i_stat.bits()).to_le_bytes());
+            }
+            (0x4, 4) => {
+                dest.copy_from_slice(&u32::from(self.i_mask.bits()).to_le_bytes());
+            }
+
+            (0x0, 2) => {
+                dest.copy_from_slice(&self.i_stat.bits().to_le_bytes());
+            }
+            (0x4, 2) => {
+                dest.copy_from_slice(&self.i_mask.bits().to_le_bytes());
+            }
+            _ => unimplemented!(),
+        }
     }
 
     fn write(&mut self, addr: u32, value: &[u8]) {
-        // TODO
-        match addr {
-            0x1F801070 => {
-                todo!()
+        match (addr, value.len()) {
+            (0x0, 4) => {
+                self.i_stat &=
+                    InterruptFlags::from_bits_truncate(u16::from_le_bytes([value[2], value[3]]));
             }
-            0x1F801074 => {
-                todo!()
+            (0x4, 4) => {
+                self.i_mask =
+                    InterruptFlags::from_bits_truncate(u16::from_le_bytes([value[2], value[3]]));
+            }
+
+            (0x0, 2) => {
+                self.i_stat &=
+                    InterruptFlags::from_bits_truncate(u16::from_le_bytes([value[0], value[1]]));
+            }
+            (0x4, 2) => {
+                self.i_mask =
+                    InterruptFlags::from_bits_truncate(u16::from_le_bytes([value[0], value[1]]));
             }
             _ => unreachable!(),
         }

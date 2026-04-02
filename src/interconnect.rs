@@ -156,7 +156,7 @@ impl Bus {
                 dest.copy_from_slice(&self.bios[(x - BIOS.start) as usize..][..dest.len()]);
             }
             x if INT_CTRL.contains(&x) => {
-                self.int_ctrl.read(dest, x);
+                self.int_ctrl.read(dest, x - INT_CTRL.start);
             }
             _ => {
                 return Err(BusError {
@@ -193,7 +193,7 @@ impl Bus {
                 self.bios[(x - BIOS.start) as usize..][..value.len()].copy_from_slice(value);
             }
             x if INT_CTRL.contains(&x) => {
-                self.int_ctrl.write(addr, value);
+                self.int_ctrl.write(x - INT_CTRL.start, value);
             }
             _ => {
                 return Err(BusError {
