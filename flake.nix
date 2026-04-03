@@ -33,6 +33,11 @@
             rust-bin.nightly.latest.default
             armips
           ];
+
+          PSX_BIOS = pkgs.fetchurl {
+            url = "https://github.com/Abdess/retrobios/raw/refs/heads/main/bios/Sony/PlayStation/openbios.bin";
+            hash = "sha256-YjV8epvYjNzL64Mb0gxLHxhVHjwTrPRm1ObWNkNLNIs=";
+          };
         };
       }
     );
