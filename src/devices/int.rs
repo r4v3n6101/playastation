@@ -1,4 +1,4 @@
-use crate::devices::Mmio;
+use super::Mmio;
 
 bitflags::bitflags! {
     #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]

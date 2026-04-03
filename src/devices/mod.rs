@@ -1,3 +1,4 @@
+pub mod dma;
 pub mod int;
 
 pub trait Mmio {

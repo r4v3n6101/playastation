@@ -2,12 +2,13 @@ use std::ops::Range;
 
 use bytes::BytesMut;
 
-use crate::devices::{Mmio, int::InterruptController};
+use crate::devices::{Mmio, dma::DmaController, int::InterruptController};
 
 // MIPS uses segmented memory, but PSX ignore them and treat all segments as mirror to each other
 const KUSEG: Range<u32> = 0x0000_0000..0x7FFF_FFFF;
 const KSEG0: Range<u32> = 0x8000_0000..0x9FFF_FFFF;
 const KSEG1: Range<u32> = 0xA000_0000..0xBFFF_FFFF;
+const CACHE_CONTROL: u32 = 0xFFFE_0130;
 
 // Mapped memory
 const RAM: Range<u32> = 0x0000_0000..0x001F_FFFF;
@@ -15,7 +16,9 @@ const EXPANSION1: Range<u32> = 0x1F00_0000..0x1F7F_FFFF;
 const SCRATCHPAD: Range<u32> = 0x1F80_0000..0x1F80_03FF;
 
 // Hardware registers regions
+const HW_REGS: Range<u32> = 0x1F801000..0x1F801FFF;
 const INT_CTRL: Range<u32> = 0x1F801070..0x1F801078;
+const DMA_CTRL: Range<u32> = 0x1F801080..0x1F8010FF;
 
 const MISC: Range<u32> = 0x1F80_2000..0x1F80_2FFF;
 const EXPANSION2: Range<u32> = 0x1FA0_0000..0x1FA1_FFFF;
@@ -43,6 +46,7 @@ pub struct Bus {
 
     // Devices
     pub int_ctrl: InterruptController,
+    pub dma_ctrl: DmaController,
 }
 
 impl Default for Bus {
@@ -71,6 +75,7 @@ impl Default for Bus {
             expansion2: buf.split_to(EXPANSION2.len() + 1),
 
             int_ctrl: Default::default(),
+            dma_ctrl: Default::default(),
         }
     }
 }
@@ -164,6 +169,10 @@ impl Bus {
             x if INT_CTRL.contains(&x) => {
                 self.int_ctrl.read(dest, x - INT_CTRL.start);
             }
+            x if DMA_CTRL.contains(&x) => {
+                self.dma_ctrl.read(dest, x - DMA_CTRL.start);
+            }
+            x if HW_REGS.contains(&x) => {}
             _ => {
                 return Err(BusError {
                     bad_vaddr: addr,
@@ -201,6 +210,10 @@ impl Bus {
             x if INT_CTRL.contains(&x) => {
                 self.int_ctrl.write(x - INT_CTRL.start, value);
             }
+            x if DMA_CTRL.contains(&x) => {
+                self.dma_ctrl.write(x - DMA_CTRL.start, value);
+            }
+            x if HW_REGS.contains(&x) => {}
             _ => {
                 return Err(BusError {
                     bad_vaddr: addr,
@@ -218,6 +231,10 @@ fn translate_addr(addr: u32) -> Result<u32, BusError> {
     match addr {
         x if KUSEG.contains(&x) || KSEG0.contains(&x) || KSEG1.contains(&x) => {
             Ok(addr & 0x1FFF_FFFF)
+        }
+        CACHE_CONTROL => {
+            // TODO
+            Ok(0)
         }
         _ => Err(BusError {
             bad_vaddr: addr,
