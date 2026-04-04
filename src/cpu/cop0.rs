@@ -63,7 +63,7 @@ impl Default for Cop0 {
         let mut regs = <[_; _]>::default();
 
         // Status.BEV = 1, everything else 0
-        // regs[Self::STATUS_IDX] = 0x0040_0000;
+        regs[Self::STATUS_IDX] = 0x0040_0000;
 
         Self { regs }
     }

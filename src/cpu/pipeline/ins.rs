@@ -491,6 +491,14 @@ impl Opcode {
                 let (hi, lo) = if b == 0 { (a, b) } else { (a % b, a / b) };
                 ExecRes::MulDiv { hi, lo }
             }
+            Opcode::Mtlo => ExecRes::MulDiv {
+                hi: regs.hi,
+                lo: regs.general[rs],
+            },
+            Opcode::Mthi => ExecRes::MulDiv {
+                hi: regs.general[rs],
+                lo: regs.lo,
+            },
             Opcode::Jr => ExecRes::Jump {
                 addr: regs.general[rs],
                 link: false,
@@ -509,10 +517,7 @@ impl Opcode {
             Opcode::Break => ExecRes::Break,
             Opcode::Syscall => ExecRes::Syscall,
             Opcode::Rfe => ExecRes::Rfe,
-            other => {
-                println!("{other:?}");
-                unimplemented!()
-            }
+            _ => unimplemented!(),
         }
     }
 
