@@ -13,10 +13,13 @@ bitfield::bitfield! {
     pub ieo, _: 4;
     pub kuo, _: 5;
 
-    // Interrupt mask
+    /// Interrupt mask
     pub im, _: 15, 8;
 
-    // Boot vector select
+    /// Isolate cache
+    pub isc, _: 16;
+
+    /// Boot vector select
     pub bev, _: 22;
 }
 
@@ -60,7 +63,7 @@ impl Default for Cop0 {
         let mut regs = <[_; _]>::default();
 
         // Status.BEV = 1, everything else 0
-        regs[Self::STATUS_IDX] = 0x0040_0000;
+        // regs[Self::STATUS_IDX] = 0x0040_0000;
 
         Self { regs }
     }

@@ -1,8 +1,5 @@
-/target
-.DS_Store
-**/.DS_Store
 .direnv/
-.idea/
+**/target
+**/.DS_Store
 
-audio_*.wav
-video_*.mp4
+trace.*

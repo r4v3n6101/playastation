@@ -57,6 +57,7 @@ enum Latch {
     WrittenBack {
         opcode: Opcode,
         exec: ExecRes,
+        read: u32,
     },
 }
 
@@ -157,6 +158,14 @@ impl Pipeline {
                         ExecRes::Mfc0 { dest, from } => {
                             regs.general[dest] = cop0.regs[from];
                         }
+                        ExecRes::Load { dest, .. } => {
+                            if let Some(
+                                Latch::Memory { read, .. } | Latch::WrittenBack { read, .. },
+                            ) = latch
+                            {
+                                regs.general[dest] = read;
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -246,7 +255,7 @@ impl Pipeline {
                         LoadKind::WordRight => todo!(),
                     };
                 }
-                ExecRes::Store { addr, kind } => match kind {
+                ExecRes::Store { addr, kind } if !cop0.status().isc() => match kind {
                     StoreKind::Byte(val) => {
                         bus.store_byte(addr, val).map_err(|err| Error {
                             pc,
@@ -328,7 +337,7 @@ impl Pipeline {
             // Always zero
             regs.general[0] = 0;
 
-            *stage = Latch::WrittenBack { opcode, exec };
+            *stage = Latch::WrittenBack { opcode, exec, read };
         }
     }
 

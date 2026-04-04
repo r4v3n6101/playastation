@@ -509,7 +509,10 @@ impl Opcode {
             Opcode::Break => ExecRes::Break,
             Opcode::Syscall => ExecRes::Syscall,
             Opcode::Rfe => ExecRes::Rfe,
-            _ => unimplemented!(),
+            other => {
+                println!("{other:?}");
+                unimplemented!()
+            }
         }
     }
 

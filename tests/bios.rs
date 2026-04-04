@@ -12,7 +12,7 @@ fn test_bios_smoke_run() {
 
     let mut cpu = Cpu::default();
 
-    for _ in 0..100_000 {
+    for _ in 0..10_000_000 {
         cpu.cycle(&mut bus);
     }
 

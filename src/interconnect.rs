@@ -66,13 +66,22 @@ impl Default for Bus {
                 + 1,
         );
 
+        let bios = buf.split_to(BIOS.len() + 1);
+        let ram = buf.split_to(RAM.len() + 1);
+        let misc = buf.split_to(MISC.len() + 1);
+        let scratchpad = buf.split_to(SCRATCHPAD.len() + 1);
+        let mut expansion1 = buf.split_to(EXPANSION1.len() + 1);
+        let expansion2 = buf.split_to(EXPANSION2.len() + 1);
+
+        expansion1.fill(0xFF);
+
         Self {
-            bios: buf.split_to(BIOS.len() + 1),
-            ram: buf.split_to(RAM.len() + 1),
-            misc: buf.split_to(MISC.len() + 1),
-            scratchpad: buf.split_to(SCRATCHPAD.len() + 1),
-            expansion1: buf.split_to(EXPANSION1.len() + 1),
-            expansion2: buf.split_to(EXPANSION2.len() + 1),
+            bios,
+            ram,
+            misc,
+            scratchpad,
+            expansion1,
+            expansion2,
 
             int_ctrl: Default::default(),
             dma_ctrl: Default::default(),
