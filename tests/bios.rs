@@ -1,8 +1,9 @@
-use std::fs;
+use std::{fs, time::Instant};
 
 use playastation::{cpu::Cpu, interconnect::Bus};
 
 #[test]
+#[ignore = "Time consuming"]
 fn test_bios_smoke_run() {
     let bios = fs::read(env!("PSX_BIOS")).expect("failed to read BIOS ROM");
     assert_eq!(bios.len(), 512 * 1024, "unexpected BIOS size");
@@ -12,9 +13,15 @@ fn test_bios_smoke_run() {
 
     let mut cpu = Cpu::default();
 
-    for _ in 0..10_000_000 {
+    let instant = Instant::now();
+    for i in 0..1_000_000_000 {
         cpu.cycle(&mut bus);
+        if 1_000_000_000 - i < 1_000_000 {
+            println!("{cpu:?}");
+        }
     }
+
+    println!("Executed in {:?}", instant.elapsed());
 
     println!(
         "Cause: {:?}, Status: {:?}, bad_vaddr: {}",
