@@ -57,7 +57,10 @@ fn test_basic_shift() {
 fn test_mem_basic() {
     let (cpu, bus) = create_and_run_program("mem_basic", 100);
 
-    assert_eq!(bus.read_word(0x1000).unwrap(), 0x00001234);
+    assert_eq!(
+        u32::from_le_bytes(bus.load::<4>(0x1000).unwrap()),
+        0x00001234
+    );
     assert_eq!(cpu.regs.general[3], 0x00001234);
 }
 
@@ -65,7 +68,7 @@ fn test_mem_basic() {
 fn test_mem_offset_signed() {
     let (cpu, bus) = create_and_run_program("mem_offset_signed", 100);
 
-    assert_eq!(bus.read_word(0x1000).unwrap(), 99);
+    assert_eq!(u32::from_le_bytes(bus.load::<4>(0x1000).unwrap()), 99);
     assert_eq!(cpu.regs.general[3], 99);
 }
 

@@ -58,8 +58,8 @@ impl Iterator for InsIter<'_> {
 
         let pc = *self.pc;
         let in_delay_slot = self.pending_delay_slot;
-        let ins = match self.bus.read_word(pc) {
-            Ok(ins) => ins,
+        let ins = match self.bus.load(pc) {
+            Ok(ins) => u32::from_le_bytes(ins),
             Err(BusError { bad_vaddr, kind }) => {
                 self.enough();
                 return Some(DecRes::Exception {
@@ -120,7 +120,7 @@ mod tests {
         let mut bus = Bus::default();
 
         words.iter().for_each(|&(addr, val)| {
-            let _ = bus.store_word(addr, val);
+            let _ = bus.store(addr, val.to_le_bytes());
         });
 
         bus

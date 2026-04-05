@@ -90,96 +90,41 @@ impl Default for Bus {
 }
 
 impl Bus {
-    pub fn read_byte(&self, addr: u32) -> Result<u8, BusError> {
-        let mut bytes = [0; 1];
-        self.memread(&mut bytes, addr)?;
-        Ok(bytes[0])
-    }
-
-    pub fn read_half(&self, addr: u32) -> Result<u16, BusError> {
-        if !addr.is_multiple_of(2) {
+    pub fn load<const N: usize>(&self, addr: u32) -> Result<[u8; N], BusError> {
+        if !addr.is_multiple_of(N as u32) {
             return Err(BusError {
                 bad_vaddr: addr,
                 kind: BusErrorKind::UnalignedAddr,
             });
         }
 
-        let mut bytes = [0; 2];
-        self.memread(&mut bytes, addr)?;
-        Ok(u16::from_le_bytes(bytes))
-    }
+        let mut bytes = [0; N];
 
-    pub fn read_word(&self, addr: u32) -> Result<u32, BusError> {
-        if !addr.is_multiple_of(4) {
-            return Err(BusError {
-                bad_vaddr: addr,
-                kind: BusErrorKind::UnalignedAddr,
-            });
-        }
-
-        let mut bytes = [0; 4];
-        self.memread(&mut bytes, addr)?;
-        Ok(u32::from_le_bytes(bytes))
-    }
-
-    pub fn store_byte(&mut self, addr: u32, value: u8) -> Result<(), BusError> {
-        self.memwrite(addr, &value.to_le_bytes())
-    }
-
-    pub fn store_half(&mut self, addr: u32, value: u16) -> Result<(), BusError> {
-        if !addr.is_multiple_of(2) {
-            return Err(BusError {
-                bad_vaddr: addr,
-                kind: BusErrorKind::UnalignedAddr,
-            });
-        }
-
-        self.memwrite(addr, &value.to_le_bytes())
-    }
-
-    pub fn store_word(&mut self, addr: u32, value: u32) -> Result<(), BusError> {
-        if !addr.is_multiple_of(4) {
-            return Err(BusError {
-                bad_vaddr: addr,
-                kind: BusErrorKind::UnalignedAddr,
-            });
-        }
-
-        self.memwrite(addr, &value.to_le_bytes())
-    }
-
-    fn memread(&self, dest: &mut [u8], addr: u32) -> Result<(), BusError> {
         // TODO : cache control 0xFFFE0130
         match translate_addr(addr)? {
             x if RAM.contains(&x) => {
-                dest.copy_from_slice(&self.ram[(x - RAM.start) as usize..][..dest.len()]);
+                bytes.copy_from_slice(&self.ram[(x - RAM.start) as usize..][..N]);
             }
             x if EXPANSION1.contains(&x) => {
-                dest.copy_from_slice(
-                    &self.expansion1[(x - EXPANSION1.start) as usize..][..dest.len()],
-                );
+                bytes.copy_from_slice(&self.expansion1[(x - EXPANSION1.start) as usize..][..N]);
             }
             x if SCRATCHPAD.contains(&x) => {
-                dest.copy_from_slice(
-                    &self.scratchpad[(x - SCRATCHPAD.start) as usize..][..dest.len()],
-                );
+                bytes.copy_from_slice(&self.scratchpad[(x - SCRATCHPAD.start) as usize..][..N]);
             }
             x if MISC.contains(&x) => {
-                dest.copy_from_slice(&self.misc[(x - MISC.start) as usize..][..dest.len()]);
+                bytes.copy_from_slice(&self.misc[(x - MISC.start) as usize..][..N]);
             }
             x if EXPANSION2.contains(&x) => {
-                dest.copy_from_slice(
-                    &self.expansion2[(x - EXPANSION2.start) as usize..][..dest.len()],
-                );
+                bytes.copy_from_slice(&self.expansion2[(x - EXPANSION2.start) as usize..][..N]);
             }
             x if BIOS.contains(&x) => {
-                dest.copy_from_slice(&self.bios[(x - BIOS.start) as usize..][..dest.len()]);
+                bytes.copy_from_slice(&self.bios[(x - BIOS.start) as usize..][..N]);
             }
             x if INT_CTRL.contains(&x) => {
-                self.int_ctrl.read(dest, x - INT_CTRL.start);
+                self.int_ctrl.read(&mut bytes, x - INT_CTRL.start);
             }
             x if DMA_CTRL.contains(&x) => {
-                self.dma_ctrl.read(dest, x - DMA_CTRL.start);
+                self.dma_ctrl.read(&mut bytes, x - DMA_CTRL.start);
             }
             x if HW_REGS.contains(&x) => {}
             _ => {
@@ -190,37 +135,41 @@ impl Bus {
             }
         }
 
-        Ok(())
+        Ok(bytes)
     }
 
-    fn memwrite(&mut self, addr: u32, value: &[u8]) -> Result<(), BusError> {
+    pub fn store<const N: usize>(&mut self, addr: u32, value: [u8; N]) -> Result<(), BusError> {
+        if !addr.is_multiple_of(N as u32) {
+            return Err(BusError {
+                bad_vaddr: addr,
+                kind: BusErrorKind::UnalignedAddr,
+            });
+        }
+
         match translate_addr(addr)? {
             x if RAM.contains(&x) => {
-                self.ram[(x - RAM.start) as usize..][..value.len()].copy_from_slice(value);
+                self.ram[(x - RAM.start) as usize..][..N].copy_from_slice(&value);
             }
             x if EXPANSION1.contains(&x) => {
-                self.expansion1[(x - EXPANSION1.start) as usize..][..value.len()]
-                    .copy_from_slice(value);
+                self.expansion1[(x - EXPANSION1.start) as usize..][..N].copy_from_slice(&value);
             }
             x if SCRATCHPAD.contains(&x) => {
-                self.scratchpad[(x - SCRATCHPAD.start) as usize..][..value.len()]
-                    .copy_from_slice(value);
+                self.scratchpad[(x - SCRATCHPAD.start) as usize..][..N].copy_from_slice(&value);
             }
             x if MISC.contains(&x) => {
-                self.misc[(x - MISC.start) as usize..][..value.len()].copy_from_slice(value);
+                self.misc[(x - MISC.start) as usize..][..N].copy_from_slice(&value);
             }
             x if EXPANSION2.contains(&x) => {
-                self.expansion2[(x - EXPANSION2.start) as usize..][..value.len()]
-                    .copy_from_slice(value);
+                self.expansion2[(x - EXPANSION2.start) as usize..][..N].copy_from_slice(&value);
             }
             x if BIOS.contains(&x) => {
-                self.bios[(x - BIOS.start) as usize..][..value.len()].copy_from_slice(value);
+                self.bios[(x - BIOS.start) as usize..][..N].copy_from_slice(&value);
             }
             x if INT_CTRL.contains(&x) => {
-                self.int_ctrl.write(x - INT_CTRL.start, value);
+                self.int_ctrl.write(x - INT_CTRL.start, &value);
             }
             x if DMA_CTRL.contains(&x) => {
-                self.dma_ctrl.write(x - DMA_CTRL.start, value);
+                self.dma_ctrl.write(x - DMA_CTRL.start, &value);
             }
             x if HW_REGS.contains(&x) => {}
             _ => {

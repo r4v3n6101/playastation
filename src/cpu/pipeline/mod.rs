@@ -136,10 +136,10 @@ impl State {
 
         self.queue.push_front(Latch::Fetched {
             pc: *pc,
-            ins: bus.read_word(*pc).map_err(|err| Error {
+            ins: u32::from_le_bytes(bus.load(*pc).map_err(|err| Error {
                 pc: *pc,
                 kind: ErrorKind::InsLoad(err),
-            })?,
+            })?),
         });
         *pc = pc.wrapping_add(4);
 
@@ -277,55 +277,57 @@ impl State {
             match exec {
                 ops::ExecRes::Load { addr, kind, .. } => {
                     read = match kind {
-                        ops::LoadKind::IByte => bus
-                            .read_byte(addr)
-                            .map_err(|err| Error {
+                        ops::LoadKind::IByte => {
+                            i8::from_le_bytes(bus.load(addr).map_err(|err| Error {
                                 pc,
                                 kind: ErrorKind::MemoryLoad(err),
-                            })?
-                            .cast_signed() as u32,
-                        ops::LoadKind::IHalf => bus
-                            .read_half(addr)
-                            .map_err(|err| Error {
+                            })?) as u32
+                        }
+                        ops::LoadKind::IHalf => {
+                            i16::from_le_bytes(bus.load(addr).map_err(|err| Error {
                                 pc,
                                 kind: ErrorKind::MemoryLoad(err),
-                            })?
-                            .cast_signed() as u32,
+                            })?) as u32
+                        }
                         ops::LoadKind::UByte => {
-                            u32::from(bus.read_byte(addr).map_err(|err| Error {
+                            u8::from_le_bytes(bus.load(addr).map_err(|err| Error {
                                 pc,
                                 kind: ErrorKind::MemoryLoad(err),
                             })?)
+                            .into()
                         }
                         ops::LoadKind::UHalf => {
-                            u32::from(bus.read_half(addr).map_err(|err| Error {
+                            u16::from_le_bytes(bus.load(addr).map_err(|err| Error {
+                                pc,
+                                kind: ErrorKind::MemoryLoad(err),
+                            })?)
+                            .into()
+                        }
+                        ops::LoadKind::Word => {
+                            u32::from_le_bytes(bus.load(addr).map_err(|err| Error {
                                 pc,
                                 kind: ErrorKind::MemoryLoad(err),
                             })?)
                         }
-                        ops::LoadKind::Word => bus.read_word(addr).map_err(|err| Error {
-                            pc,
-                            kind: ErrorKind::MemoryLoad(err),
-                        })?,
                         ops::LoadKind::WordLeft => todo!(),
                         ops::LoadKind::WordRight => todo!(),
                     };
                 }
                 ops::ExecRes::Store { addr, kind } if !cop0.status().isc() => match kind {
                     ops::StoreKind::Byte(val) => {
-                        bus.store_byte(addr, val).map_err(|err| Error {
+                        bus.store(addr, val.to_le_bytes()).map_err(|err| Error {
                             pc,
                             kind: ErrorKind::MemoryStore(err),
                         })?;
                     }
                     ops::StoreKind::Half(val) => {
-                        bus.store_half(addr, val).map_err(|err| Error {
+                        bus.store(addr, val.to_le_bytes()).map_err(|err| Error {
                             pc,
                             kind: ErrorKind::MemoryStore(err),
                         })?;
                     }
                     ops::StoreKind::Word(val) => {
-                        bus.store_word(addr, val).map_err(|err| Error {
+                        bus.store(addr, val.to_le_bytes()).map_err(|err| Error {
                             pc,
                             kind: ErrorKind::MemoryStore(err),
                         })?;
