@@ -1,6 +1,9 @@
 use std::{fs, process::Command};
 
-use playastation::{cpu::Cpu, interconnect::Bus};
+use playastation::{
+    cpu::{Cpu, CpuCtx},
+    interconnect::Bus,
+};
 
 fn create_and_run_program(name: &'static str, cycles: usize) -> (Cpu, Bus) {
     let mut bus = Bus::default();
@@ -19,8 +22,9 @@ fn create_and_run_program(name: &'static str, cycles: usize) -> (Cpu, Bus) {
     bus.ram[..program.len()].copy_from_slice(&program);
     fs::remove_file(output).unwrap();
 
+    let mut cpu_ctx = CpuCtx::default();
     for _ in 0..cycles {
-        cpu.cycle(&mut bus);
+        cpu.run(&mut cpu_ctx, &mut bus);
     }
 
     (cpu, bus)

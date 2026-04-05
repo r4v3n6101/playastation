@@ -2,7 +2,7 @@ use arraydeque::{ArrayDeque, Wrapping};
 
 use crate::interconnect::{Bus, BusError, BusErrorKind};
 
-use super::{Exception, Registers, cop0::Cop0, ins::Opcode};
+use super::{Cpu, Exception, Registers, cop0::Cop0, ins::Opcode};
 
 mod ops;
 
@@ -69,17 +69,12 @@ impl Default for State {
 }
 
 impl State {
-    pub fn run(
-        &mut self,
-        regs: &mut Registers,
-        cop0: &mut Cop0,
-        bus: &mut Bus,
-    ) -> Result<(), (bool, u32, Exception)> {
-        let fetch = self.fetch(&mut regs.pc, cop0, bus);
-        let decode = self.decode(regs);
-        let execute = self.execute(&mut regs.pc, cop0);
-        let mem = self.memory(bus, cop0);
-        self.writeback(regs);
+    pub fn run(&mut self, cpu: &mut Cpu, bus: &mut Bus) -> Result<(), (bool, u32, Exception)> {
+        let fetch = self.fetch(&mut cpu.regs.pc, &cpu.cop0, bus);
+        let decode = self.decode(&cpu.regs);
+        let execute = self.execute(&mut cpu.regs.pc, &mut cpu.cop0);
+        let mem = self.memory(bus, &mut cpu.cop0);
+        self.writeback(&mut cpu.regs);
 
         let (err, flush_count) = if let Err(err) = mem {
             (err, 4)

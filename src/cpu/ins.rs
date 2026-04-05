@@ -169,8 +169,4 @@ impl Opcode {
                 | Self::Bgezal
         )
     }
-
-    pub fn change_control_flow(self) -> bool {
-        todo!()
-    }
 }
