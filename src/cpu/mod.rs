@@ -8,7 +8,7 @@ mod pipeline;
 // TODO : feature flag
 mod jit;
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct CpuCtx {
     pipeline: pipeline::State,
 }

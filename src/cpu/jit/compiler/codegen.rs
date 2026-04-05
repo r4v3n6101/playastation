@@ -33,7 +33,6 @@ pub fn emit_op(
             let imm_sext = imm.cast_signed();
             let target = ins & 0x03FF_FFFF;
 
-            *count += 1;
             match op {
                 Opcode::Add => {
                     emit_alu_overflow_op(
@@ -51,7 +50,7 @@ pub fn emit_op(
                     );
                 }
                 Opcode::Addu => {
-                    emit_alu_op(b, cpu_ptr, rd, rs, rt, None, None, |b, x, y| {
+                    emit_alu_op(b, cpu_ptr, count, rd, rs, rt, None, None, |b, x, y| {
                         b.ins().iadd(x, y)
                     });
                 }
@@ -71,33 +70,33 @@ pub fn emit_op(
                     );
                 }
                 Opcode::Subu => {
-                    emit_alu_op(b, cpu_ptr, rd, rs, rt, None, None, |b, x, y| {
+                    emit_alu_op(b, cpu_ptr, count, rd, rs, rt, None, None, |b, x, y| {
                         b.ins().isub(x, y)
                     });
                 }
                 Opcode::And => {
-                    emit_alu_op(b, cpu_ptr, rd, rs, rt, None, None, |b, x, y| {
+                    emit_alu_op(b, cpu_ptr, count, rd, rs, rt, None, None, |b, x, y| {
                         b.ins().band(x, y)
                     });
                 }
                 Opcode::Or => {
-                    emit_alu_op(b, cpu_ptr, rd, rs, rt, None, None, |b, x, y| {
+                    emit_alu_op(b, cpu_ptr, count, rd, rs, rt, None, None, |b, x, y| {
                         b.ins().bor(x, y)
                     });
                 }
                 Opcode::Xor => {
-                    emit_alu_op(b, cpu_ptr, rd, rs, rt, None, None, |b, x, y| {
+                    emit_alu_op(b, cpu_ptr, count, rd, rs, rt, None, None, |b, x, y| {
                         b.ins().bxor(x, y)
                     });
                 }
                 Opcode::Nor => {
-                    emit_alu_op(b, cpu_ptr, rd, rs, rt, None, None, |b, x, y| {
+                    emit_alu_op(b, cpu_ptr, count, rd, rs, rt, None, None, |b, x, y| {
                         let or = b.ins().bor(x, y);
                         b.ins().bnot(or)
                     });
                 }
                 Opcode::Slt => {
-                    emit_alu_op(b, cpu_ptr, rd, rs, rt, None, None, |b, x, y| {
+                    emit_alu_op(b, cpu_ptr, count, rd, rs, rt, None, None, |b, x, y| {
                         let cond = b.ins().icmp(IntCC::SignedLessThan, x, y);
                         let one = b.ins().iconst(types::I32, 1);
                         let zero = b.ins().iconst(types::I32, 0);
@@ -105,7 +104,7 @@ pub fn emit_op(
                     });
                 }
                 Opcode::Sltu => {
-                    emit_alu_op(b, cpu_ptr, rd, rs, rt, None, None, |b, x, y| {
+                    emit_alu_op(b, cpu_ptr, count, rd, rs, rt, None, None, |b, x, y| {
                         let cond = b.ins().icmp(IntCC::UnsignedLessThan, x, y);
                         let one = b.ins().iconst(types::I32, 1);
                         let zero = b.ins().iconst(types::I32, 0);
@@ -116,6 +115,7 @@ pub fn emit_op(
                     emit_alu_op(
                         b,
                         cpu_ptr,
+                        count,
                         rd,
                         rs,
                         rt,
@@ -128,6 +128,7 @@ pub fn emit_op(
                     emit_alu_op(
                         b,
                         cpu_ptr,
+                        count,
                         rd,
                         rs,
                         rt,
@@ -140,6 +141,7 @@ pub fn emit_op(
                     emit_alu_op(
                         b,
                         cpu_ptr,
+                        count,
                         rd,
                         rs,
                         rt,
@@ -149,19 +151,21 @@ pub fn emit_op(
                     );
                 }
                 Opcode::Sllv => {
-                    emit_alu_op(b, cpu_ptr, rd, rs, rt, None, None, |b, x, y| {
+                    emit_alu_op(b, cpu_ptr, count, rd, rs, rt, None, None, |b, x, y| {
                         let mask = b.ins().iconst(types::I32, 0x1F);
                         let var = b.ins().band(y, mask);
                         b.ins().ishl(x, var)
                     });
                 }
-                Opcode::Srlv => emit_alu_op(b, cpu_ptr, rd, rs, rt, None, None, |b, x, y| {
-                    let mask = b.ins().iconst(types::I32, 0x1F);
-                    let var = b.ins().band(y, mask);
-                    b.ins().ushr(x, var)
-                }),
+                Opcode::Srlv => {
+                    emit_alu_op(b, cpu_ptr, count, rd, rs, rt, None, None, |b, x, y| {
+                        let mask = b.ins().iconst(types::I32, 0x1F);
+                        let var = b.ins().band(y, mask);
+                        b.ins().ushr(x, var)
+                    })
+                }
                 Opcode::Srav => {
-                    emit_alu_op(b, cpu_ptr, rd, rs, rt, None, None, |b, x, y| {
+                    emit_alu_op(b, cpu_ptr, count, rd, rs, rt, None, None, |b, x, y| {
                         let mask = b.ins().iconst(types::I32, 0x1F);
                         let var = b.ins().band(y, mask);
                         b.ins().sshr(x, var)
@@ -186,6 +190,7 @@ pub fn emit_op(
                     emit_alu_op(
                         b,
                         cpu_ptr,
+                        count,
                         rd,
                         rs,
                         rt,
@@ -198,6 +203,7 @@ pub fn emit_op(
                     emit_alu_op(
                         b,
                         cpu_ptr,
+                        count,
                         rd,
                         rs,
                         rt,
@@ -215,6 +221,7 @@ pub fn emit_op(
                     emit_alu_op(
                         b,
                         cpu_ptr,
+                        count,
                         rd,
                         rs,
                         rt,
@@ -232,6 +239,7 @@ pub fn emit_op(
                     emit_alu_op(
                         b,
                         cpu_ptr,
+                        count,
                         rd,
                         rs,
                         rt,
@@ -244,6 +252,7 @@ pub fn emit_op(
                     emit_alu_op(
                         b,
                         cpu_ptr,
+                        count,
                         rd,
                         rs,
                         rt,
@@ -256,6 +265,7 @@ pub fn emit_op(
                     emit_alu_op(
                         b,
                         cpu_ptr,
+                        count,
                         rd,
                         rs,
                         rt,
@@ -266,7 +276,7 @@ pub fn emit_op(
                 }
                 Opcode::Lui => {
                     if rt != 0 {
-                        let val = b.ins().iconst(types::I32, i64::from(imm << 16));
+                        let val = b.ins().iconst(types::I32, (imm as i64) << 16);
                         store_reg(b, cpu_ptr, Reg::General(rt), val);
                     }
                 }
@@ -288,6 +298,7 @@ pub fn emit_op(
 fn emit_alu_op(
     b: &mut FunctionBuilder,
     cpu_ptr: Value,
+    count: &mut u64,
 
     rd: usize,
     rs: usize,
@@ -296,6 +307,8 @@ fn emit_alu_op(
     imm: Option<i64>,
     op: impl Fn(&mut FunctionBuilder, Value, Value) -> Value,
 ) {
+    *count += 1;
+
     let (out_reg, res) = if let Some(shamt) = shamt {
         if rd == 0 {
             // Zero reg is not for writing, skip the whole op
@@ -344,6 +357,8 @@ fn emit_alu_overflow_op(
     imm: Option<i64>,
     op: impl Fn(&mut FunctionBuilder, Value, Value) -> (Value, Value),
 ) {
+    *count += 1;
+
     let (out_reg, (res, of)) = if let Some(imm) = imm {
         if rt == 0 {
             // Zero reg is not for writing, skip the whole op

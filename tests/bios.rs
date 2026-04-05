@@ -21,6 +21,7 @@ fn test_bios_smoke_run() {
     for i in 0..1_000_000_000 {
         cpu.run(&mut cpu_ctx, &mut bus);
         if 1_000_000_000 - i < 1_000_000 {
+            println!("{cpu_ctx:?}");
             println!("{cpu:?}");
         }
     }

@@ -73,8 +73,8 @@ pub fn execute(ins: u32, op: Opcode, regs: &Registers) -> ExecRes {
     let rt = ((ins >> 16) & 0x1F) as usize;
     let rd = ((ins >> 11) & 0x1F) as usize;
     let shamt = (ins >> 6) & 0x1F;
-    let imm = ins & 0xFFFF;
-    let imm_sext = (imm as u16).cast_signed() as u32;
+    let imm = (ins & 0xFFFF) as u16;
+    let imm_sext = imm.cast_signed();
     let target = ins & 0x03FF_FFFF;
     match op {
         Opcode::Add => ExecRes::Alu {
@@ -157,131 +157,131 @@ pub fn execute(ins: u32, op: Opcode, regs: &Registers) -> ExecRes {
             dest: rt,
             res: {
                 let a = regs.general[rs].cast_signed();
-                let b = imm_sext as i16 as i32;
+                let b = i32::from(imm_sext);
                 a.checked_add(b).map(i32::cast_unsigned)
             },
         },
         Opcode::Addiu => ExecRes::Alu {
             dest: rt,
-            res: Some(regs.general[rs].wrapping_add(imm_sext)),
+            res: Some(regs.general[rs].wrapping_add(imm_sext as u32)),
         },
         Opcode::Slti => ExecRes::Alu {
             dest: rt,
-            res: Some((regs.general[rs].cast_signed() < imm_sext.cast_signed()).into()),
+            res: Some((regs.general[rs].cast_signed() < i32::from(imm_sext)).into()),
         },
         Opcode::Sltiu => ExecRes::Alu {
             dest: rt,
-            res: Some((regs.general[rs] < imm_sext).into()),
+            res: Some((regs.general[rs] < imm_sext as u32).into()),
         },
         Opcode::Andi => ExecRes::Alu {
             dest: rt,
-            res: Some(regs.general[rs] & imm),
+            res: Some(regs.general[rs] & u32::from(imm)),
         },
         Opcode::Ori => ExecRes::Alu {
             dest: rt,
-            res: Some(regs.general[rs] | imm),
+            res: Some(regs.general[rs] | u32::from(imm)),
         },
         Opcode::Xori => ExecRes::Alu {
             dest: rt,
-            res: Some(regs.general[rs] ^ imm),
+            res: Some(regs.general[rs] ^ u32::from(imm)),
         },
         Opcode::Lui => ExecRes::Alu {
             dest: rt,
-            res: Some(imm << 16),
+            res: Some((imm as u32) << 16),
         },
         Opcode::Lw => ExecRes::Load {
             dest: rt,
-            addr: regs.general[rs].wrapping_add(imm_sext),
+            addr: regs.general[rs].wrapping_add(imm_sext as u32),
             kind: LoadKind::Word,
         },
         Opcode::Lh => ExecRes::Load {
             dest: rt,
-            addr: regs.general[rs].wrapping_add(imm_sext),
+            addr: regs.general[rs].wrapping_add(imm_sext as u32),
             kind: LoadKind::IHalf,
         },
         Opcode::Lhu => ExecRes::Load {
             dest: rt,
-            addr: regs.general[rs].wrapping_add(imm_sext),
+            addr: regs.general[rs].wrapping_add(imm_sext as u32),
             kind: LoadKind::UHalf,
         },
         Opcode::Lb => ExecRes::Load {
             dest: rt,
-            addr: regs.general[rs].wrapping_add(imm_sext),
+            addr: regs.general[rs].wrapping_add(imm_sext as u32),
             kind: LoadKind::IByte,
         },
         Opcode::Lbu => ExecRes::Load {
             dest: rt,
-            addr: regs.general[rs].wrapping_add(imm_sext),
+            addr: regs.general[rs].wrapping_add(imm_sext as u32),
             kind: LoadKind::UByte,
         },
         Opcode::Lwl => ExecRes::Load {
             dest: rt,
-            addr: regs.general[rs].wrapping_add(imm_sext),
+            addr: regs.general[rs].wrapping_add(imm_sext as u32),
             kind: LoadKind::WordLeft,
         },
         Opcode::Lwr => ExecRes::Load {
             dest: rt,
-            addr: regs.general[rs].wrapping_add(imm_sext),
+            addr: regs.general[rs].wrapping_add(imm_sext as u32),
             kind: LoadKind::WordRight,
         },
         Opcode::Sw => ExecRes::Store {
-            addr: regs.general[rs].wrapping_add(imm_sext),
+            addr: regs.general[rs].wrapping_add(imm_sext as u32),
             kind: StoreKind::Word(regs.general[rt]),
         },
         Opcode::Sh => ExecRes::Store {
-            addr: regs.general[rs].wrapping_add(imm_sext),
+            addr: regs.general[rs].wrapping_add(imm_sext as u32),
             kind: StoreKind::Half(regs.general[rt] as u16),
         },
         Opcode::Sb => ExecRes::Store {
-            addr: regs.general[rs].wrapping_add(imm_sext),
+            addr: regs.general[rs].wrapping_add(imm_sext as u32),
             kind: StoreKind::Byte(regs.general[rt] as u8),
         },
         Opcode::Swl => ExecRes::Store {
-            addr: regs.general[rs].wrapping_add(imm_sext),
+            addr: regs.general[rs].wrapping_add(imm_sext as u32),
             kind: StoreKind::WordLeft(regs.general[rt]),
         },
         Opcode::Swr => ExecRes::Store {
-            addr: regs.general[rs].wrapping_add(imm_sext),
+            addr: regs.general[rs].wrapping_add(imm_sext as u32),
             kind: StoreKind::WordRight(regs.general[rt]),
         },
         Opcode::Beq => ExecRes::Branch {
             addr: (regs.general[rs] == regs.general[rt])
-                .then_some((regs.pc - 4).wrapping_add(imm_sext << 2)),
+                .then_some((regs.pc - 4).wrapping_add((imm_sext << 2) as u32)),
             link: false,
         },
         Opcode::Bne => ExecRes::Branch {
             addr: (regs.general[rs] != regs.general[rt])
-                .then_some((regs.pc - 4).wrapping_add(imm_sext << 2)),
+                .then_some((regs.pc - 4).wrapping_add((imm_sext << 2) as u32)),
             link: false,
         },
         Opcode::Blez => ExecRes::Branch {
             addr: (regs.general[rs].cast_signed() <= 0)
-                .then_some((regs.pc - 4).wrapping_add(imm_sext << 2)),
+                .then_some((regs.pc - 4).wrapping_add((imm_sext << 2) as u32)),
             link: false,
         },
         Opcode::Bgtz => ExecRes::Branch {
             addr: (regs.general[rs].cast_signed() > 0)
-                .then_some((regs.pc - 4).wrapping_add(imm_sext << 2)),
+                .then_some((regs.pc - 4).wrapping_add((imm_sext << 2) as u32)),
             link: false,
         },
         Opcode::Bltz => ExecRes::Branch {
             addr: (regs.general[rs].cast_signed() < 0)
-                .then_some((regs.pc - 4).wrapping_add(imm_sext << 2)),
+                .then_some((regs.pc - 4).wrapping_add((imm_sext << 2) as u32)),
             link: false,
         },
         Opcode::Bgez => ExecRes::Branch {
             addr: (regs.general[rs].cast_signed() >= 0)
-                .then_some((regs.pc - 4).wrapping_add(imm_sext << 2)),
+                .then_some((regs.pc - 4).wrapping_add((imm_sext << 2) as u32)),
             link: false,
         },
         Opcode::Bltzal => ExecRes::Branch {
             addr: (regs.general[rs].cast_signed() < 0)
-                .then_some((regs.pc - 4).wrapping_add(imm_sext << 2)),
+                .then_some((regs.pc - 4).wrapping_add((imm_sext << 2) as u32)),
             link: true,
         },
         Opcode::Bgezal => ExecRes::Branch {
             addr: (regs.general[rs].cast_signed() >= 0)
-                .then_some((regs.pc - 4).wrapping_add(imm_sext << 2)),
+                .then_some((regs.pc - 4).wrapping_add((imm_sext << 2) as u32)),
             link: true,
         },
         Opcode::J => ExecRes::Jump {

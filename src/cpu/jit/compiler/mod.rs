@@ -10,6 +10,7 @@ use cranelift_module::{Linkage, Module};
 use super::{FuncPtr, decoder::InsIter};
 
 mod codegen;
+mod stubs;
 
 pub struct JitCtx {
     /// Module where all compiled functions reside
