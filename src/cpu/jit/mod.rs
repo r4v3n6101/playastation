@@ -5,35 +5,30 @@ use super::Cpu;
 mod compiler;
 mod decoder;
 
-pub type FuncPtr = fn(*mut FuncResult, *mut CpuAdditionalCtx, *mut Cpu, *mut Bus);
+pub type FuncPtr = fn(*mut FuncResult, *mut Cpu, *mut Bus);
 
-#[repr(C, packed)]
+#[repr(C)]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
 pub struct FuncResult {
     /// Result of function execution.
     result: ExecutionResult,
     /// PC of last executed instruction.
-    pc: u32,
+    last_pc: u32,
     /// Flag (0=false, 1=true) whether last executed instruction is in delay slot.
-    in_delay_slot: u32,
-    /// Number of executed instructions.
-    count: u64,
+    last_in_delay_slot: u32,
+    /// Number of memory loads (each increases cycles by 1)
+    loads: u64,
     /// Filled in case of invalid memory ops (unaligned load/store, unmapped)
     bad_vaddr: u32,
 }
 
 #[repr(u32)]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
 pub enum ExecutionResult {
+    #[default]
     Success = 0,
     Overflow = 1,
     UnalignedLoad = 2,
     UnalignedStore = 3,
     DataBus = 4,
-}
-
-/// Specific to JIT module context for CPU.
-#[repr(C, packed)]
-pub struct CpuAdditionalCtx {
-    /// Slot for pending loads.
-    /// If dest (1st arg) is 0, then no pending
-    pub load_delay_slot: (u8, u32),
 }

@@ -10,6 +10,6 @@ strum = { version = "0.28.0", features = ["derive"] }
 bitfield = "0.19.4"
 bitflags = "2.11.0"
 
-cranelift = "0.104"
-cranelift-module = "0.104"
-cranelift-jit = "0.104"
+cranelift = "0.130"
+cranelift-module = "0.130"
+cranelift-jit = "0.130"

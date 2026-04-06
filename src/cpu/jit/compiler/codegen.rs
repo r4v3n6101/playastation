@@ -1,4 +1,4 @@
-use std::mem::offset_of;
+use std::{mem::offset_of, ptr};
 
 use cranelift::prelude::{FunctionBuilder, InstBuilder, IntCC, MemFlags, Value, types};
 use cranelift_module::Module;
@@ -76,18 +76,15 @@ pub fn emit_op(fn_ctx: &mut FnCtx, ins: u32, op: Opcode) {
             |b, x, y| b.ins().sshr(x, y),
         ),
         Opcode::Sllv => emit_alu_op(fn_ctx, rd, rs, rt, None, None, |b, x, y| {
-            let mask = b.ins().iconst(types::I32, 0x1F);
-            let var = b.ins().band(y, mask);
+            let var = b.ins().band_imm(y, 0x1F);
             b.ins().ishl(x, var)
         }),
         Opcode::Srlv => emit_alu_op(fn_ctx, rd, rs, rt, None, None, |b, x, y| {
-            let mask = b.ins().iconst(types::I32, 0x1F);
-            let var = b.ins().band(y, mask);
+            let var = b.ins().band_imm(y, 0x1F);
             b.ins().ushr(x, var)
         }),
         Opcode::Srav => emit_alu_op(fn_ctx, rd, rs, rt, None, None, |b, x, y| {
-            let mask = b.ins().iconst(types::I32, 0x1F);
-            let var = b.ins().band(y, mask);
+            let var = b.ins().band_imm(y, 0x1F);
             b.ins().sshr(x, var)
         }),
         Opcode::Addi => {
@@ -150,7 +147,41 @@ pub fn emit_op(fn_ctx: &mut FnCtx, ins: u32, op: Opcode) {
                 store_reg(fn_ctx, Reg::General(rt), val);
             }
         }
-        // TODO : Loads
+        Opcode::Lw => {
+            let rs = load_reg(fn_ctx, Reg::General(rs));
+            let addr = fn_ctx.builder.ins().iadd_imm(rs, i64::from(imm_sext));
+            emit_load::<4, true, 0>(fn_ctx, rt, addr);
+        }
+        Opcode::Lh => {
+            let rs = load_reg(fn_ctx, Reg::General(rs));
+            let addr = fn_ctx.builder.ins().iadd_imm(rs, i64::from(imm_sext));
+            emit_load::<2, true, 0>(fn_ctx, rt, addr);
+        }
+        Opcode::Lhu => {
+            let rs = load_reg(fn_ctx, Reg::General(rs));
+            let addr = fn_ctx.builder.ins().iadd_imm(rs, i64::from(imm_sext));
+            emit_load::<2, false, 0>(fn_ctx, rt, addr);
+        }
+        Opcode::Lb => {
+            let rs = load_reg(fn_ctx, Reg::General(rs));
+            let addr = fn_ctx.builder.ins().iadd_imm(rs, i64::from(imm_sext));
+            emit_load::<1, true, 0>(fn_ctx, rt, addr);
+        }
+        Opcode::Lbu => {
+            let rs = load_reg(fn_ctx, Reg::General(rs));
+            let addr = fn_ctx.builder.ins().iadd_imm(rs, i64::from(imm_sext));
+            emit_load::<1, false, 0>(fn_ctx, rt, addr);
+        }
+        Opcode::Lwl => {
+            let rs = load_reg(fn_ctx, Reg::General(rs));
+            let addr = fn_ctx.builder.ins().iadd_imm(rs, i64::from(imm_sext));
+            emit_load::<4, false, 1>(fn_ctx, rt, addr);
+        }
+        Opcode::Lwr => {
+            let rs = load_reg(fn_ctx, Reg::General(rs));
+            let addr = fn_ctx.builder.ins().iadd_imm(rs, i64::from(imm_sext));
+            emit_load::<4, false, 2>(fn_ctx, rt, addr);
+        }
         Opcode::Sw => {
             let rs = load_reg(fn_ctx, Reg::General(rs));
             let addr = fn_ctx.builder.ins().iadd_imm(rs, i64::from(imm_sext));
@@ -192,13 +223,7 @@ pub fn emit_op(fn_ctx: &mut FnCtx, ins: u32, op: Opcode) {
 }
 
 pub fn emit_trailer(fn_ctx: &mut FnCtx) {
-    emit_return(
-        fn_ctx,
-        Some(ExecutionResult::Success),
-        fn_ctx.last_pc,
-        fn_ctx.last_in_delay_slot,
-        fn_ctx.count,
-    );
+    emit_return(fn_ctx, Some(ExecutionResult::Success));
 }
 
 fn emit_alu_op(
@@ -210,8 +235,6 @@ fn emit_alu_op(
     imm: Option<i64>,
     op: impl Fn(&mut FunctionBuilder, Value, Value) -> Value,
 ) {
-    fn_ctx.count += 1;
-
     let (out_reg, res) = if let Some(shamt) = shamt {
         if rd == 0 {
             // Zero reg is not for writing, skip the whole op
@@ -252,11 +275,9 @@ fn emit_alu_overflow_op(
     imm: Option<i64>,
     op: impl Fn(&mut FunctionBuilder, Value, Value) -> (Value, Value),
 ) {
-    fn_ctx.count += 1;
-
     let (out_reg, (res, of)) = if let Some(imm) = imm {
         if rt == 0 {
-            // Zero reg is not for writing, skip the whole op
+            // Same as above
             return;
         }
 
@@ -279,28 +300,85 @@ fn emit_alu_overflow_op(
 
     fn_ctx.builder.ins().brif(of, ov, &[], ok, &[]);
 
+    fn_ctx.builder.set_cold_block(ov);
     fn_ctx.builder.switch_to_block(ov);
-    emit_return(
-        fn_ctx,
-        Some(ExecutionResult::Overflow),
-        fn_ctx.last_pc,
-        fn_ctx.last_in_delay_slot,
-        fn_ctx.count,
-    );
+    emit_return(fn_ctx, Some(ExecutionResult::Overflow));
 
     fn_ctx.builder.switch_to_block(ok);
     store_reg(fn_ctx, Reg::General(out_reg), res);
 }
 
-fn emit_store<const N: usize, const D: usize>(fn_ctx: &mut FnCtx, addr: Value, value: Value) {
-    fn_ctx.count += 1;
+fn emit_load<const SIZE: usize, const SIGNED: bool, const DIRECTION: usize>(
+    fn_ctx: &mut FnCtx,
+    rt: usize,
+    addr: Value,
+) {
+    if rt == 0 {
+        return;
+    }
 
+    let ptr_ty = fn_ctx.module.target_config().pointer_type();
+    let callee = fn_ctx
+        .module
+        .declare_func_in_func(fn_ctx.stubs.bus_load_name, fn_ctx.builder.func);
+
+    let load_delay_reg = fn_ctx.builder.ins().iconst(
+        ptr_ty,
+        ptr::from_mut(&mut fn_ctx.load_delay.0).addr() as i64,
+    );
+    let load_delay_val = fn_ctx.builder.ins().iconst(
+        ptr_ty,
+        ptr::from_mut(&mut fn_ctx.load_delay.1).addr() as i64,
+    );
+    let dest = fn_ctx.builder.ins().iconst(types::I8, rt as i64);
+    let size = fn_ctx.builder.ins().iconst(types::I8, SIZE as i64);
+    let signed = fn_ctx.builder.ins().iconst(types::I8, SIGNED as i64);
+    let dir = fn_ctx.builder.ins().iconst(types::I8, DIRECTION as i64);
+
+    let call = fn_ctx.builder.ins().call(
+        callee,
+        &[
+            fn_ctx.res_ptr,
+            fn_ctx.bus_ptr,
+            load_delay_reg,
+            load_delay_val,
+            dest,
+            addr,
+            size,
+            signed,
+            dir,
+        ],
+    );
+    let status = fn_ctx.builder.inst_results(call)[0]; // i8
+
+    let zero = fn_ctx.builder.ins().iconst(types::I8, 0);
+    let failed = fn_ctx
+        .builder
+        .ins()
+        .icmp(IntCC::SignedLessThan, status, zero);
+    let ok = fn_ctx.builder.create_block();
+    let fail = fn_ctx.builder.create_block();
+
+    fn_ctx.builder.ins().brif(failed, fail, &[], ok, &[]);
+
+    fn_ctx.builder.set_cold_block(fail);
+    fn_ctx.builder.switch_to_block(fail);
+    emit_return(fn_ctx, None);
+
+    fn_ctx.builder.switch_to_block(ok);
+}
+
+fn emit_store<const SIZE: usize, const DIRECTION: usize>(
+    fn_ctx: &mut FnCtx,
+    addr: Value,
+    value: Value,
+) {
     let callee = fn_ctx
         .module
         .declare_func_in_func(fn_ctx.stubs.bus_store_name, fn_ctx.builder.func);
 
-    let size = fn_ctx.builder.ins().iconst(types::I8, N as i64);
-    let dir = fn_ctx.builder.ins().iconst(types::I8, D as i64);
+    let size = fn_ctx.builder.ins().iconst(types::I8, SIZE as i64);
+    let dir = fn_ctx.builder.ins().iconst(types::I8, DIRECTION as i64);
     let call = fn_ctx.builder.ins().call(
         callee,
         &[
@@ -313,9 +391,9 @@ fn emit_store<const N: usize, const D: usize>(fn_ctx: &mut FnCtx, addr: Value, v
             dir,
         ],
     );
-    let status = fn_ctx.builder.inst_results(call)[0]; // i32
+    let status = fn_ctx.builder.inst_results(call)[0]; // i8
 
-    let zero = fn_ctx.builder.ins().iconst(types::I32, 0);
+    let zero = fn_ctx.builder.ins().iconst(types::I8, 0);
     let failed = fn_ctx
         .builder
         .ins()
@@ -325,25 +403,14 @@ fn emit_store<const N: usize, const D: usize>(fn_ctx: &mut FnCtx, addr: Value, v
 
     fn_ctx.builder.ins().brif(failed, fail, &[], ok, &[]);
 
+    fn_ctx.builder.set_cold_block(fail);
     fn_ctx.builder.switch_to_block(fail);
-    emit_return(
-        fn_ctx,
-        None,
-        fn_ctx.last_pc,
-        fn_ctx.last_in_delay_slot,
-        fn_ctx.count,
-    );
+    emit_return(fn_ctx, None);
 
     fn_ctx.builder.switch_to_block(ok);
 }
 
-fn emit_return(
-    fn_ctx: &mut FnCtx,
-    result: Option<ExecutionResult>,
-    pc: u32,
-    in_delay_slot: bool,
-    count: u64,
-) {
+fn emit_return(fn_ctx: &mut FnCtx, result: Option<ExecutionResult>) {
     if let Some(result) = result {
         let result = fn_ctx.builder.ins().iconst(types::I32, result as i64);
         fn_ctx.builder.ins().store(
@@ -354,31 +421,26 @@ fn emit_return(
         );
     }
 
-    let pc = fn_ctx.builder.ins().iconst(types::I32, i64::from(pc));
+    let pc = fn_ctx
+        .builder
+        .ins()
+        .iconst(types::I32, i64::from(fn_ctx.last_pc));
     fn_ctx.builder.ins().store(
         MemFlags::new(),
         pc,
         fn_ctx.res_ptr,
-        offset_of!(FuncResult, pc) as i32,
+        offset_of!(FuncResult, last_pc) as i32,
     );
 
     let in_delay_slot = fn_ctx
         .builder
         .ins()
-        .iconst(types::I32, i64::from(in_delay_slot));
+        .iconst(types::I32, i64::from(fn_ctx.last_in_delay_slot));
     fn_ctx.builder.ins().store(
         MemFlags::new(),
         in_delay_slot,
         fn_ctx.res_ptr,
-        offset_of!(FuncResult, in_delay_slot) as i32,
-    );
-
-    let count = fn_ctx.builder.ins().iconst(types::I64, count.cast_signed());
-    fn_ctx.builder.ins().store(
-        MemFlags::new(),
-        count,
-        fn_ctx.res_ptr,
-        offset_of!(FuncResult, count) as i32,
+        offset_of!(FuncResult, last_in_delay_slot) as i32,
     );
 
     // Bye!
