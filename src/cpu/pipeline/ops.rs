@@ -187,7 +187,7 @@ pub fn execute(ins: u32, op: Opcode, regs: &Registers) -> ExecRes {
         },
         Opcode::Lui => ExecRes::Alu {
             dest: rt,
-            res: Some((imm as u32) << 16),
+            res: Some(u32::from(imm) << 16),
         },
         Opcode::Lw => ExecRes::Load {
             dest: rt,
