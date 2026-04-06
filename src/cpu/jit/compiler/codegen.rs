@@ -1,7 +1,9 @@
 use std::{mem::offset_of, ptr};
 
-use cranelift::prelude::{FunctionBuilder, InstBuilder, IntCC, MemFlags, Value, types};
-use cranelift_module::Module;
+use cranelift::{
+    module::Module,
+    prelude::{FunctionBuilder, InstBuilder, IntCC, MemFlags, Value, types},
+};
 
 use super::{
     super::{

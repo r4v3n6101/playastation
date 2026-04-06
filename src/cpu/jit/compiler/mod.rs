@@ -2,10 +2,10 @@ use std::mem;
 
 use cranelift::{
     codegen::Context,
+    jit::{JITBuilder, JITModule},
+    module::{FuncId, Linkage, Module, default_libcall_names},
     prelude::{AbiParam, FunctionBuilder, FunctionBuilderContext, Value, types},
 };
-use cranelift_jit::{JITBuilder, JITModule};
-use cranelift_module::{FuncId, Linkage, Module};
 
 use super::{
     FuncPtr,
@@ -49,7 +49,7 @@ struct Stubs {
 
 impl Default for ModuleCtx {
     fn default() -> Self {
-        let mut builder = JITBuilder::new(cranelift_module::default_libcall_names()).unwrap();
+        let mut builder = JITBuilder::new(default_libcall_names()).unwrap();
         builder
             .symbol("bus_store", stubs::bus_store as *const u8)
             .symbol("bus_load", stubs::bus_load as *const u8);

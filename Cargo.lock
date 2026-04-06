@@ -87,6 +87,7 @@ checksum = "f13b593d4c3fe30bdf7e7bf4cbe78637849515822d305da6080c7ddda554d251"
 dependencies = [
  "cranelift-codegen",
  "cranelift-frontend",
+ "cranelift-jit",
  "cranelift-module",
 ]
 
@@ -354,8 +355,6 @@ dependencies = [
  "bitflags 2.11.0",
  "bytes",
  "cranelift",
- "cranelift-jit",
- "cranelift-module",
  "strum",
 ]
 
