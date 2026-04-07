@@ -16,8 +16,6 @@ pub struct FuncResult {
     last_pc: u32,
     /// Flag (0=false, 1=true) whether last executed instruction is in delay slot.
     last_in_delay_slot: u32,
-    /// Number of memory loads (each increases cycles by 1)
-    loads: u64,
     /// Filled in case of invalid memory ops (unaligned load/store, unmapped)
     bad_vaddr: u32,
 }

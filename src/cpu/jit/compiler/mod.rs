@@ -3,8 +3,8 @@ use std::mem;
 use cranelift::{
     codegen::Context,
     jit::{JITBuilder, JITModule},
-    module::{FuncId, Linkage, Module, default_libcall_names},
-    prelude::{AbiParam, FunctionBuilder, FunctionBuilderContext, Value, types},
+    module::{DataDescription, DataId, Linkage, Module, default_libcall_names},
+    prelude::FunctionBuilderContext,
 };
 
 use super::{
@@ -15,157 +15,75 @@ use super::{
 mod codegen;
 mod stubs;
 
-pub struct ModuleCtx {
+pub struct ModCtx {
     /// Module where all compiled functions reside
     module: JITModule,
-    /// Cache for a builder of a function
-    fn_ctx: FunctionBuilderContext,
-    /// Cache for a context of a function
+    /// Cache for a context
     ctx: Context,
-    /// Imported extern "C" functions
-    stubs: Stubs,
-    /// Carried load delay slot for pending writes (probably cross boundary).
-    /// If dest=0 then load slot is empty or reg0's write is discarded
-    load_delay: (u8, u32),
+    /// Cache for a builder
+    fn_build_ctx: FunctionBuilderContext,
+    /// Whether to generate load-delay store
+    pending_load_delay_gen: bool,
+    /// Global pending register where to store load-delay slot
+    load_delay_dest: DataId,
+    /// Global slot for load-delay value
+    load_delay_val: DataId,
 }
 
-struct FnCtx<'module, 'func> {
-    module: &'module mut JITModule,
-    builder: &'module mut FunctionBuilder<'func>,
-    load_delay: &'module mut (u8, u32),
-    res_ptr: Value,
-    cpu_ptr: Value,
-    bus_ptr: Value,
-    last_pc: u32,
-    last_in_delay_slot: bool,
-    stubs: Stubs,
-}
-
-#[derive(Copy, Clone)]
-struct Stubs {
-    bus_load_name: FuncId,
-    bus_store_name: FuncId,
-}
-
-impl Default for ModuleCtx {
+impl Default for ModCtx {
     fn default() -> Self {
-        let mut builder = JITBuilder::new(default_libcall_names()).unwrap();
-        builder
-            .symbol("bus_store", stubs::bus_store as *const u8)
-            .symbol("bus_load", stubs::bus_load as *const u8);
+        let fn_builder = JITBuilder::new(default_libcall_names()).unwrap();
+        let mut module = JITModule::new(fn_builder);
 
-        let mut module = JITModule::new(builder);
-
-        let fn_ctx = FunctionBuilderContext::new();
+        let fn_build_ctx = FunctionBuilderContext::new();
         let ctx = module.make_context();
-        let mut sig = module.make_signature();
-        let ptr_ty = module.target_config().pointer_type();
 
-        let bus_load_name = {
-            module.clear_signature(&mut sig);
-            sig.params.push(AbiParam::new(ptr_ty));
-            sig.params.push(AbiParam::new(ptr_ty));
-            sig.params.push(AbiParam::new(ptr_ty));
-            sig.params.push(AbiParam::new(ptr_ty));
-            sig.params.push(AbiParam::new(types::I8));
-            sig.params.push(AbiParam::new(types::I32));
-            sig.params.push(AbiParam::new(types::I8));
-            sig.params.push(AbiParam::new(types::I8));
-            sig.params.push(AbiParam::new(types::I8));
-            sig.returns.push(AbiParam::new(types::I8));
-            module
-                .declare_function("bus_load", Linkage::Import, &sig)
-                .unwrap()
+        let global_value_fn = |module: &mut JITModule, name, size| {
+            let gv = module
+                .declare_data(name, Linkage::Local, true, false)
+                .unwrap();
+            let mut data = DataDescription::new();
+            data.define_zeroinit(size);
+            module.define_data(gv, &data).unwrap();
+
+            gv
         };
-        let bus_store_name = {
-            module.clear_signature(&mut sig);
-            sig.params.push(AbiParam::new(ptr_ty));
-            sig.params.push(AbiParam::new(ptr_ty));
-            sig.params.push(AbiParam::new(ptr_ty));
-            sig.params.push(AbiParam::new(types::I32));
-            sig.params.push(AbiParam::new(types::I32));
-            sig.params.push(AbiParam::new(types::I8));
-            sig.params.push(AbiParam::new(types::I8));
-            sig.returns.push(AbiParam::new(types::I8));
-            module
-                .declare_function("bus_store", Linkage::Import, &sig)
-                .unwrap()
-        };
+
+        let load_delay_dest = global_value_fn(&mut module, "load_delay_dest", 1);
+        let load_delay_val = global_value_fn(&mut module, "load_delay_val", 4);
 
         Self {
             module,
-            fn_ctx,
             ctx,
-            load_delay: (0, 0),
-            stubs: Stubs {
-                bus_load_name,
-                bus_store_name,
-            },
+            fn_build_ctx,
+            load_delay_dest,
+            load_delay_val,
+            pending_load_delay_gen: false,
         }
     }
 }
 
-impl ModuleCtx {
+impl ModCtx {
     pub fn make_new_fn(&mut self, enter_pc: u32, decs: InsIter<'_>) -> FuncPtr {
-        let ptr_ty = self.module.target_config().pointer_type();
+        let fn_name = {
+            let mut fn_ctx = codegen::FnCtx::create_and_emit_header(self, enter_pc);
+            decs.for_each(|decoded| match decoded {
+                DecRes::Decoded {
+                    pc,
+                    ins,
+                    in_delay_slot,
+                    op,
+                } => {
+                    fn_ctx.emit_op(pc, in_delay_slot, ins, op);
+                }
+                DecRes::Exception { .. } => {
+                    // TODO
+                }
+            });
 
-        let mut sig = self.module.make_signature();
-        sig.params.push(AbiParam::new(ptr_ty)); // *mut res
-        sig.params.push(AbiParam::new(ptr_ty)); // *mut cpu
-        sig.params.push(AbiParam::new(ptr_ty)); // *mut bus
-
-        let fn_name = self
-            .module
-            .declare_function(&format!("enter_{enter_pc:#}"), Linkage::Local, &sig)
-            .unwrap();
-
-        let mut b = FunctionBuilder::new(&mut self.ctx.func, &mut self.fn_ctx);
-        b.func.signature = sig;
-
-        let entry = b.create_block();
-        b.append_block_params_for_function_params(entry);
-        b.switch_to_block(entry);
-        let res_ptr = b.block_params(entry)[0];
-        let cpu_ptr = b.block_params(entry)[1];
-        let bus_ptr = b.block_params(entry)[2];
-
-        let mut fn_ctx = FnCtx {
-            res_ptr,
-            cpu_ptr,
-            bus_ptr,
-            builder: &mut b,
-            module: &mut self.module,
-            load_delay: &mut self.load_delay,
-            last_pc: 0,
-            last_in_delay_slot: false,
-            stubs: self.stubs,
+            fn_ctx.emit_trailer();
+            fn_ctx.finalize()
         };
-        decs.for_each(|decoded| match decoded {
-            DecRes::Decoded {
-                pc,
-                ins,
-                in_delay_slot,
-                op,
-            } => {
-                fn_ctx.last_pc = pc;
-                fn_ctx.last_in_delay_slot = in_delay_slot;
-                codegen::emit_op(&mut fn_ctx, ins, op);
-            }
-            DecRes::Exception {
-                pc,
-                in_delay_slot,
-                exc,
-            } => {
-                fn_ctx.last_pc = pc;
-                fn_ctx.last_in_delay_slot = in_delay_slot;
-                // TODO
-            }
-        });
-
-        codegen::emit_trailer(&mut fn_ctx);
-
-        b.seal_all_blocks();
-        b.finalize();
 
         self.module.define_function(fn_name, &mut self.ctx).unwrap();
         self.module.clear_context(&mut self.ctx);
@@ -182,11 +100,11 @@ mod tests {
 
     use super::{
         super::{ExecutionResult, FuncResult, decoder::InsIter},
-        ModuleCtx,
+        ModCtx,
     };
 
     fn compile_and_run(
-        ctx: &mut ModuleCtx,
+        ctx: &mut ModCtx,
         enter_pc: u32,
         words: &[(u32, u32)],
         cpu: &mut Cpu,
@@ -206,7 +124,7 @@ mod tests {
 
     #[test]
     fn compiles_and_executes_alu_block() {
-        let mut ctx = ModuleCtx::default();
+        let mut ctx = ModCtx::default();
         let mut cpu = Cpu::default();
         let mut bus = Bus::default();
 
@@ -234,7 +152,6 @@ mod tests {
                 result: ExecutionResult::Success,
                 last_pc: 0x0000_000C,
                 last_in_delay_slot: 0,
-                loads: 0,
                 bad_vaddr: 0
             }
         );
@@ -242,7 +159,7 @@ mod tests {
 
     #[test]
     fn stops_on_overflow_and_preserves_destination_register() {
-        let mut ctx = ModuleCtx::default();
+        let mut ctx = ModCtx::default();
         let mut cpu = Cpu::default();
         let mut bus = Bus::default();
 
@@ -268,46 +185,92 @@ mod tests {
                 result: ExecutionResult::Overflow,
                 last_pc: 0x0000_0008,
                 last_in_delay_slot: 0,
-                loads: 0,
                 bad_vaddr: 0
             }
         );
     }
 
     #[test]
-    fn stores_to_bus_and_carries_pending_load_delay() {
-        let mut ctx = ModuleCtx::default();
+    fn applies_load_delay_and_handles_nested_loads() {
+        let mut ctx = ModCtx::default();
         let mut cpu = Cpu::default();
         let mut bus = Bus::default();
+
+        bus.store(0x20, 0x1111_1111u32.to_le_bytes()).unwrap();
+        bus.store(0x24, 0x2222_2222u32.to_le_bytes()).unwrap();
 
         let res = compile_and_run(
             &mut ctx,
             0,
             &[
-                (0x0000_0000, 0x2408_0010), // addiu t0, zero, 0x10
-                (0x0000_0004, 0x2409_1234), // addiu t1, zero, 0x1234
-                (0x0000_0008, 0xAD09_0000), // sw    t1, 0(t0)
-                (0x0000_000C, 0x8D0A_0000), // lw    t2, 0(t0)
-                (0x0000_0010, 0x8D0A_0000), // lw    t2, 0(t0)
-                (0x0000_0014, 0x8D0A_0000), // lw    t2, 0(t0)
-                (0x0000_0018, 0x8D0A_0000), // lw    t2, 0(t0)
-                (0x0000_001C, 0x8D0A_0000), // lw    t2, 0(t0)
+                (0x0000_0000, 0x2408_0020), // addiu t0, zero, 0x20
+                (0x0000_0004, 0x8D09_0000), // lw    t1, 0(t0)
+                (0x0000_0008, 0x0120_5021), // addu  t2, t1, zero
+                (0x0000_000C, 0x8D09_0004), // lw    t1, 4(t0)
+                (0x0000_0010, 0x0120_5821), // addu  t3, t1, zero
+                (0x0000_0014, 0x0120_6021), // addu  t4, t1, zero
             ],
             &mut cpu,
             &mut bus,
         );
 
-        assert_eq!(u32::from_le_bytes(bus.load(0x10).unwrap()), 0x0000_1234);
+        // First dependent instruction must still see the old t1 value.
         assert_eq!(cpu.regs.general[10], 0);
-        assert_eq!(ctx.load_delay, (10, 0x0000_1234));
+        // After the first delay slot, the first load becomes visible.
+        assert_eq!(cpu.regs.general[11], 0x1111_1111);
+        // After the nested load delay slot, the second load becomes visible.
+        assert_eq!(cpu.regs.general[9], 0x2222_2222);
+        assert_eq!(cpu.regs.general[12], 0x2222_2222);
 
         assert_eq!(
             res,
             FuncResult {
                 result: ExecutionResult::Success,
-                last_pc: 0x0000_001C,
+                last_pc: 0x0000_0014,
                 last_in_delay_slot: 0,
-                loads: 5,
+                bad_vaddr: 0
+            }
+        );
+    }
+
+    #[test]
+    fn second_load_uses_old_base_when_it_depends_on_previous_load() {
+        let mut ctx = ModCtx::default();
+        let mut cpu = Cpu::default();
+        let mut bus = Bus::default();
+
+        bus.store(0x40, 0x1111_1111u32.to_le_bytes()).unwrap();
+        bus.store(0x20, 0x0000_0040u32.to_le_bytes()).unwrap();
+        bus.store(0x30, 0x2222_2222u32.to_le_bytes()).unwrap();
+
+        let res = compile_and_run(
+            &mut ctx,
+            0,
+            &[
+                (0x0000_0000, 0x2408_0020), // addiu t0, zero, 0x20
+                (0x0000_0004, 0x8D09_0000), // lw    t1, 0(t0)
+                (0x0000_0008, 0x8D2A_0000), // lw    t2, 0(t1)
+                (0x0000_000C, 0x0120_5821), // addu  t3, t1, zero
+                (0x0000_0010, 0x0140_6021), // addu  t4, t2, zero
+            ],
+            &mut cpu,
+            &mut bus,
+        );
+
+        // The first load becomes visible only after the second load has already
+        // computed its address, so the nested load must use the old t1 value (0).
+        assert_eq!(cpu.regs.general[8], 0x0000_0020); // t0
+        assert_eq!(cpu.regs.general[9], 0x0000_0040); // t1
+        assert_eq!(cpu.regs.general[10], 0x2408_0020); // t2
+        assert_eq!(cpu.regs.general[11], 0x0000_0040); // t3
+        assert_eq!(cpu.regs.general[12], 0x2408_0020); // t4
+
+        assert_eq!(
+            res,
+            FuncResult {
+                result: ExecutionResult::Success,
+                last_pc: 0x0000_0010,
+                last_in_delay_slot: 0,
                 bad_vaddr: 0
             }
         );

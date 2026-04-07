@@ -1,470 +1,681 @@
-use std::{mem::offset_of, ptr};
+use std::mem::offset_of;
 
 use cranelift::{
-    module::Module,
-    prelude::{FunctionBuilder, InstBuilder, IntCC, MemFlags, Value, types},
+    jit::JITModule,
+    module::{DataId, FuncId, Linkage, Module},
+    prelude::{AbiParam, FunctionBuilder, InstBuilder, IntCC, MemFlags, Value, types},
 };
+
+use crate::cpu::{Cpu, ins::Opcode};
 
 use super::{
-    super::{
-        super::{Cpu, ins::Opcode},
-        ExecutionResult, FuncResult,
-    },
-    FnCtx,
+    super::{ExecutionResult, FuncResult},
+    ModCtx, stubs,
 };
 
-pub fn emit_op(fn_ctx: &mut FnCtx, ins: u32, op: Opcode) {
-    let rs = ((ins >> 21) & 0x1F) as usize;
-    let rt = ((ins >> 16) & 0x1F) as usize;
-    let rd = ((ins >> 11) & 0x1F) as usize;
-    let shamt = (ins >> 6) & 0x1F;
-    let imm = (ins & 0xFFFF) as u16;
-    let imm_sext = imm.cast_signed();
-    let target = ins & 0x03FF_FFFF;
+pub struct FnCtx<'module> {
+    module: &'module JITModule,
+    /// If val is true then the commit of load-delay slot will be generated
+    pending_load_delay_gen: &'module mut bool,
+    /// Global pending register where to store load-delay slot
+    load_delay_dest: DataId,
+    /// Global value of load-delay slot
+    load_delay_val: DataId,
+    /// Function builder
+    builder: FunctionBuilder<'module>,
+    /// Function name in form of an Id
+    name: FuncId,
+    /// Output result
+    res_ptr: Value,
+    /// CPU state
+    cpu_ptr: Value,
+    /// Bus
+    bus_ptr: Value,
+    /// PC of last emitted op
+    last_pc: u32,
+    /// Same as above, but for delay slot
+    last_in_delay_slot: bool,
+}
 
-    match op {
-        Opcode::Add => emit_alu_overflow_op(fn_ctx, rd, rs, rt, None, |b, x, y| {
-            b.ins().sadd_overflow(x, y)
-        }),
-        Opcode::Addu => emit_alu_op(fn_ctx, rd, rs, rt, None, None, |b, x, y| b.ins().iadd(x, y)),
-        Opcode::Sub => emit_alu_overflow_op(fn_ctx, rd, rs, rt, None, |b, x, y| {
-            b.ins().ssub_overflow(x, y)
-        }),
-        Opcode::Subu => emit_alu_op(fn_ctx, rd, rs, rt, None, None, |b, x, y| b.ins().isub(x, y)),
-        Opcode::And => emit_alu_op(fn_ctx, rd, rs, rt, None, None, |b, x, y| b.ins().band(x, y)),
-        Opcode::Or => emit_alu_op(fn_ctx, rd, rs, rt, None, None, |b, x, y| b.ins().bor(x, y)),
-        Opcode::Xor => emit_alu_op(fn_ctx, rd, rs, rt, None, None, |b, x, y| b.ins().bxor(x, y)),
-        Opcode::Nor => emit_alu_op(fn_ctx, rd, rs, rt, None, None, |b, x, y| {
-            let or = b.ins().bor(x, y);
-            b.ins().bnot(or)
-        }),
-        Opcode::Slt => emit_alu_op(fn_ctx, rd, rs, rt, None, None, |b, x, y| {
-            let cond = b.ins().icmp(IntCC::SignedLessThan, x, y);
-            let one = b.ins().iconst(types::I32, 1);
-            let zero = b.ins().iconst(types::I32, 0);
-            b.ins().select(cond, one, zero)
-        }),
-        Opcode::Sltu => emit_alu_op(fn_ctx, rd, rs, rt, None, None, |b, x, y| {
-            let cond = b.ins().icmp(IntCC::UnsignedLessThan, x, y);
-            let one = b.ins().iconst(types::I32, 1);
-            let zero = b.ins().iconst(types::I32, 0);
-            b.ins().select(cond, one, zero)
-        }),
-        Opcode::Sll => emit_alu_op(
-            fn_ctx,
-            rd,
-            rs,
-            rt,
-            Some(i64::from(shamt)),
-            None,
-            |b, x, y| b.ins().ishl(x, y),
-        ),
-        Opcode::Srl => emit_alu_op(
-            fn_ctx,
-            rd,
-            rs,
-            rt,
-            Some(i64::from(shamt)),
-            None,
-            |b, x, y| b.ins().ushr(x, y),
-        ),
-        Opcode::Sra => emit_alu_op(
-            fn_ctx,
-            rd,
-            rs,
-            rt,
-            Some(i64::from(shamt)),
-            None,
-            |b, x, y| b.ins().sshr(x, y),
-        ),
-        Opcode::Sllv => emit_alu_op(fn_ctx, rd, rs, rt, None, None, |b, x, y| {
-            let var = b.ins().band_imm(y, 0x1F);
-            b.ins().ishl(x, var)
-        }),
-        Opcode::Srlv => emit_alu_op(fn_ctx, rd, rs, rt, None, None, |b, x, y| {
-            let var = b.ins().band_imm(y, 0x1F);
-            b.ins().ushr(x, var)
-        }),
-        Opcode::Srav => emit_alu_op(fn_ctx, rd, rs, rt, None, None, |b, x, y| {
-            let var = b.ins().band_imm(y, 0x1F);
-            b.ins().sshr(x, var)
-        }),
-        Opcode::Addi => {
-            emit_alu_overflow_op(fn_ctx, rd, rs, rt, Some(i64::from(imm_sext)), |b, x, y| {
-                b.ins().sadd_overflow(x, y)
-            });
+impl<'a> FnCtx<'a> {
+    pub fn create_and_emit_header(mod_ctx: &'a mut ModCtx, enter_pc: u32) -> Self {
+        let ptr_ty = mod_ctx.module.target_config().pointer_type();
+
+        let mut sig = mod_ctx.module.make_signature();
+        sig.params.push(AbiParam::new(ptr_ty)); // *mut res
+        sig.params.push(AbiParam::new(ptr_ty)); // *mut cpu
+        sig.params.push(AbiParam::new(ptr_ty)); // *mut bus
+
+        let name = mod_ctx
+            .module
+            .declare_function(&format!("enter_{enter_pc:#}"), Linkage::Local, &sig)
+            .unwrap();
+
+        let mut builder = FunctionBuilder::new(&mut mod_ctx.ctx.func, &mut mod_ctx.fn_build_ctx);
+        builder.func.signature = sig;
+
+        let entry = builder.create_block();
+        builder.append_block_params_for_function_params(entry);
+        builder.switch_to_block(entry);
+
+        let res_ptr = builder.block_params(entry)[0];
+        let cpu_ptr = builder.block_params(entry)[1];
+        let bus_ptr = builder.block_params(entry)[2];
+
+        Self {
+            builder,
+            name,
+            res_ptr,
+            cpu_ptr,
+            bus_ptr,
+            last_pc: enter_pc,
+            last_in_delay_slot: false,
+            module: &mut mod_ctx.module,
+            load_delay_dest: mod_ctx.load_delay_dest,
+            load_delay_val: mod_ctx.load_delay_val,
+            pending_load_delay_gen: &mut mod_ctx.pending_load_delay_gen,
         }
-        Opcode::Addiu => emit_alu_op(
-            fn_ctx,
-            rd,
-            rs,
-            rt,
-            None,
-            Some(i64::from(imm_sext)),
-            |b, x, y| b.ins().iadd(x, y),
-        ),
-        Opcode::Slti => emit_alu_op(
-            fn_ctx,
-            rd,
-            rs,
-            rt,
-            None,
-            Some(i64::from(imm_sext)),
-            |b, x, y| {
+    }
+
+    pub fn emit_trailer(&mut self) {
+        self.emit_return(Some(ExecutionResult::Success), None);
+    }
+
+    pub fn finalize(mut self) -> FuncId {
+        self.builder.seal_all_blocks();
+        self.builder.finalize();
+
+        self.name
+    }
+
+    pub fn emit_op(&mut self, pc: u32, in_delay_slot: bool, ins: u32, op: Opcode) {
+        let rs = ((ins >> 21) & 0x1F) as usize;
+        let rt = ((ins >> 16) & 0x1F) as usize;
+        let rd = ((ins >> 11) & 0x1F) as usize;
+        let shamt = (ins >> 6) & 0x1F;
+        let imm = (ins & 0xFFFF) as u16;
+        let imm_sext = imm.cast_signed();
+        let target = ins & 0x03FF_FFFF;
+
+        self.last_pc = pc;
+        self.last_in_delay_slot = in_delay_slot;
+
+        let load_delay_slot = if *self.pending_load_delay_gen {
+            *self.pending_load_delay_gen = false;
+            Some(self.load_delay_slot())
+        } else {
+            None
+        };
+        match op {
+            Opcode::Add => self.emit_alu_overflow_op(
+                rd,
+                rs,
+                rt,
+                None,
+                |b, x, y| b.ins().sadd_overflow(x, y),
+                load_delay_slot,
+            ),
+            Opcode::Addu => self.emit_alu_op(rd, rs, rt, None, None, |b, x, y| b.ins().iadd(x, y)),
+            Opcode::Sub => self.emit_alu_overflow_op(
+                rd,
+                rs,
+                rt,
+                None,
+                |b, x, y| b.ins().ssub_overflow(x, y),
+                load_delay_slot,
+            ),
+            Opcode::Subu => self.emit_alu_op(rd, rs, rt, None, None, |b, x, y| b.ins().isub(x, y)),
+            Opcode::And => self.emit_alu_op(rd, rs, rt, None, None, |b, x, y| b.ins().band(x, y)),
+            Opcode::Or => self.emit_alu_op(rd, rs, rt, None, None, |b, x, y| b.ins().bor(x, y)),
+            Opcode::Xor => self.emit_alu_op(rd, rs, rt, None, None, |b, x, y| b.ins().bxor(x, y)),
+            Opcode::Nor => self.emit_alu_op(rd, rs, rt, None, None, |b, x, y| {
+                let or = b.ins().bor(x, y);
+                b.ins().bnot(or)
+            }),
+            Opcode::Slt => self.emit_alu_op(rd, rs, rt, None, None, |b, x, y| {
                 let cond = b.ins().icmp(IntCC::SignedLessThan, x, y);
                 let one = b.ins().iconst(types::I32, 1);
                 let zero = b.ins().iconst(types::I32, 0);
                 b.ins().select(cond, one, zero)
-            },
-        ),
-        Opcode::Sltiu => emit_alu_op(
-            fn_ctx,
-            rd,
-            rs,
-            rt,
-            None,
-            Some(i64::from(imm_sext)),
-            |b, x, y| {
+            }),
+            Opcode::Sltu => self.emit_alu_op(rd, rs, rt, None, None, |b, x, y| {
                 let cond = b.ins().icmp(IntCC::UnsignedLessThan, x, y);
                 let one = b.ins().iconst(types::I32, 1);
                 let zero = b.ins().iconst(types::I32, 0);
                 b.ins().select(cond, one, zero)
-            },
-        ),
-        Opcode::Andi => emit_alu_op(fn_ctx, rd, rs, rt, None, Some(i64::from(imm)), |b, x, y| {
-            b.ins().band(x, y)
-        }),
-        Opcode::Ori => emit_alu_op(fn_ctx, rd, rs, rt, None, Some(i64::from(imm)), |b, x, y| {
-            b.ins().bor(x, y)
-        }),
-        Opcode::Xori => emit_alu_op(fn_ctx, rd, rs, rt, None, Some(i64::from(imm)), |b, x, y| {
-            b.ins().bxor(x, y)
-        }),
-        Opcode::Lui => {
-            if rt != 0 {
-                let val = fn_ctx
-                    .builder
-                    .ins()
-                    .iconst(types::I32, i64::from(imm) << 16);
-                store_reg(fn_ctx, Reg::General(rt), val);
+            }),
+            Opcode::Sll => self.emit_alu_op(rd, rs, rt, Some(i64::from(shamt)), None, |b, x, y| {
+                b.ins().ishl(x, y)
+            }),
+            Opcode::Srl => self.emit_alu_op(rd, rs, rt, Some(i64::from(shamt)), None, |b, x, y| {
+                b.ins().ushr(x, y)
+            }),
+            Opcode::Sra => self.emit_alu_op(rd, rs, rt, Some(i64::from(shamt)), None, |b, x, y| {
+                b.ins().sshr(x, y)
+            }),
+            Opcode::Sllv => self.emit_alu_op(rd, rs, rt, None, None, |b, x, y| {
+                let var = b.ins().band_imm(y, 0x1F);
+                b.ins().ishl(x, var)
+            }),
+            Opcode::Srlv => self.emit_alu_op(rd, rs, rt, None, None, |b, x, y| {
+                let var = b.ins().band_imm(y, 0x1F);
+                b.ins().ushr(x, var)
+            }),
+            Opcode::Srav => self.emit_alu_op(rd, rs, rt, None, None, |b, x, y| {
+                let var = b.ins().band_imm(y, 0x1F);
+                b.ins().sshr(x, var)
+            }),
+            Opcode::Addi => {
+                self.emit_alu_overflow_op(
+                    rd,
+                    rs,
+                    rt,
+                    Some(i64::from(imm_sext)),
+                    |b, x, y| b.ins().sadd_overflow(x, y),
+                    load_delay_slot,
+                );
             }
-        }
-        Opcode::Lw => {
-            let rs = load_reg(fn_ctx, Reg::General(rs));
-            let addr = fn_ctx.builder.ins().iadd_imm(rs, i64::from(imm_sext));
-            emit_load::<4, true, 0>(fn_ctx, rt, addr);
-        }
-        Opcode::Lh => {
-            let rs = load_reg(fn_ctx, Reg::General(rs));
-            let addr = fn_ctx.builder.ins().iadd_imm(rs, i64::from(imm_sext));
-            emit_load::<2, true, 0>(fn_ctx, rt, addr);
-        }
-        Opcode::Lhu => {
-            let rs = load_reg(fn_ctx, Reg::General(rs));
-            let addr = fn_ctx.builder.ins().iadd_imm(rs, i64::from(imm_sext));
-            emit_load::<2, false, 0>(fn_ctx, rt, addr);
-        }
-        Opcode::Lb => {
-            let rs = load_reg(fn_ctx, Reg::General(rs));
-            let addr = fn_ctx.builder.ins().iadd_imm(rs, i64::from(imm_sext));
-            emit_load::<1, true, 0>(fn_ctx, rt, addr);
-        }
-        Opcode::Lbu => {
-            let rs = load_reg(fn_ctx, Reg::General(rs));
-            let addr = fn_ctx.builder.ins().iadd_imm(rs, i64::from(imm_sext));
-            emit_load::<1, false, 0>(fn_ctx, rt, addr);
-        }
-        Opcode::Lwl => {
-            let rs = load_reg(fn_ctx, Reg::General(rs));
-            let addr = fn_ctx.builder.ins().iadd_imm(rs, i64::from(imm_sext));
-            emit_load::<4, false, 1>(fn_ctx, rt, addr);
-        }
-        Opcode::Lwr => {
-            let rs = load_reg(fn_ctx, Reg::General(rs));
-            let addr = fn_ctx.builder.ins().iadd_imm(rs, i64::from(imm_sext));
-            emit_load::<4, false, 2>(fn_ctx, rt, addr);
-        }
-        Opcode::Sw => {
-            let rs = load_reg(fn_ctx, Reg::General(rs));
-            let addr = fn_ctx.builder.ins().iadd_imm(rs, i64::from(imm_sext));
-            let val = load_reg(fn_ctx, Reg::General(rt));
-            emit_store::<4, 0>(fn_ctx, addr, val);
-        }
-        Opcode::Sh => {
-            let rs = load_reg(fn_ctx, Reg::General(rs));
-            let addr = fn_ctx.builder.ins().iadd_imm(rs, i64::from(imm_sext));
-            let val = load_reg(fn_ctx, Reg::General(rt));
-            emit_store::<2, 0>(fn_ctx, addr, val);
-        }
-        Opcode::Sb => {
-            let rs = load_reg(fn_ctx, Reg::General(rs));
-            let addr = fn_ctx.builder.ins().iadd_imm(rs, i64::from(imm_sext));
-            let val = load_reg(fn_ctx, Reg::General(rt));
-            emit_store::<1, 0>(fn_ctx, addr, val);
-        }
-        Opcode::Swl => {
-            let rs = load_reg(fn_ctx, Reg::General(rs));
-            let addr = fn_ctx.builder.ins().iadd_imm(rs, i64::from(imm_sext));
-            let val = load_reg(fn_ctx, Reg::General(rt));
-            emit_store::<4, 1>(fn_ctx, addr, val);
-        }
-        Opcode::Swr => {
-            let rs = load_reg(fn_ctx, Reg::General(rs));
-            let addr = fn_ctx.builder.ins().iadd_imm(rs, i64::from(imm_sext));
-            let val = load_reg(fn_ctx, Reg::General(rt));
-            emit_store::<4, 2>(fn_ctx, addr, val);
-        }
+            Opcode::Addiu => {
+                self.emit_alu_op(rd, rs, rt, None, Some(i64::from(imm_sext)), |b, x, y| {
+                    b.ins().iadd(x, y)
+                })
+            }
+            Opcode::Slti => {
+                self.emit_alu_op(rd, rs, rt, None, Some(i64::from(imm_sext)), |b, x, y| {
+                    let cond = b.ins().icmp(IntCC::SignedLessThan, x, y);
+                    let one = b.ins().iconst(types::I32, 1);
+                    let zero = b.ins().iconst(types::I32, 0);
+                    b.ins().select(cond, one, zero)
+                })
+            }
+            Opcode::Sltiu => {
+                self.emit_alu_op(rd, rs, rt, None, Some(i64::from(imm_sext)), |b, x, y| {
+                    let cond = b.ins().icmp(IntCC::UnsignedLessThan, x, y);
+                    let one = b.ins().iconst(types::I32, 1);
+                    let zero = b.ins().iconst(types::I32, 0);
+                    b.ins().select(cond, one, zero)
+                })
+            }
+            Opcode::Andi => self.emit_alu_op(rd, rs, rt, None, Some(i64::from(imm)), |b, x, y| {
+                b.ins().band(x, y)
+            }),
+            Opcode::Ori => self.emit_alu_op(rd, rs, rt, None, Some(i64::from(imm)), |b, x, y| {
+                b.ins().bor(x, y)
+            }),
+            Opcode::Xori => self.emit_alu_op(rd, rs, rt, None, Some(i64::from(imm)), |b, x, y| {
+                b.ins().bxor(x, y)
+            }),
+            Opcode::Lui => {
+                if rt != 0 {
+                    let val = self.builder.ins().iconst(types::I32, i64::from(imm) << 16);
+                    self.store_reg(Reg::General(rt), val);
+                }
+            }
+            Opcode::Lw => {
+                let rs = self.load_reg(Reg::General(rs));
+                let addr = self.builder.ins().iadd_imm(rs, i64::from(imm_sext));
+                self.emit_load(
+                    stubs::bus_load::<4, true> as *const u8,
+                    rt,
+                    addr,
+                    load_delay_slot,
+                );
+            }
+            Opcode::Lh => {
+                let rs = self.load_reg(Reg::General(rs));
+                let addr = self.builder.ins().iadd_imm(rs, i64::from(imm_sext));
+                self.emit_load(
+                    stubs::bus_load::<2, true> as *const u8,
+                    rt,
+                    addr,
+                    load_delay_slot,
+                );
+            }
+            Opcode::Lhu => {
+                let rs = self.load_reg(Reg::General(rs));
+                let addr = self.builder.ins().iadd_imm(rs, i64::from(imm_sext));
+                self.emit_load(
+                    stubs::bus_load::<2, false> as *const u8,
+                    rt,
+                    addr,
+                    load_delay_slot,
+                );
+            }
+            Opcode::Lb => {
+                let rs = self.load_reg(Reg::General(rs));
+                let addr = self.builder.ins().iadd_imm(rs, i64::from(imm_sext));
+                self.emit_load(
+                    stubs::bus_load::<1, true> as *const u8,
+                    rt,
+                    addr,
+                    load_delay_slot,
+                );
+            }
+            Opcode::Lbu => {
+                let rs = self.load_reg(Reg::General(rs));
+                let addr = self.builder.ins().iadd_imm(rs, i64::from(imm_sext));
+                self.emit_load(
+                    stubs::bus_load::<1, false> as *const u8,
+                    rt,
+                    addr,
+                    load_delay_slot,
+                );
+            }
+            Opcode::Lwl => {
+                let rs = self.load_reg(Reg::General(rs));
+                let addr = self.builder.ins().iadd_imm(rs, i64::from(imm_sext));
+                todo!()
+            }
+            Opcode::Lwr => {
+                let rs = self.load_reg(Reg::General(rs));
+                let addr = self.builder.ins().iadd_imm(rs, i64::from(imm_sext));
+                todo!()
+            }
+            Opcode::Sw => {
+                let rs = self.load_reg(Reg::General(rs));
+                let addr = self.builder.ins().iadd_imm(rs, i64::from(imm_sext));
+                let val = self.load_reg(Reg::General(rt));
+                self.emit_store(
+                    stubs::bus_store::<4> as *const u8,
+                    addr,
+                    val,
+                    load_delay_slot,
+                );
+            }
+            Opcode::Sh => {
+                let rs = self.load_reg(Reg::General(rs));
+                let addr = self.builder.ins().iadd_imm(rs, i64::from(imm_sext));
+                let val = self.load_reg(Reg::General(rt));
+                self.emit_store(
+                    stubs::bus_store::<2> as *const u8,
+                    addr,
+                    val,
+                    load_delay_slot,
+                );
+            }
+            Opcode::Sb => {
+                let rs = self.load_reg(Reg::General(rs));
+                let addr = self.builder.ins().iadd_imm(rs, i64::from(imm_sext));
+                let val = self.load_reg(Reg::General(rt));
+                self.emit_store(
+                    stubs::bus_store::<1> as *const u8,
+                    addr,
+                    val,
+                    load_delay_slot,
+                );
+            }
+            Opcode::Swl => {
+                let rs = self.load_reg(Reg::General(rs));
+                let addr = self.builder.ins().iadd_imm(rs, i64::from(imm_sext));
+                let val = self.load_reg(Reg::General(rt));
+                todo!()
+            }
+            Opcode::Swr => {
+                let rs = self.load_reg(Reg::General(rs));
+                let addr = self.builder.ins().iadd_imm(rs, i64::from(imm_sext));
+                let val = self.load_reg(Reg::General(rt));
+                todo!()
+            }
 
-        // TODO : Branches
-        // TODO : Jumps
-        // TODO : MulDiv
-        // TODO : Jumps w/ reg save
-        // TODO : Mfc/mtc0
-        _ => todo!(),
-    }
-}
-
-pub fn emit_trailer(fn_ctx: &mut FnCtx) {
-    emit_return(fn_ctx, Some(ExecutionResult::Success));
-}
-
-fn emit_alu_op(
-    fn_ctx: &mut FnCtx,
-    rd: usize,
-    rs: usize,
-    rt: usize,
-    shamt: Option<i64>,
-    imm: Option<i64>,
-    op: impl Fn(&mut FunctionBuilder, Value, Value) -> Value,
-) {
-    let (out_reg, res) = if let Some(shamt) = shamt {
-        if rd == 0 {
-            // Zero reg is not for writing, skip the whole op
-            return;
+            // TODO : Branches
+            // TODO : Jumps
+            // TODO : MulDiv
+            // TODO : Jumps w/ reg save
+            // TODO : Mfc/mtc0
+            _ => todo!(),
         }
-
-        let rt_val = load_reg(fn_ctx, Reg::General(rt));
-        let shamt_val = fn_ctx.builder.ins().iconst(types::I32, shamt);
-        (rd, op(fn_ctx.builder, rt_val, shamt_val))
-    } else if let Some(imm) = imm {
-        if rt == 0 {
-            // Same as above
-            return;
+        if let Some(load_delay_slot) = load_delay_slot {
+            self.commit_load_delay(load_delay_slot);
         }
-
-        let rs_val = load_reg(fn_ctx, Reg::General(rs));
-        let imm_val = fn_ctx.builder.ins().iconst(types::I32, imm);
-        (rt, op(fn_ctx.builder, rs_val, imm_val))
-    } else {
-        if rd == 0 {
-            // Same as above
-            return;
-        }
-
-        let rs_val = load_reg(fn_ctx, Reg::General(rs));
-        let rt_val = load_reg(fn_ctx, Reg::General(rt));
-        (rd, op(fn_ctx.builder, rs_val, rt_val))
-    };
-
-    store_reg(fn_ctx, Reg::General(out_reg), res);
-}
-
-fn emit_alu_overflow_op(
-    fn_ctx: &mut FnCtx,
-    rd: usize,
-    rs: usize,
-    rt: usize,
-    imm: Option<i64>,
-    op: impl Fn(&mut FunctionBuilder, Value, Value) -> (Value, Value),
-) {
-    let (out_reg, (res, of)) = if let Some(imm) = imm {
-        if rt == 0 {
-            // Same as above
-            return;
-        }
-
-        let rs_val = load_reg(fn_ctx, Reg::General(rs));
-        let imm_val = fn_ctx.builder.ins().iconst(types::I32, imm);
-        (rt, op(fn_ctx.builder, rs_val, imm_val))
-    } else {
-        if rd == 0 {
-            // Same as above
-            return;
-        }
-
-        let rs_val = load_reg(fn_ctx, Reg::General(rs));
-        let rt_val = load_reg(fn_ctx, Reg::General(rt));
-        (rd, op(fn_ctx.builder, rs_val, rt_val))
-    };
-
-    let ok = fn_ctx.builder.create_block();
-    let ov = fn_ctx.builder.create_block();
-
-    fn_ctx.builder.ins().brif(of, ov, &[], ok, &[]);
-
-    fn_ctx.builder.set_cold_block(ov);
-    fn_ctx.builder.switch_to_block(ov);
-    emit_return(fn_ctx, Some(ExecutionResult::Overflow));
-
-    fn_ctx.builder.switch_to_block(ok);
-    store_reg(fn_ctx, Reg::General(out_reg), res);
-}
-
-fn emit_load<const SIZE: usize, const SIGNED: bool, const DIRECTION: usize>(
-    fn_ctx: &mut FnCtx,
-    rt: usize,
-    addr: Value,
-) {
-    if rt == 0 {
-        return;
     }
 
-    let ptr_ty = fn_ctx.module.target_config().pointer_type();
-    let callee = fn_ctx
-        .module
-        .declare_func_in_func(fn_ctx.stubs.bus_load_name, fn_ctx.builder.func);
+    fn emit_alu_op(
+        &mut self,
+        rd: usize,
+        rs: usize,
+        rt: usize,
+        shamt: Option<i64>,
+        imm: Option<i64>,
+        op: impl Fn(&mut FunctionBuilder, Value, Value) -> Value,
+    ) {
+        let (out_reg, res) = if let Some(shamt) = shamt {
+            if rd == 0 {
+                // Zero reg is not for writing, skip the whole op
+                return;
+            }
 
-    let load_delay_reg = fn_ctx.builder.ins().iconst(
-        ptr_ty,
-        ptr::from_mut(&mut fn_ctx.load_delay.0).addr() as i64,
-    );
-    let load_delay_val = fn_ctx.builder.ins().iconst(
-        ptr_ty,
-        ptr::from_mut(&mut fn_ctx.load_delay.1).addr() as i64,
-    );
-    let dest = fn_ctx.builder.ins().iconst(types::I8, rt as i64);
-    let size = fn_ctx.builder.ins().iconst(types::I8, SIZE as i64);
-    let signed = fn_ctx.builder.ins().iconst(types::I8, SIGNED as i64);
-    let dir = fn_ctx.builder.ins().iconst(types::I8, DIRECTION as i64);
+            let rt_val = self.load_reg(Reg::General(rt));
+            let shamt_val = self.builder.ins().iconst(types::I32, shamt);
+            (rd, op(&mut self.builder, rt_val, shamt_val))
+        } else if let Some(imm) = imm {
+            if rt == 0 {
+                // Same as above
+                return;
+            }
 
-    let call = fn_ctx.builder.ins().call(
-        callee,
-        &[
-            fn_ctx.res_ptr,
-            fn_ctx.bus_ptr,
-            load_delay_reg,
-            load_delay_val,
-            dest,
-            addr,
-            size,
-            signed,
-            dir,
-        ],
-    );
-    let status = fn_ctx.builder.inst_results(call)[0]; // i8
+            let rs_val = self.load_reg(Reg::General(rs));
+            let imm_val = self.builder.ins().iconst(types::I32, imm);
+            (rt, op(&mut self.builder, rs_val, imm_val))
+        } else {
+            if rd == 0 {
+                // Same as above
+                return;
+            }
 
-    let zero = fn_ctx.builder.ins().iconst(types::I8, 0);
-    let failed = fn_ctx
-        .builder
-        .ins()
-        .icmp(IntCC::SignedLessThan, status, zero);
-    let ok = fn_ctx.builder.create_block();
-    let fail = fn_ctx.builder.create_block();
+            let rs_val = self.load_reg(Reg::General(rs));
+            let rt_val = self.load_reg(Reg::General(rt));
+            (rd, op(&mut self.builder, rs_val, rt_val))
+        };
 
-    fn_ctx.builder.ins().brif(failed, fail, &[], ok, &[]);
+        self.store_reg(Reg::General(out_reg), res);
+    }
 
-    fn_ctx.builder.set_cold_block(fail);
-    fn_ctx.builder.switch_to_block(fail);
-    emit_return(fn_ctx, None);
+    fn emit_alu_overflow_op(
+        &mut self,
+        rd: usize,
+        rs: usize,
+        rt: usize,
+        imm: Option<i64>,
+        op: impl Fn(&mut FunctionBuilder, Value, Value) -> (Value, Value),
+        load_delay_slot: Option<(Value, Value)>,
+    ) {
+        let (out_reg, (res, of)) = if let Some(imm) = imm {
+            if rt == 0 {
+                // Same as above
+                return;
+            }
 
-    fn_ctx.builder.switch_to_block(ok);
-}
+            let rs_val = self.load_reg(Reg::General(rs));
+            let imm_val = self.builder.ins().iconst(types::I32, imm);
+            (rt, op(&mut self.builder, rs_val, imm_val))
+        } else {
+            if rd == 0 {
+                // Same as above
+                return;
+            }
 
-fn emit_store<const SIZE: usize, const DIRECTION: usize>(
-    fn_ctx: &mut FnCtx,
-    addr: Value,
-    value: Value,
-) {
-    let callee = fn_ctx
-        .module
-        .declare_func_in_func(fn_ctx.stubs.bus_store_name, fn_ctx.builder.func);
+            let rs_val = self.load_reg(Reg::General(rs));
+            let rt_val = self.load_reg(Reg::General(rt));
+            (rd, op(&mut self.builder, rs_val, rt_val))
+        };
 
-    let size = fn_ctx.builder.ins().iconst(types::I8, SIZE as i64);
-    let dir = fn_ctx.builder.ins().iconst(types::I8, DIRECTION as i64);
-    let call = fn_ctx.builder.ins().call(
-        callee,
-        &[
-            fn_ctx.res_ptr,
-            fn_ctx.cpu_ptr,
-            fn_ctx.bus_ptr,
-            addr,
-            value,
-            size,
-            dir,
-        ],
-    );
-    let status = fn_ctx.builder.inst_results(call)[0]; // i8
+        let ok = self.builder.create_block();
+        let ov = self.builder.create_block();
 
-    let zero = fn_ctx.builder.ins().iconst(types::I8, 0);
-    let failed = fn_ctx
-        .builder
-        .ins()
-        .icmp(IntCC::SignedLessThan, status, zero);
-    let ok = fn_ctx.builder.create_block();
-    let fail = fn_ctx.builder.create_block();
+        self.builder.ins().brif(of, ov, &[], ok, &[]);
 
-    fn_ctx.builder.ins().brif(failed, fail, &[], ok, &[]);
+        self.builder.set_cold_block(ov);
+        self.builder.switch_to_block(ov);
+        self.emit_return(Some(ExecutionResult::Overflow), load_delay_slot);
 
-    fn_ctx.builder.set_cold_block(fail);
-    fn_ctx.builder.switch_to_block(fail);
-    emit_return(fn_ctx, None);
+        self.builder.switch_to_block(ok);
+        self.store_reg(Reg::General(out_reg), res);
+    }
 
-    fn_ctx.builder.switch_to_block(ok);
-}
+    fn emit_load(
+        &mut self,
+        fn_ptr: *const u8,
+        rt: usize,
+        addr: Value,
+        load_delay_slot: Option<(Value, Value)>,
+    ) {
+        if rt == 0 {
+            return;
+        }
 
-fn emit_return(fn_ctx: &mut FnCtx, result: Option<ExecutionResult>) {
-    if let Some(result) = result {
-        let result = fn_ctx.builder.ins().iconst(types::I32, result as i64);
-        fn_ctx.builder.ins().store(
+        let ptr_ty = self.module.target_config().pointer_type();
+
+        let fn_ptr = self
+            .builder
+            .ins()
+            .iconst(ptr_ty, fn_ptr.addr().cast_signed() as i64);
+        let load_delay_dest = {
+            let gv = self
+                .module
+                .declare_data_in_func(self.load_delay_dest, self.builder.func);
+            self.builder.ins().global_value(ptr_ty, gv)
+        };
+        let load_delay_val = {
+            let gv = self
+                .module
+                .declare_data_in_func(self.load_delay_val, self.builder.func);
+            self.builder.ins().global_value(ptr_ty, gv)
+        };
+        let dest = self
+            .builder
+            .ins()
+            .iconst(types::I8, rt.cast_signed() as i64);
+        let call = {
+            let mut sig = self.module.make_signature();
+            sig.params.push(AbiParam::new(ptr_ty));
+            sig.params.push(AbiParam::new(ptr_ty));
+            sig.params.push(AbiParam::new(ptr_ty));
+            sig.params.push(AbiParam::new(ptr_ty));
+            sig.params.push(AbiParam::new(ptr_ty));
+            sig.params.push(AbiParam::new(types::I8));
+            sig.params.push(AbiParam::new(types::I32));
+            sig.returns.push(AbiParam::new(types::I8));
+
+            let sigref = self.builder.import_signature(sig);
+            self.builder.ins().call_indirect(
+                sigref,
+                fn_ptr,
+                &[
+                    self.res_ptr,
+                    self.cpu_ptr,
+                    self.bus_ptr,
+                    load_delay_dest,
+                    load_delay_val,
+                    dest,
+                    addr,
+                ],
+            )
+        };
+        let result = self.builder.inst_results(call)[0];
+
+        let zero = self.builder.ins().iconst(types::I8, 0);
+        let failed = self.builder.ins().icmp(IntCC::SignedLessThan, result, zero);
+        let ok = self.builder.create_block();
+        let fail = self.builder.create_block();
+
+        self.builder.ins().brif(failed, fail, &[], ok, &[]);
+
+        self.builder.set_cold_block(fail);
+        self.builder.switch_to_block(fail);
+        self.emit_return(None, load_delay_slot);
+
+        self.builder.switch_to_block(ok);
+
+        // Block will be generated
+        *self.pending_load_delay_gen = true;
+    }
+
+    fn emit_store(
+        &mut self,
+        fn_ptr: *const u8,
+        addr: Value,
+        value: Value,
+        load_delay_slot: Option<(Value, Value)>,
+    ) {
+        let ptr_ty = self.module.target_config().pointer_type();
+
+        let fn_ptr = self
+            .builder
+            .ins()
+            .iconst(ptr_ty, fn_ptr.addr().cast_signed() as i64);
+
+        let call = {
+            let mut sig = self.module.make_signature();
+            sig.params.push(AbiParam::new(ptr_ty));
+            sig.params.push(AbiParam::new(ptr_ty));
+            sig.params.push(AbiParam::new(ptr_ty));
+            sig.params.push(AbiParam::new(types::I32));
+            sig.params.push(AbiParam::new(types::I32));
+            sig.returns.push(AbiParam::new(types::I8));
+
+            let sigref = self.builder.import_signature(sig);
+            self.builder.ins().call_indirect(
+                sigref,
+                fn_ptr,
+                &[self.res_ptr, self.cpu_ptr, self.bus_ptr, addr, value],
+            )
+        };
+        let status = self.builder.inst_results(call)[0];
+
+        let zero = self.builder.ins().iconst(types::I8, 0);
+        let failed = self.builder.ins().icmp(IntCC::SignedLessThan, status, zero);
+        let ok = self.builder.create_block();
+        let fail = self.builder.create_block();
+
+        self.builder.ins().brif(failed, fail, &[], ok, &[]);
+
+        self.builder.set_cold_block(fail);
+        self.builder.switch_to_block(fail);
+        self.emit_return(None, load_delay_slot);
+
+        self.builder.switch_to_block(ok);
+    }
+
+    fn emit_return(
+        &mut self,
+        result: Option<ExecutionResult>,
+        load_delay_slot: Option<(Value, Value)>,
+    ) {
+        if let Some(result) = result {
+            let result = self.builder.ins().iconst(types::I32, result as i64);
+            self.builder.ins().store(
+                MemFlags::new(),
+                result,
+                self.res_ptr,
+                offset_of!(FuncResult, result) as i32,
+            );
+        }
+
+        let pc = self
+            .builder
+            .ins()
+            .iconst(types::I32, i64::from(self.last_pc));
+        self.builder.ins().store(
             MemFlags::new(),
-            result,
-            fn_ctx.res_ptr,
-            offset_of!(FuncResult, result) as i32,
+            pc,
+            self.res_ptr,
+            offset_of!(FuncResult, last_pc) as i32,
         );
+
+        let in_delay_slot = self
+            .builder
+            .ins()
+            .iconst(types::I32, i64::from(self.last_in_delay_slot));
+        self.builder.ins().store(
+            MemFlags::new(),
+            in_delay_slot,
+            self.res_ptr,
+            offset_of!(FuncResult, last_in_delay_slot) as i32,
+        );
+
+        if let Some(load_delay_slot) = load_delay_slot {
+            self.commit_load_delay(load_delay_slot);
+        }
+
+        // Bye!
+        self.builder.ins().return_(&[]);
     }
 
-    let pc = fn_ctx
-        .builder
-        .ins()
-        .iconst(types::I32, i64::from(fn_ctx.last_pc));
-    fn_ctx.builder.ins().store(
-        MemFlags::new(),
-        pc,
-        fn_ctx.res_ptr,
-        offset_of!(FuncResult, last_pc) as i32,
-    );
+    fn commit_load_delay(&mut self, (load_delay_dest, load_delay_val): (Value, Value)) {
+        // In case load_mem fails, so we should ensure and skip write to zero reg
+        let zero = self.builder.ins().iconst(types::I8, 0);
+        let success = self
+            .builder
+            .ins()
+            .icmp(IntCC::NotEqual, load_delay_dest, zero);
 
-    let in_delay_slot = fn_ctx
-        .builder
-        .ins()
-        .iconst(types::I32, i64::from(fn_ctx.last_in_delay_slot));
-    fn_ctx.builder.ins().store(
-        MemFlags::new(),
-        in_delay_slot,
-        fn_ctx.res_ptr,
-        offset_of!(FuncResult, last_in_delay_slot) as i32,
-    );
+        let ok = self.builder.create_block();
+        let fail = self.builder.create_block();
+        let done = self.builder.create_block();
 
-    // Bye!
-    fn_ctx.builder.ins().return_(&[]);
-}
+        self.builder.ins().brif(success, ok, &[], fail, &[]);
 
-fn load_reg(fn_ctx: &mut FnCtx, reg: Reg) -> Value {
-    fn_ctx.builder.ins().load(
-        types::I32,
-        MemFlags::new(),
-        fn_ctx.cpu_ptr,
-        reg.byte_offset() as i32,
-    )
-}
+        self.builder.switch_to_block(ok);
+        let addr = {
+            let ptr_ty = self.module.target_config().pointer_type();
+            let offset1 = self
+                .builder
+                .ins()
+                .iconst(ptr_ty, offset_of!(Cpu, regs.general) as i64);
+            let offset2 = self.builder.ins().imul_imm(load_delay_dest, 4);
+            let offset2 = self.builder.ins().uextend(ptr_ty, offset2);
+            let offset = self.builder.ins().iadd(offset1, offset2);
 
-fn store_reg(fn_ctx: &mut FnCtx, reg: Reg, val: Value) {
-    fn_ctx.builder.ins().store(
-        MemFlags::new(),
-        val,
-        fn_ctx.cpu_ptr,
-        reg.byte_offset() as i32,
-    );
+            self.builder.ins().iadd(self.cpu_ptr, offset)
+        };
+        self.builder
+            .ins()
+            .store(MemFlags::new(), load_delay_val, addr, 0);
+        self.builder.ins().jump(done, &[]);
+
+        self.builder.switch_to_block(fail);
+        self.builder.ins().jump(done, &[]);
+
+        self.builder.switch_to_block(done);
+
+        if !*self.pending_load_delay_gen {
+            self.clear_delay_slot();
+        }
+    }
+
+    fn load_delay_slot(&mut self) -> (Value, Value) {
+        let ptr_ty = self.module.target_config().pointer_type();
+
+        let load_delay_dest = {
+            let gv = self
+                .module
+                .declare_data_in_func(self.load_delay_dest, self.builder.func);
+            let addr = self.builder.ins().global_value(ptr_ty, gv);
+            self.builder.ins().load(types::I8, MemFlags::new(), addr, 0)
+        };
+        let load_delay_val = {
+            let gv = self
+                .module
+                .declare_data_in_func(self.load_delay_val, self.builder.func);
+            let addr = self.builder.ins().global_value(ptr_ty, gv);
+            self.builder
+                .ins()
+                .load(types::I32, MemFlags::new(), addr, 0)
+        };
+
+        (load_delay_dest, load_delay_val)
+    }
+
+    fn clear_delay_slot(&mut self) {
+        let ptr_ty = self.module.target_config().pointer_type();
+
+        let load_delay_dest = {
+            let gv = self
+                .module
+                .declare_data_in_func(self.load_delay_dest, self.builder.func);
+            self.builder.ins().global_value(ptr_ty, gv)
+        };
+        let zero = self.builder.ins().iconst(types::I8, 0);
+        self.builder
+            .ins()
+            .store(MemFlags::new(), zero, load_delay_dest, 0);
+        // No need to clear value, as we don't write at all when dest=0
+    }
+
+    fn load_reg(&mut self, reg: Reg) -> Value {
+        self.builder.ins().load(
+            types::I32,
+            MemFlags::new(),
+            self.cpu_ptr,
+            reg.byte_offset() as i32,
+        )
+    }
+
+    fn store_reg(&mut self, reg: Reg, val: Value) {
+        self.builder
+            .ins()
+            .store(MemFlags::new(), val, self.cpu_ptr, reg.byte_offset() as i32);
+    }
 }
 
 #[derive(Copy, Clone)]
