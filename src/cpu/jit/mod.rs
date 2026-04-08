@@ -28,5 +28,9 @@ pub enum ExecutionResult {
     Overflow = 1,
     UnalignedLoad = 2,
     UnalignedStore = 3,
-    DataBus = 4,
+    ReservedInstruction = 4,
+    InstructionBus = 5,
+    DataBus = 6,
+    Syscall = 7,
+    Break = 8,
 }

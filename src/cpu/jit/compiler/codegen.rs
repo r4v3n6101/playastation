@@ -6,7 +6,7 @@ use cranelift::{
     prelude::{AbiParam, FunctionBuilder, InstBuilder, IntCC, MemFlags, Value, types},
 };
 
-use crate::cpu::{Cpu, ins::Opcode};
+use crate::cpu::{Cpu, Exception, ins::Opcode};
 
 use super::{
     super::{ExecutionResult, FuncResult},
@@ -78,7 +78,7 @@ impl<'a> FnCtx<'a> {
     }
 
     pub fn emit_trailer(&mut self) {
-        self.emit_return(Some(ExecutionResult::Success), None);
+        self.emit_return(Some(ExecutionResult::Success), None, None);
     }
 
     pub fn finalize(mut self) -> FuncId {
@@ -86,6 +86,37 @@ impl<'a> FnCtx<'a> {
         self.builder.finalize();
 
         self.name
+    }
+
+    pub fn emit_exception(&mut self, pc: u32, in_delay_slot: bool, exc: Exception) {
+        self.last_pc = pc;
+        self.last_in_delay_slot = in_delay_slot;
+
+        let load_delay_slot = if *self.pending_load_delay_gen {
+            *self.pending_load_delay_gen = false;
+            Some(self.load_delay_slot())
+        } else {
+            None
+        };
+
+        let (res, bad_vaddr) = match exc {
+            Exception::UnalignedLoad { bad_vaddr } => {
+                (ExecutionResult::UnalignedLoad, Some(bad_vaddr))
+            }
+            Exception::UnalignedStore { bad_vaddr } => {
+                (ExecutionResult::UnalignedStore, Some(bad_vaddr))
+            }
+            Exception::InstructionBus { bad_vaddr } => {
+                (ExecutionResult::InstructionBus, Some(bad_vaddr))
+            }
+            Exception::DataBus { bad_vaddr } => (ExecutionResult::DataBus, Some(bad_vaddr)),
+            Exception::Syscall => (ExecutionResult::Syscall, None),
+            Exception::Break => (ExecutionResult::Break, None),
+            Exception::ReservedInstruction => (ExecutionResult::ReservedInstruction, None),
+            // Other never parsed or handled from another place
+            _ => unreachable!(),
+        };
+        self.emit_return(Some(res), bad_vaddr, load_delay_slot);
     }
 
     pub fn emit_op(&mut self, pc: u32, in_delay_slot: bool, ins: u32, op: Opcode) {
@@ -319,9 +350,134 @@ impl<'a> FnCtx<'a> {
 
             // TODO : Branches
             // TODO : Jumps
-            // TODO : MulDiv
-            // TODO : Jumps w/ reg save
-            // TODO : Mfc/mtc0
+            Opcode::Mfhi => {
+                let hi = self.load_reg(Reg::Hi);
+                self.store_reg(Reg::General(rd), hi);
+            }
+            Opcode::Mflo => {
+                let lo = self.load_reg(Reg::Lo);
+                self.store_reg(Reg::General(rd), lo);
+            }
+            Opcode::Mthi => {
+                let rs = self.load_reg(Reg::General(rs));
+                self.store_reg(Reg::Hi, rs);
+            }
+            Opcode::Mtlo => {
+                let rs = self.load_reg(Reg::General(rs));
+                self.store_reg(Reg::Lo, rs);
+            }
+            Opcode::Mult => {
+                let rs = {
+                    let reg = self.load_reg(Reg::General(rs));
+                    self.builder.ins().sextend(types::I64, reg)
+                };
+                let rt = {
+                    let reg = self.load_reg(Reg::General(rt));
+                    self.builder.ins().sextend(types::I64, reg)
+                };
+                let hi = self.builder.ins().smulhi(rs, rt);
+                let lo = self.builder.ins().imul(rs, rt);
+
+                self.store_reg(Reg::Hi, hi);
+                self.store_reg(Reg::Lo, lo);
+            }
+            Opcode::Multu => {
+                let rs = self.load_reg(Reg::General(rs));
+                let rt = self.load_reg(Reg::General(rt));
+                let hi = self.builder.ins().smulhi(rs, rt);
+                let lo = self.builder.ins().imul(rs, rt);
+
+                self.store_reg(Reg::Hi, hi);
+                self.store_reg(Reg::Lo, lo);
+            }
+            Opcode::Div => {
+                let rs_val = self.load_reg(Reg::General(rs));
+                let rt_val = self.load_reg(Reg::General(rt));
+
+                let zero = self.builder.ins().iconst(types::I32, 0);
+                let minus_one = self.builder.ins().iconst(types::I32, -1);
+                let min_i32 = self
+                    .builder
+                    .ins()
+                    .iconst(types::I32, 0x8000_0000u64.cast_signed());
+
+                let div_by_zero = self.builder.ins().icmp(IntCC::Equal, rt_val, zero);
+                let is_min = self.builder.ins().icmp(IntCC::Equal, rs_val, min_i32);
+                let is_neg1 = self.builder.ins().icmp(IntCC::Equal, rt_val, minus_one);
+                let overflow = self.builder.ins().band(is_min, is_neg1);
+                let special = self.builder.ins().bor(div_by_zero, overflow);
+
+                let normal_block = self.builder.create_block();
+                let special_block = self.builder.create_block();
+                let done = self.builder.create_block();
+
+                self.builder
+                    .ins()
+                    .brif(special, special_block, &[], normal_block, &[]);
+
+                self.builder.switch_to_block(special_block);
+                self.store_reg(Reg::Hi, rs_val);
+                self.store_reg(Reg::Lo, rt_val);
+                self.builder.ins().jump(done, &[]);
+
+                self.builder.switch_to_block(normal_block);
+                let lo = self.builder.ins().sdiv(rs_val, rt_val);
+                let hi = self.builder.ins().srem(rs_val, rt_val);
+                self.store_reg(Reg::Lo, lo);
+                self.store_reg(Reg::Hi, hi);
+                self.builder.ins().jump(done, &[]);
+
+                self.builder.switch_to_block(done);
+            }
+            Opcode::Divu => {
+                let rs_val = self.load_reg(Reg::General(rs));
+                let rt_val = self.load_reg(Reg::General(rt));
+
+                let zero = self.builder.ins().iconst(types::I32, 0);
+                let div_by_zero = self.builder.ins().icmp(IntCC::Equal, rt_val, zero);
+
+                let normal_block = self.builder.create_block();
+                let special_block = self.builder.create_block();
+                let done = self.builder.create_block();
+
+                self.builder
+                    .ins()
+                    .brif(div_by_zero, special_block, &[], normal_block, &[]);
+
+                self.builder.switch_to_block(special_block);
+                self.store_reg(Reg::Hi, rs_val);
+                self.store_reg(Reg::Lo, rt_val);
+                self.builder.ins().jump(done, &[]);
+
+                self.builder.switch_to_block(normal_block);
+                let lo = self.builder.ins().udiv(rs_val, rt_val);
+                let hi = self.builder.ins().urem(rs_val, rt_val);
+                self.store_reg(Reg::Lo, lo);
+                self.store_reg(Reg::Hi, hi);
+                self.builder.ins().jump(done, &[]);
+
+                self.builder.switch_to_block(done);
+            }
+            Opcode::Mfc0 => {
+                let rd = self.load_reg(Reg::Cop0(rd));
+                let (load_delay_dest, load_delay_val) = self.load_delay_slot_addr();
+
+                let dest = self
+                    .builder
+                    .ins()
+                    .iconst(types::I8, rt.cast_signed() as i64);
+                self.builder
+                    .ins()
+                    .store(MemFlags::new(), dest, load_delay_dest, 0);
+                self.builder
+                    .ins()
+                    .store(MemFlags::new(), rd, load_delay_val, 0);
+                *self.pending_load_delay_gen = true;
+            }
+            Opcode::Mtc0 => {
+                let rt = self.load_reg(Reg::General(rt));
+                self.store_reg(Reg::Cop0(rd), rt);
+            }
             _ => todo!(),
         }
         if let Some(load_delay_slot) = load_delay_slot {
@@ -406,7 +562,7 @@ impl<'a> FnCtx<'a> {
 
         self.builder.set_cold_block(ov);
         self.builder.switch_to_block(ov);
-        self.emit_return(Some(ExecutionResult::Overflow), load_delay_slot);
+        self.emit_return(Some(ExecutionResult::Overflow), None, load_delay_slot);
 
         self.builder.switch_to_block(ok);
         self.store_reg(Reg::General(out_reg), res);
@@ -482,7 +638,7 @@ impl<'a> FnCtx<'a> {
 
         self.builder.set_cold_block(fail);
         self.builder.switch_to_block(fail);
-        self.emit_return(None, load_delay_slot);
+        self.emit_return(None, None, load_delay_slot);
 
         self.builder.switch_to_block(ok);
 
@@ -531,7 +687,7 @@ impl<'a> FnCtx<'a> {
 
         self.builder.set_cold_block(fail);
         self.builder.switch_to_block(fail);
-        self.emit_return(None, load_delay_slot);
+        self.emit_return(None, None, load_delay_slot);
 
         self.builder.switch_to_block(ok);
     }
@@ -539,15 +695,32 @@ impl<'a> FnCtx<'a> {
     fn emit_return(
         &mut self,
         result: Option<ExecutionResult>,
+        bad_vaddr: Option<u32>,
         load_delay_slot: Option<(Value, Value)>,
     ) {
         if let Some(result) = result {
-            let result = self.builder.ins().iconst(types::I32, result as i64);
+            let result = self
+                .builder
+                .ins()
+                .iconst(types::I32, i64::from((result as u32).cast_signed()));
             self.builder.ins().store(
                 MemFlags::new(),
                 result,
                 self.res_ptr,
-                offset_of!(FuncResult, result) as i32,
+                offset_of!(FuncResult, result).cast_signed() as i32,
+            );
+        }
+
+        if let Some(bad_vaddr) = bad_vaddr {
+            let bad_vaddr = self
+                .builder
+                .ins()
+                .iconst(types::I32, i64::from(bad_vaddr.cast_signed()));
+            self.builder.ins().store(
+                MemFlags::new(),
+                bad_vaddr,
+                self.res_ptr,
+                offset_of!(FuncResult, bad_vaddr).cast_signed() as i32,
             );
         }
 
@@ -559,7 +732,7 @@ impl<'a> FnCtx<'a> {
             MemFlags::new(),
             pc,
             self.res_ptr,
-            offset_of!(FuncResult, last_pc) as i32,
+            offset_of!(FuncResult, last_pc).cast_signed() as i32,
         );
 
         let in_delay_slot = self
@@ -570,7 +743,7 @@ impl<'a> FnCtx<'a> {
             MemFlags::new(),
             in_delay_slot,
             self.res_ptr,
-            offset_of!(FuncResult, last_in_delay_slot) as i32,
+            offset_of!(FuncResult, last_in_delay_slot).cast_signed() as i32,
         );
 
         if let Some(load_delay_slot) = load_delay_slot {
@@ -582,7 +755,9 @@ impl<'a> FnCtx<'a> {
     }
 
     fn commit_load_delay(&mut self, (load_delay_dest, load_delay_val): (Value, Value)) {
-        // In case load_mem fails, so we should ensure and skip write to zero reg
+        // In case load_mem fails, so we should skip write to zero reg
+        let ptr_ty = self.module.target_config().pointer_type();
+
         let zero = self.builder.ins().iconst(types::I8, 0);
         let success = self
             .builder
@@ -597,11 +772,10 @@ impl<'a> FnCtx<'a> {
 
         self.builder.switch_to_block(ok);
         let addr = {
-            let ptr_ty = self.module.target_config().pointer_type();
             let offset1 = self
                 .builder
                 .ins()
-                .iconst(ptr_ty, offset_of!(Cpu, regs.general) as i64);
+                .iconst(ptr_ty, offset_of!(Cpu, regs.general).cast_signed() as i64);
             let offset2 = self.builder.ins().imul_imm(load_delay_dest, 4);
             let offset2 = self.builder.ins().uextend(ptr_ty, offset2);
             let offset = self.builder.ins().iadd(offset1, offset2);
@@ -624,42 +798,45 @@ impl<'a> FnCtx<'a> {
     }
 
     fn load_delay_slot(&mut self) -> (Value, Value) {
-        let ptr_ty = self.module.target_config().pointer_type();
-
-        let load_delay_dest = {
-            let gv = self
-                .module
-                .declare_data_in_func(self.load_delay_dest, self.builder.func);
-            let addr = self.builder.ins().global_value(ptr_ty, gv);
-            self.builder.ins().load(types::I8, MemFlags::new(), addr, 0)
-        };
-        let load_delay_val = {
-            let gv = self
-                .module
-                .declare_data_in_func(self.load_delay_val, self.builder.func);
-            let addr = self.builder.ins().global_value(ptr_ty, gv);
+        let (load_delay_dest, load_delay_val) = self.load_delay_slot_addr();
+        let load_delay_dest =
             self.builder
                 .ins()
-                .load(types::I32, MemFlags::new(), addr, 0)
-        };
+                .load(types::I8, MemFlags::new(), load_delay_dest, 0);
+        let load_delay_val =
+            self.builder
+                .ins()
+                .load(types::I32, MemFlags::new(), load_delay_val, 0);
 
         (load_delay_dest, load_delay_val)
     }
 
     fn clear_delay_slot(&mut self) {
-        let ptr_ty = self.module.target_config().pointer_type();
+        let (load_delay_dest, _) = self.load_delay_slot_addr();
+        let zero = self.builder.ins().iconst(types::I8, 0);
+        self.builder
+            .ins()
+            .store(MemFlags::new(), zero, load_delay_dest, 0);
 
+        // No need to clear value, as we don't write at all when dest=0
+    }
+
+    fn load_delay_slot_addr(&mut self) -> (Value, Value) {
+        let ptr_ty = self.module.target_config().pointer_type();
         let load_delay_dest = {
             let gv = self
                 .module
                 .declare_data_in_func(self.load_delay_dest, self.builder.func);
             self.builder.ins().global_value(ptr_ty, gv)
         };
-        let zero = self.builder.ins().iconst(types::I8, 0);
-        self.builder
-            .ins()
-            .store(MemFlags::new(), zero, load_delay_dest, 0);
-        // No need to clear value, as we don't write at all when dest=0
+        let load_delay_val = {
+            let gv = self
+                .module
+                .declare_data_in_func(self.load_delay_val, self.builder.func);
+            self.builder.ins().global_value(ptr_ty, gv)
+        };
+
+        (load_delay_dest, load_delay_val)
     }
 
     fn load_reg(&mut self, reg: Reg) -> Value {
@@ -667,14 +844,17 @@ impl<'a> FnCtx<'a> {
             types::I32,
             MemFlags::new(),
             self.cpu_ptr,
-            reg.byte_offset() as i32,
+            reg.byte_offset().cast_signed() as i32,
         )
     }
 
     fn store_reg(&mut self, reg: Reg, val: Value) {
-        self.builder
-            .ins()
-            .store(MemFlags::new(), val, self.cpu_ptr, reg.byte_offset() as i32);
+        self.builder.ins().store(
+            MemFlags::new(),
+            val,
+            self.cpu_ptr,
+            reg.byte_offset().cast_signed() as i32,
+        );
     }
 }
 

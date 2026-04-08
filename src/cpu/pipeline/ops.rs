@@ -294,6 +294,16 @@ pub fn execute(ins: u32, op: Opcode, regs: &Registers) -> ExecRes {
             link: true,
             link_reg: 31,
         },
+        Opcode::Jr => ExecRes::Jump {
+            addr: regs.general[rs],
+            link: false,
+            link_reg: 31,
+        },
+        Opcode::Jalr => ExecRes::Jump {
+            addr: regs.general[rs],
+            link: true,
+            link_reg: rd,
+        },
         Opcode::Mfhi => ExecRes::Alu {
             dest: rd,
             res: Some(regs.hi),
@@ -301,6 +311,14 @@ pub fn execute(ins: u32, op: Opcode, regs: &Registers) -> ExecRes {
         Opcode::Mflo => ExecRes::Alu {
             dest: rd,
             res: Some(regs.lo),
+        },
+        Opcode::Mthi => ExecRes::MulDiv {
+            hi: regs.general[rs],
+            lo: regs.lo,
+        },
+        Opcode::Mtlo => ExecRes::MulDiv {
+            hi: regs.hi,
+            lo: regs.general[rs],
         },
         Opcode::Mult => {
             let a = i64::from(regs.general[rs].cast_signed());
@@ -337,24 +355,6 @@ pub fn execute(ins: u32, op: Opcode, regs: &Registers) -> ExecRes {
             let (hi, lo) = if b == 0 { (a, b) } else { (a % b, a / b) };
             ExecRes::MulDiv { hi, lo }
         }
-        Opcode::Mtlo => ExecRes::MulDiv {
-            hi: regs.hi,
-            lo: regs.general[rs],
-        },
-        Opcode::Mthi => ExecRes::MulDiv {
-            hi: regs.general[rs],
-            lo: regs.lo,
-        },
-        Opcode::Jr => ExecRes::Jump {
-            addr: regs.general[rs],
-            link: false,
-            link_reg: 31,
-        },
-        Opcode::Jalr => ExecRes::Jump {
-            addr: regs.general[rs],
-            link: true,
-            link_reg: rd,
-        },
         Opcode::Mfc0 => ExecRes::Mfc0 { dest: rt, from: rd },
         Opcode::Mtc0 => ExecRes::Mtc0 {
             dest: rd,

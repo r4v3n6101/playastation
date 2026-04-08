@@ -76,8 +76,12 @@ impl ModCtx {
                 } => {
                     fn_ctx.emit_op(pc, in_delay_slot, ins, op);
                 }
-                DecRes::Exception { .. } => {
-                    // TODO
+                DecRes::Exception {
+                    pc,
+                    in_delay_slot,
+                    exc,
+                } => {
+                    fn_ctx.emit_exception(pc, in_delay_slot, exc);
                 }
             });
 
@@ -264,6 +268,90 @@ mod tests {
         assert_eq!(cpu.regs.general[10], 0x2408_0020); // t2
         assert_eq!(cpu.regs.general[11], 0x0000_0040); // t3
         assert_eq!(cpu.regs.general[12], 0x2408_0020); // t4
+
+        assert_eq!(
+            res,
+            FuncResult {
+                result: ExecutionResult::Success,
+                last_pc: 0x0000_0010,
+                last_in_delay_slot: 0,
+                bad_vaddr: 0
+            }
+        );
+    }
+
+    #[test]
+    fn moves_values_through_hi_lo_and_executes_mult_and_div() {
+        let mut ctx = ModCtx::default();
+        let mut cpu = Cpu::default();
+        let mut bus = Bus::default();
+
+        let res = compile_and_run(
+            &mut ctx,
+            0,
+            &[
+                (0x0000_0000, 0x2408_0006), // addiu t0, zero, 6
+                (0x0000_0004, 0x2409_0003), // addiu t1, zero, 3
+                (0x0000_0008, 0x0100_0011), // mthi  t0
+                (0x0000_000C, 0x0120_0013), // mtlo  t1
+                (0x0000_0010, 0x0000_8010), // mfhi  s0
+                (0x0000_0014, 0x0000_8812), // mflo  s1
+                (0x0000_0018, 0x0109_0018), // mult  t0, t1
+                (0x0000_001C, 0x0000_9010), // mfhi  s2
+                (0x0000_0020, 0x0000_9812), // mflo  s3
+                (0x0000_0024, 0x2408_FFF9), // addiu t0, zero, -7
+                (0x0000_0028, 0x0109_001A), // div   t0, t1
+                (0x0000_002C, 0x0000_A010), // mfhi  s4
+                (0x0000_0030, 0x0000_A812), // mflo  s5
+            ],
+            &mut cpu,
+            &mut bus,
+        );
+
+        assert_eq!(cpu.regs.hi, 0xFFFF_FFFF);
+        assert_eq!(cpu.regs.lo, 0xFFFF_FFFE);
+        assert_eq!(cpu.regs.general[16], 6);
+        assert_eq!(cpu.regs.general[17], 3);
+        assert_eq!(cpu.regs.general[18], 0);
+        assert_eq!(cpu.regs.general[19], 18);
+        assert_eq!(cpu.regs.general[20], 0xFFFF_FFFF);
+        assert_eq!(cpu.regs.general[21], 0xFFFF_FFFE);
+
+        assert_eq!(
+            res,
+            FuncResult {
+                result: ExecutionResult::Success,
+                last_pc: 0x0000_0030,
+                last_in_delay_slot: 0,
+                bad_vaddr: 0
+            }
+        );
+    }
+
+    #[test]
+    fn moves_values_between_gpr_and_cop0_with_load_delay() {
+        let mut ctx = ModCtx::default();
+        let mut cpu = Cpu::default();
+        let mut bus = Bus::default();
+
+        let res = compile_and_run(
+            &mut ctx,
+            0,
+            &[
+                (0x0000_0000, 0x2408_1234), // addiu t0, zero, 0x1234
+                (0x0000_0004, 0x4088_7800), // mtc0  t0, $15
+                (0x0000_0008, 0x4009_7800), // mfc0  t1, $15
+                (0x0000_000C, 0x0120_5021), // addu  t2, t1, zero
+                (0x0000_0010, 0x0120_5821), // addu  t3, t1, zero
+            ],
+            &mut cpu,
+            &mut bus,
+        );
+
+        assert_eq!(cpu.cop0.regs[15], 0x0000_1234);
+        assert_eq!(cpu.regs.general[9], 0x0000_1234);
+        assert_eq!(cpu.regs.general[10], 0);
+        assert_eq!(cpu.regs.general[11], 0x0000_1234);
 
         assert_eq!(
             res,
