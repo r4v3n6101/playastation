@@ -13,6 +13,8 @@ use super::{
     ModCtx, stubs,
 };
 
+const DEFAULT_LINK_REG: usize = 31;
+
 pub struct FnCtx<'module> {
     module: &'module JITModule,
     /// If val is true then the commit of load-delay slot will be generated
@@ -78,7 +80,7 @@ impl<'a> FnCtx<'a> {
     }
 
     pub fn emit_trailer(&mut self) {
-        self.emit_return(Some(ExecutionResult::Success), None, None);
+        self.emit_return(None, None, None);
     }
 
     pub fn finalize(mut self) -> FuncId {
@@ -127,6 +129,11 @@ impl<'a> FnCtx<'a> {
         let imm = (ins & 0xFFFF) as u16;
         let imm_sext = imm.cast_signed();
         let target = ins & 0x03FF_FFFF;
+        // Complete address
+        let jump_target = (pc.wrapping_add(4) & 0xF000_0000) | (target << 2);
+        let branch_target = pc
+            .wrapping_add(4)
+            .wrapping_add_signed(i32::from(imm_sext) << 2);
 
         self.last_pc = pc;
         self.last_in_delay_slot = in_delay_slot;
@@ -348,8 +355,54 @@ impl<'a> FnCtx<'a> {
                 todo!()
             }
 
-            // TODO : Branches
-            // TODO : Jumps
+            Opcode::Beq => {
+                self.emit_branch(branch_target, false, IntCC::Equal, rs, rt);
+            }
+            Opcode::Bne => {
+                self.emit_branch(branch_target, false, IntCC::NotEqual, rs, rt);
+            }
+            Opcode::Bltz => {
+                self.emit_branch(branch_target, false, IntCC::SignedLessThan, rs, 0);
+            }
+            Opcode::Blez => {
+                self.emit_branch(branch_target, false, IntCC::SignedLessThanOrEqual, rs, 0);
+            }
+            Opcode::Bgtz => {
+                self.emit_branch(branch_target, false, IntCC::SignedGreaterThan, rs, 0);
+            }
+            Opcode::Bgez => {
+                self.emit_branch(branch_target, false, IntCC::SignedGreaterThanOrEqual, rs, 0);
+            }
+            Opcode::Bltzal => {
+                self.emit_branch(branch_target, true, IntCC::SignedLessThan, rs, 0);
+            }
+            Opcode::Bgezal => {
+                self.emit_branch(branch_target, true, IntCC::SignedGreaterThanOrEqual, rs, 0);
+            }
+
+            Opcode::J => {
+                let target = self
+                    .builder
+                    .ins()
+                    .iconst(types::I32, i64::from(jump_target.cast_signed()));
+                self.emit_jump(target, None);
+            }
+            Opcode::Jal => {
+                let target = self
+                    .builder
+                    .ins()
+                    .iconst(types::I32, i64::from(jump_target.cast_signed()));
+                self.emit_jump(target, Some(DEFAULT_LINK_REG));
+            }
+            Opcode::Jr => {
+                let target = self.load_reg(Reg::General(rs));
+                self.emit_jump(target, None);
+            }
+            Opcode::Jalr => {
+                let target = self.load_reg(Reg::General(rs));
+                self.emit_jump(target, Some(rd));
+            }
+
             Opcode::Mfhi => {
                 let hi = self.load_reg(Reg::Hi);
                 self.store_reg(Reg::General(rd), hi);
@@ -394,16 +447,12 @@ impl<'a> FnCtx<'a> {
                 let rs_val = self.load_reg(Reg::General(rs));
                 let rt_val = self.load_reg(Reg::General(rt));
 
-                let zero = self.builder.ins().iconst(types::I32, 0);
-                let minus_one = self.builder.ins().iconst(types::I32, -1);
-                let min_i32 = self
-                    .builder
-                    .ins()
-                    .iconst(types::I32, 0x8000_0000u64.cast_signed());
-
-                let div_by_zero = self.builder.ins().icmp(IntCC::Equal, rt_val, zero);
-                let is_min = self.builder.ins().icmp(IntCC::Equal, rs_val, min_i32);
-                let is_neg1 = self.builder.ins().icmp(IntCC::Equal, rt_val, minus_one);
+                let div_by_zero = self.builder.ins().icmp_imm(IntCC::Equal, rt_val, 0);
+                let is_min =
+                    self.builder
+                        .ins()
+                        .icmp_imm(IntCC::Equal, rs_val, 0x8000_0000u64.cast_signed());
+                let is_neg1 = self.builder.ins().icmp_imm(IntCC::Equal, rt_val, -1);
                 let overflow = self.builder.ins().band(is_min, is_neg1);
                 let special = self.builder.ins().bor(div_by_zero, overflow);
 
@@ -414,27 +463,27 @@ impl<'a> FnCtx<'a> {
                 self.builder
                     .ins()
                     .brif(special, special_block, &[], normal_block, &[]);
-
-                self.builder.switch_to_block(special_block);
-                self.store_reg(Reg::Hi, rs_val);
-                self.store_reg(Reg::Lo, rt_val);
-                self.builder.ins().jump(done, &[]);
-
-                self.builder.switch_to_block(normal_block);
-                let lo = self.builder.ins().sdiv(rs_val, rt_val);
-                let hi = self.builder.ins().srem(rs_val, rt_val);
-                self.store_reg(Reg::Lo, lo);
-                self.store_reg(Reg::Hi, hi);
-                self.builder.ins().jump(done, &[]);
-
+                {
+                    self.builder.switch_to_block(special_block);
+                    self.store_reg(Reg::Hi, rs_val);
+                    self.store_reg(Reg::Lo, rt_val);
+                    self.builder.ins().jump(done, &[]);
+                }
+                {
+                    self.builder.switch_to_block(normal_block);
+                    let lo = self.builder.ins().sdiv(rs_val, rt_val);
+                    let hi = self.builder.ins().srem(rs_val, rt_val);
+                    self.store_reg(Reg::Lo, lo);
+                    self.store_reg(Reg::Hi, hi);
+                    self.builder.ins().jump(done, &[]);
+                }
                 self.builder.switch_to_block(done);
             }
             Opcode::Divu => {
                 let rs_val = self.load_reg(Reg::General(rs));
                 let rt_val = self.load_reg(Reg::General(rt));
 
-                let zero = self.builder.ins().iconst(types::I32, 0);
-                let div_by_zero = self.builder.ins().icmp(IntCC::Equal, rt_val, zero);
+                let div_by_zero = self.builder.ins().icmp_imm(IntCC::Equal, rt_val, 0);
 
                 let normal_block = self.builder.create_block();
                 let special_block = self.builder.create_block();
@@ -443,19 +492,20 @@ impl<'a> FnCtx<'a> {
                 self.builder
                     .ins()
                     .brif(div_by_zero, special_block, &[], normal_block, &[]);
-
-                self.builder.switch_to_block(special_block);
-                self.store_reg(Reg::Hi, rs_val);
-                self.store_reg(Reg::Lo, rt_val);
-                self.builder.ins().jump(done, &[]);
-
-                self.builder.switch_to_block(normal_block);
-                let lo = self.builder.ins().udiv(rs_val, rt_val);
-                let hi = self.builder.ins().urem(rs_val, rt_val);
-                self.store_reg(Reg::Lo, lo);
-                self.store_reg(Reg::Hi, hi);
-                self.builder.ins().jump(done, &[]);
-
+                {
+                    self.builder.switch_to_block(special_block);
+                    self.store_reg(Reg::Hi, rs_val);
+                    self.store_reg(Reg::Lo, rt_val);
+                    self.builder.ins().jump(done, &[]);
+                }
+                {
+                    self.builder.switch_to_block(normal_block);
+                    let lo = self.builder.ins().udiv(rs_val, rt_val);
+                    let hi = self.builder.ins().urem(rs_val, rt_val);
+                    self.store_reg(Reg::Lo, lo);
+                    self.store_reg(Reg::Hi, hi);
+                    self.builder.ins().jump(done, &[]);
+                }
                 self.builder.switch_to_block(done);
             }
             Opcode::Mfc0 => {
@@ -559,13 +609,15 @@ impl<'a> FnCtx<'a> {
         let ov = self.builder.create_block();
 
         self.builder.ins().brif(of, ov, &[], ok, &[]);
-
-        self.builder.set_cold_block(ov);
-        self.builder.switch_to_block(ov);
-        self.emit_return(Some(ExecutionResult::Overflow), None, load_delay_slot);
-
-        self.builder.switch_to_block(ok);
-        self.store_reg(Reg::General(out_reg), res);
+        {
+            self.builder.set_cold_block(ov);
+            self.builder.switch_to_block(ov);
+            self.emit_return(Some(ExecutionResult::Overflow), None, load_delay_slot);
+        }
+        {
+            self.builder.switch_to_block(ok);
+            self.store_reg(Reg::General(out_reg), res);
+        }
     }
 
     fn emit_load(
@@ -629,20 +681,23 @@ impl<'a> FnCtx<'a> {
         };
         let result = self.builder.inst_results(call)[0];
 
-        let zero = self.builder.ins().iconst(types::I8, 0);
-        let failed = self.builder.ins().icmp(IntCC::SignedLessThan, result, zero);
+        let failed = self
+            .builder
+            .ins()
+            .icmp_imm(IntCC::SignedLessThan, result, 0);
         let ok = self.builder.create_block();
         let fail = self.builder.create_block();
 
         self.builder.ins().brif(failed, fail, &[], ok, &[]);
-
-        self.builder.set_cold_block(fail);
-        self.builder.switch_to_block(fail);
-        self.emit_return(None, None, load_delay_slot);
-
-        self.builder.switch_to_block(ok);
-
-        // Block will be generated
+        {
+            self.builder.set_cold_block(fail);
+            self.builder.switch_to_block(fail);
+            self.emit_return(None, None, load_delay_slot);
+        }
+        {
+            self.builder.switch_to_block(ok);
+        }
+        // Store load-delayed slot into regs will be generated
         *self.pending_load_delay_gen = true;
     }
 
@@ -678,37 +733,100 @@ impl<'a> FnCtx<'a> {
         };
         let status = self.builder.inst_results(call)[0];
 
-        let zero = self.builder.ins().iconst(types::I8, 0);
-        let failed = self.builder.ins().icmp(IntCC::SignedLessThan, status, zero);
+        let failed = self
+            .builder
+            .ins()
+            .icmp_imm(IntCC::SignedLessThan, status, 0);
         let ok = self.builder.create_block();
         let fail = self.builder.create_block();
 
         self.builder.ins().brif(failed, fail, &[], ok, &[]);
+        {
+            self.builder.set_cold_block(fail);
+            self.builder.switch_to_block(fail);
+            self.emit_return(None, None, load_delay_slot);
+        }
+        {
+            self.builder.switch_to_block(ok);
+        }
+    }
 
-        self.builder.set_cold_block(fail);
-        self.builder.switch_to_block(fail);
-        self.emit_return(None, None, load_delay_slot);
+    fn emit_branch(&mut self, target: u32, link: bool, mode: IntCC, rs: usize, rt: usize) {
+        if link {
+            let link_addr = self.builder.ins().iconst(
+                types::I32,
+                i64::from(self.last_pc.wrapping_add(8).cast_signed()),
+            );
+            self.store_reg(Reg::General(DEFAULT_LINK_REG), link_addr);
+        }
 
-        self.builder.switch_to_block(ok);
+        let rs = self.load_reg(Reg::General(rs));
+        let cmp = if rt != 0 {
+            let rt = self.load_reg(Reg::General(rt));
+            self.builder.ins().icmp(mode, rs, rt)
+        } else {
+            self.builder.ins().icmp_imm(mode, rs, 0)
+        };
+
+        let ok = self.builder.create_block();
+        let fail = self.builder.create_block();
+        let done = self.builder.create_block();
+
+        self.builder.ins().brif(cmp, ok, &[], fail, &[]);
+        {
+            self.builder.switch_to_block(ok);
+            let target = self
+                .builder
+                .ins()
+                .iconst(types::I32, i64::from(target.cast_signed()));
+            // We unconditionally saved reg
+            self.emit_jump(target, None);
+            self.builder.ins().jump(done, &[]);
+        }
+        {
+            self.builder.switch_to_block(fail);
+            self.builder.ins().jump(done, &[]);
+        }
+        self.builder.switch_to_block(done);
+    }
+
+    fn emit_jump(&mut self, target: Value, link_reg: Option<usize>) {
+        if let Some(link_reg) = link_reg
+            && link_reg != 0
+        {
+            let link_addr = self.builder.ins().iconst(
+                types::I32,
+                i64::from(self.last_pc.wrapping_add(8).cast_signed()),
+            );
+            self.store_reg(Reg::General(link_reg), link_addr);
+        }
+
+        self.builder.ins().store(
+            MemFlags::new(),
+            target,
+            self.res_ptr,
+            offset_of!(FuncResult, jump_addr).cast_signed() as i32,
+        );
+        let result = self.builder.ins().iconst(
+            types::I32,
+            i64::from((ExecutionResult::Jump as u32).cast_signed()),
+        );
+        self.builder.ins().store(
+            MemFlags::new(),
+            result,
+            self.res_ptr,
+            offset_of!(FuncResult, result).cast_signed() as i32,
+        );
     }
 
     fn emit_return(
         &mut self,
-        result: Option<ExecutionResult>,
+        err: Option<ExecutionResult>,
         bad_vaddr: Option<u32>,
         load_delay_slot: Option<(Value, Value)>,
     ) {
-        if let Some(result) = result {
-            let result = self
-                .builder
-                .ins()
-                .iconst(types::I32, i64::from((result as u32).cast_signed()));
-            self.builder.ins().store(
-                MemFlags::new(),
-                result,
-                self.res_ptr,
-                offset_of!(FuncResult, result).cast_signed() as i32,
-            );
+        if let Some(load_delay_slot) = load_delay_slot {
+            self.commit_load_delay(load_delay_slot);
         }
 
         if let Some(bad_vaddr) = bad_vaddr {
@@ -746,8 +864,18 @@ impl<'a> FnCtx<'a> {
             offset_of!(FuncResult, last_in_delay_slot).cast_signed() as i32,
         );
 
-        if let Some(load_delay_slot) = load_delay_slot {
-            self.commit_load_delay(load_delay_slot);
+        // Force error set
+        if let Some(err) = err {
+            let result = self
+                .builder
+                .ins()
+                .iconst(types::I32, (err as u64).cast_signed());
+            self.builder.ins().store(
+                MemFlags::new(),
+                result,
+                self.res_ptr,
+                offset_of!(FuncResult, result).cast_signed() as i32,
+            );
         }
 
         // Bye!
@@ -758,38 +886,38 @@ impl<'a> FnCtx<'a> {
         // In case load_mem fails, so we should skip write to zero reg
         let ptr_ty = self.module.target_config().pointer_type();
 
-        let zero = self.builder.ins().iconst(types::I8, 0);
         let success = self
             .builder
             .ins()
-            .icmp(IntCC::NotEqual, load_delay_dest, zero);
+            .icmp_imm(IntCC::NotEqual, load_delay_dest, 0);
 
         let ok = self.builder.create_block();
         let fail = self.builder.create_block();
         let done = self.builder.create_block();
 
         self.builder.ins().brif(success, ok, &[], fail, &[]);
+        {
+            self.builder.switch_to_block(ok);
+            let addr = {
+                let offset1 = self
+                    .builder
+                    .ins()
+                    .iconst(ptr_ty, offset_of!(Cpu, regs.general).cast_signed() as i64);
+                let offset2 = self.builder.ins().imul_imm(load_delay_dest, 4);
+                let offset2 = self.builder.ins().uextend(ptr_ty, offset2);
+                let offset = self.builder.ins().iadd(offset1, offset2);
 
-        self.builder.switch_to_block(ok);
-        let addr = {
-            let offset1 = self
-                .builder
+                self.builder.ins().iadd(self.cpu_ptr, offset)
+            };
+            self.builder
                 .ins()
-                .iconst(ptr_ty, offset_of!(Cpu, regs.general).cast_signed() as i64);
-            let offset2 = self.builder.ins().imul_imm(load_delay_dest, 4);
-            let offset2 = self.builder.ins().uextend(ptr_ty, offset2);
-            let offset = self.builder.ins().iadd(offset1, offset2);
-
-            self.builder.ins().iadd(self.cpu_ptr, offset)
-        };
-        self.builder
-            .ins()
-            .store(MemFlags::new(), load_delay_val, addr, 0);
-        self.builder.ins().jump(done, &[]);
-
-        self.builder.switch_to_block(fail);
-        self.builder.ins().jump(done, &[]);
-
+                .store(MemFlags::new(), load_delay_val, addr, 0);
+            self.builder.ins().jump(done, &[]);
+        }
+        {
+            self.builder.switch_to_block(fail);
+            self.builder.ins().jump(done, &[]);
+        }
         self.builder.switch_to_block(done);
 
         if !*self.pending_load_delay_gen {
@@ -860,7 +988,6 @@ impl<'a> FnCtx<'a> {
 
 #[derive(Copy, Clone)]
 enum Reg {
-    Pc,
     Hi,
     Lo,
     General(usize),
@@ -870,7 +997,6 @@ enum Reg {
 impl Reg {
     fn byte_offset(self) -> usize {
         match self {
-            Self::Pc => offset_of!(Cpu, regs.pc),
             Self::Hi => offset_of!(Cpu, regs.hi),
             Self::Lo => offset_of!(Cpu, regs.lo),
             Self::General(idx) => offset_of!(Cpu, regs.general) + 4 * idx,

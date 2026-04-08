@@ -16,8 +16,12 @@ pub struct FuncResult {
     last_pc: u32,
     /// Flag (0=false, 1=true) whether last executed instruction is in delay slot.
     last_in_delay_slot: u32,
-    /// Filled in case of invalid memory ops (unaligned load/store, unmapped)
+
+    // Ideally this should be inside [`ExecutionResult`]
+    /// Filled in case of invalid memory ops (unaligned load/store, unmapped).
     bad_vaddr: u32,
+    /// PC being jumped to.
+    jump_addr: u32,
 }
 
 #[repr(u32)]
@@ -25,12 +29,13 @@ pub struct FuncResult {
 pub enum ExecutionResult {
     #[default]
     Success = 0,
-    Overflow = 1,
-    UnalignedLoad = 2,
-    UnalignedStore = 3,
-    ReservedInstruction = 4,
-    InstructionBus = 5,
-    DataBus = 6,
-    Syscall = 7,
-    Break = 8,
+    Jump = 1,
+    Overflow = 2,
+    UnalignedLoad = 3,
+    UnalignedStore = 4,
+    ReservedInstruction = 5,
+    InstructionBus = 6,
+    DataBus = 7,
+    Syscall = 8,
+    Break = 9,
 }

@@ -254,6 +254,11 @@ pub fn execute(ins: u32, op: Opcode, regs: &Registers) -> ExecRes {
                 .then_some((regs.pc - 4).wrapping_add((imm_sext << 2) as u32)),
             link: false,
         },
+        Opcode::Bltz => ExecRes::Branch {
+            addr: (regs.general[rs].cast_signed() < 0)
+                .then_some((regs.pc - 4).wrapping_add((imm_sext << 2) as u32)),
+            link: false,
+        },
         Opcode::Blez => ExecRes::Branch {
             addr: (regs.general[rs].cast_signed() <= 0)
                 .then_some((regs.pc - 4).wrapping_add((imm_sext << 2) as u32)),
@@ -261,11 +266,6 @@ pub fn execute(ins: u32, op: Opcode, regs: &Registers) -> ExecRes {
         },
         Opcode::Bgtz => ExecRes::Branch {
             addr: (regs.general[rs].cast_signed() > 0)
-                .then_some((regs.pc - 4).wrapping_add((imm_sext << 2) as u32)),
-            link: false,
-        },
-        Opcode::Bltz => ExecRes::Branch {
-            addr: (regs.general[rs].cast_signed() < 0)
                 .then_some((regs.pc - 4).wrapping_add((imm_sext << 2) as u32)),
             link: false,
         },
