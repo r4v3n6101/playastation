@@ -4,7 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-arraydeque = "0.5.1"
 bytes = "1.11.1"
 strum = { version = "0.28.0", features = ["derive"] }
 bitfield = "0.19.4"

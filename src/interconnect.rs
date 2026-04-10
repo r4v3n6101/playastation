@@ -70,10 +70,8 @@ impl Default for Bus {
         let ram = buf.split_to(RAM.len() + 1);
         let misc = buf.split_to(MISC.len() + 1);
         let scratchpad = buf.split_to(SCRATCHPAD.len() + 1);
-        let mut expansion1 = buf.split_to(EXPANSION1.len() + 1);
+        let expansion1 = buf.split_to(EXPANSION1.len() + 1);
         let expansion2 = buf.split_to(EXPANSION2.len() + 1);
-
-        expansion1.fill(0xFF);
 
         Self {
             bios,

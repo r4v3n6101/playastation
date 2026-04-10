@@ -1,52 +1,70 @@
-use crate::interconnect::Bus;
-
 pub use cop0::{Cop0, Exception};
+pub use run::{CpuExecutor, interpreter::Interpreter};
 
 mod cop0;
 mod ins;
-mod pipeline;
+mod run;
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub struct Cpu {
-    pipeline: pipeline::State,
-    pub regs: Registers,
+    /// General purpose registers.
+    pub gpr: [u32; 32],
+    /// Program counter.
+    pub pc: u32,
+    /// High bits part for mul/div ops.
+    pub hi: u32,
+    /// Low bits part for mul/div ops.
+    pub lo: u32,
+
+    /// Pending load from RAM (aka load-delay slot).
+    pub pending_load: PendingLoad,
+    /// Pending jump (aka branch delay slot).
+    pub pending_jump: PendingJump,
+
+    // Soprocessors
     pub cop0: Cop0,
 }
 
-#[derive(Debug, Copy, Clone)]
-pub struct Registers {
-    pub general: [u32; 32],
-    pub pc: u32,
-    pub hi: u32,
-    pub lo: u32,
+#[derive(Debug, Default, Copy, Clone)]
+pub struct PendingLoad {
+    /// Where write to value. Zero ignores any write.
+    pub dest: usize,
+    /// Loaded value.
+    pub value: u32,
+}
+
+#[derive(Debug, Default, Copy, Clone)]
+pub struct PendingJump {
+    /// Whether the next op will be in jump delay slot.
+    /// Used for exceptions.
+    pub has_delay_slot: bool,
+    /// Whether a jump will happen.
+    pub happen: bool,
+    /// Jump target.
+    pub target: u32,
 }
 
 /// Reset state of the CPU.
 impl Default for Cpu {
     fn default() -> Self {
         Self {
-            regs: Registers {
-                general: [0; _],
-                pc: 0xBFC0_0000,
-                hi: 0,
-                lo: 0,
+            gpr: [0; _],
+            pc: 0xBFC0_0000,
+            hi: 0,
+            lo: 0,
+
+            pending_load: PendingLoad { dest: 0, value: 0 },
+            pending_jump: PendingJump {
+                has_delay_slot: false,
+                happen: false,
+                target: 0,
             },
-            pipeline: Default::default(),
-            cop0: Default::default(),
+
+            cop0: Cop0::default(),
         }
     }
 }
 
 impl Cpu {
-    pub fn cycle(&mut self, bus: &mut Bus) {
-        self.cop0.set_hw_irq(bus.int_ctrl.pending());
-
-        if let Err((has_delay_slot, fault_pc, exception)) =
-            self.pipeline.run(&mut self.regs, &mut self.cop0, bus)
-        {
-            self.cop0
-                .exception_enter(exception, fault_pc, has_delay_slot);
-            self.regs.pc = self.cop0.exception_handler();
-        }
-    }
+    pub const DEFAULT_LINK_REG: usize = 31;
 }

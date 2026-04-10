@@ -1,6 +1,9 @@
 use std::{fs, time::Instant};
 
-use playastation::{cpu::Cpu, interconnect::Bus};
+use playastation::{
+    cpu::{CpuExecutor, Interpreter},
+    interconnect::Bus,
+};
 
 #[test]
 #[ignore = "Time consuming"]
@@ -11,22 +14,19 @@ fn test_bios_smoke_run() {
     let mut bus = Bus::default();
     bus.bios[..bios.len()].copy_from_slice(&bios);
 
-    let mut cpu = Cpu::default();
+    let mut executor = CpuExecutor::<Interpreter>::default();
 
     let instant = Instant::now();
-    for i in 0..1_000_000_000 {
-        cpu.cycle(&mut bus);
-        if 1_000_000_000 - i < 1_000_000 {
-            println!("{cpu:?}");
-        }
+    for _ in 0..33868800 {
+        executor.cycle(&mut bus);
     }
 
     println!("Executed in {:?}", instant.elapsed());
 
     println!(
         "Cause: {:?}, Status: {:?}, bad_vaddr: {}",
-        cpu.cop0.cause(),
-        cpu.cop0.status(),
-        cpu.cop0.regs[8]
+        executor.cpu.cop0.cause(),
+        executor.cpu.cop0.status(),
+        executor.cpu.cop0.regs[8]
     );
 }
