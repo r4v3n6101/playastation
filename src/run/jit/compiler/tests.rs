@@ -43,10 +43,10 @@ fn compiles_and_executes_alu_block() {
         &mut bus,
     );
 
-    assert_eq!(cpu.regs.general[8], 5);
-    assert_eq!(cpu.regs.general[9], 12);
-    assert_eq!(cpu.regs.general[10], 17);
-    assert_eq!(cpu.regs.general[0], 0);
+    assert_eq!(cpu.gpr[8], 5);
+    assert_eq!(cpu.gpr[9], 12);
+    assert_eq!(cpu.gpr[10], 17);
+    assert_eq!(cpu.gpr[0], 0);
 
     assert_eq!(
         res,
@@ -79,8 +79,8 @@ fn stops_on_overflow_and_preserves_destination_register() {
         &mut bus,
     );
 
-    assert_eq!(cpu.regs.general[8], 0x7FFF_FFFF);
-    assert_eq!(cpu.regs.general[9], 0);
+    assert_eq!(cpu.gpr[8], 0x7FFF_FFFF);
+    assert_eq!(cpu.gpr[9], 0);
 
     assert_eq!(
         res,
@@ -119,12 +119,12 @@ fn applies_load_delay_and_handles_nested_loads() {
     );
 
     // First dependent instruction must still see the old t1 value.
-    assert_eq!(cpu.regs.general[10], 0);
+    assert_eq!(cpu.gpr[10], 0);
     // After the first delay slot, the first load becomes visible.
-    assert_eq!(cpu.regs.general[11], 0x1111_1111);
+    assert_eq!(cpu.gpr[11], 0x1111_1111);
     // After the nested load delay slot, the second load becomes visible.
-    assert_eq!(cpu.regs.general[9], 0x2222_2222);
-    assert_eq!(cpu.regs.general[12], 0x2222_2222);
+    assert_eq!(cpu.gpr[9], 0x2222_2222);
+    assert_eq!(cpu.gpr[12], 0x2222_2222);
 
     assert_eq!(
         res,
@@ -164,11 +164,11 @@ fn second_load_uses_old_base_when_it_depends_on_previous_load() {
 
     // The first load becomes visible only after the second load has already
     // computed its address, so the nested load must use the old t1 value (0).
-    assert_eq!(cpu.regs.general[8], 0x0000_0020); // t0
-    assert_eq!(cpu.regs.general[9], 0x0000_0040); // t1
-    assert_eq!(cpu.regs.general[10], 0x2408_0020); // t2
-    assert_eq!(cpu.regs.general[11], 0x0000_0040); // t3
-    assert_eq!(cpu.regs.general[12], 0x2408_0020); // t4
+    assert_eq!(cpu.gpr[8], 0x0000_0020); // t0
+    assert_eq!(cpu.gpr[9], 0x0000_0040); // t1
+    assert_eq!(cpu.gpr[10], 0x2408_0020); // t2
+    assert_eq!(cpu.gpr[11], 0x0000_0040); // t3
+    assert_eq!(cpu.gpr[12], 0x2408_0020); // t4
 
     assert_eq!(
         res,
@@ -202,8 +202,8 @@ fn taken_beq_returns_jump_and_executes_delay_slot() {
         &mut bus,
     );
 
-    assert_eq!(cpu.regs.general[10], 0x55);
-    assert_eq!(cpu.regs.general[11], 0);
+    assert_eq!(cpu.gpr[10], 0x55);
+    assert_eq!(cpu.gpr[11], 0);
 
     assert_eq!(
         res,
@@ -237,8 +237,8 @@ fn not_taken_bne_still_executes_delay_slot_but_does_not_jump() {
         &mut bus,
     );
 
-    assert_eq!(cpu.regs.general[10], 0x66);
-    assert_eq!(cpu.regs.general[11], 0);
+    assert_eq!(cpu.gpr[10], 0x66);
+    assert_eq!(cpu.gpr[11], 0);
 
     assert_eq!(
         res,
@@ -269,8 +269,8 @@ fn jal_sets_ra_and_reports_jump_target() {
         &mut bus,
     );
 
-    assert_eq!(cpu.regs.general[8], 0x55);
-    assert_eq!(cpu.regs.general[31], 0x0000_0008);
+    assert_eq!(cpu.gpr[8], 0x55);
+    assert_eq!(cpu.gpr[31], 0x0000_0008);
 
     assert_eq!(
         res,
@@ -302,9 +302,9 @@ fn jalr_uses_register_target_and_custom_link_register() {
         &mut bus,
     );
 
-    assert_eq!(cpu.regs.general[10], 0x77);
-    assert_eq!(cpu.regs.general[16], 0x0000_000C);
-    assert_eq!(cpu.regs.general[31], 0);
+    assert_eq!(cpu.gpr[10], 0x77);
+    assert_eq!(cpu.gpr[16], 0x0000_000C);
+    assert_eq!(cpu.gpr[31], 0);
 
     assert_eq!(
         res,

@@ -7,7 +7,6 @@ mod decoder;
 
 pub type FuncPtr = fn(*mut FuncResult, *mut Cpu, *mut Bus);
 
-#[repr(C)]
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
 pub struct FuncResult {
     /// Result of function execution.
@@ -24,6 +23,7 @@ pub struct FuncResult {
     jump_addr: u32,
 }
 
+// TODO : use normal enum, just like in Rust
 #[repr(u32)]
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
 pub enum ExecutionResult {

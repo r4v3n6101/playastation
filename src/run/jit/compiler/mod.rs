@@ -3,7 +3,7 @@ use std::mem;
 use cranelift::{
     codegen::Context,
     jit::{JITBuilder, JITModule},
-    module::{DataDescription, DataId, Linkage, Module, default_libcall_names},
+    module::{DataDescription, Linkage, Module, default_libcall_names},
     prelude::FunctionBuilderContext,
 };
 
@@ -26,40 +26,20 @@ pub struct ModCtx {
     fn_build_ctx: FunctionBuilderContext,
     /// Whether to generate load-delay store
     pending_load_delay_gen: bool,
-    /// Global pending register where to store load-delay slot
-    load_delay_dest: DataId,
-    /// Global slot for load-delay value
-    load_delay_val: DataId,
 }
 
 impl Default for ModCtx {
     fn default() -> Self {
         let fn_builder = JITBuilder::new(default_libcall_names()).unwrap();
-        let mut module = JITModule::new(fn_builder);
+        let module = JITModule::new(fn_builder);
 
         let fn_build_ctx = FunctionBuilderContext::new();
         let ctx = module.make_context();
-
-        let global_value_fn = |module: &mut JITModule, name, size| {
-            let gv = module
-                .declare_data(name, Linkage::Local, true, false)
-                .unwrap();
-            let mut data = DataDescription::new();
-            data.define_zeroinit(size);
-            module.define_data(gv, &data).unwrap();
-
-            gv
-        };
-
-        let load_delay_dest = global_value_fn(&mut module, "load_delay_dest", 1);
-        let load_delay_val = global_value_fn(&mut module, "load_delay_val", 4);
 
         Self {
             module,
             ctx,
             fn_build_ctx,
-            load_delay_dest,
-            load_delay_val,
             pending_load_delay_gen: false,
         }
     }

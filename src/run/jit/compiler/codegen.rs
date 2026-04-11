@@ -2,27 +2,21 @@ use std::mem::offset_of;
 
 use cranelift::{
     jit::JITModule,
-    module::{DataId, FuncId, Linkage, Module},
+    module::{FuncId, Linkage, Module},
     prelude::{AbiParam, FunctionBuilder, InstBuilder, IntCC, MemFlags, Value, types},
 };
 
-use crate::cpu::{Cpu, Exception, ins::Opcode};
+use crate::cpu::{Cpu, Exception, Opcode};
 
 use super::{
     super::{ExecutionResult, FuncResult},
     ModCtx, stubs,
 };
 
-const DEFAULT_LINK_REG: usize = 31;
-
 pub struct FnCtx<'module> {
     module: &'module JITModule,
     /// If val is true then the commit of load-delay slot will be generated
     pending_load_delay_gen: &'module mut bool,
-    /// Global pending register where to store load-delay slot
-    load_delay_dest: DataId,
-    /// Global value of load-delay slot
-    load_delay_val: DataId,
     /// Function builder
     builder: FunctionBuilder<'module>,
     /// Function name in form of an Id
@@ -73,8 +67,6 @@ impl<'a> FnCtx<'a> {
             last_pc: enter_pc,
             last_in_delay_slot: false,
             module: &mut mod_ctx.module,
-            load_delay_dest: mod_ctx.load_delay_dest,
-            load_delay_val: mod_ctx.load_delay_val,
             pending_load_delay_gen: &mut mod_ctx.pending_load_delay_gen,
         }
     }
@@ -96,7 +88,7 @@ impl<'a> FnCtx<'a> {
 
         let load_delay_slot = if *self.pending_load_delay_gen {
             *self.pending_load_delay_gen = false;
-            Some(self.load_delay_slot())
+            Some(self.read_pending_load())
         } else {
             None
         };
@@ -122,6 +114,8 @@ impl<'a> FnCtx<'a> {
     }
 
     pub fn emit_op(&mut self, pc: u32, in_delay_slot: bool, ins: u32, op: Opcode) {
+        let ptr_ty = self.module.target_config().pointer_type();
+
         let rs = ((ins >> 21) & 0x1F) as usize;
         let rt = ((ins >> 16) & 0x1F) as usize;
         let rd = ((ins >> 11) & 0x1F) as usize;
@@ -140,7 +134,7 @@ impl<'a> FnCtx<'a> {
 
         let load_delay_slot = if *self.pending_load_delay_gen {
             *self.pending_load_delay_gen = false;
-            Some(self.load_delay_slot())
+            Some(self.read_pending_load())
         } else {
             None
         };
@@ -392,7 +386,7 @@ impl<'a> FnCtx<'a> {
                     .builder
                     .ins()
                     .iconst(types::I32, i64::from(jump_target.cast_signed()));
-                self.emit_jump(target, Some(DEFAULT_LINK_REG));
+                self.emit_jump(target, Some(Cpu::DEFAULT_LINK_REG));
             }
             Opcode::Jr => {
                 let target = self.load_reg(Reg::General(rs));
@@ -403,22 +397,6 @@ impl<'a> FnCtx<'a> {
                 self.emit_jump(target, Some(rd));
             }
 
-            Opcode::Mfhi => {
-                let hi = self.load_reg(Reg::Hi);
-                self.store_reg(Reg::General(rd), hi);
-            }
-            Opcode::Mflo => {
-                let lo = self.load_reg(Reg::Lo);
-                self.store_reg(Reg::General(rd), lo);
-            }
-            Opcode::Mthi => {
-                let rs = self.load_reg(Reg::General(rs));
-                self.store_reg(Reg::Hi, rs);
-            }
-            Opcode::Mtlo => {
-                let rs = self.load_reg(Reg::General(rs));
-                self.store_reg(Reg::Lo, rs);
-            }
             Opcode::Mult => {
                 let rs = {
                     let reg = self.load_reg(Reg::General(rs));
@@ -508,20 +486,28 @@ impl<'a> FnCtx<'a> {
                 }
                 self.builder.switch_to_block(done);
             }
-            Opcode::Mfc0 => {
-                let rd = self.load_reg(Reg::Cop0(rd));
-                let (load_delay_dest, load_delay_val) = self.load_delay_slot_addr();
 
-                let dest = self
-                    .builder
-                    .ins()
-                    .iconst(types::I8, rt.cast_signed() as i64);
-                self.builder
-                    .ins()
-                    .store(MemFlags::new(), dest, load_delay_dest, 0);
-                self.builder
-                    .ins()
-                    .store(MemFlags::new(), rd, load_delay_val, 0);
+            Opcode::Mfhi => {
+                let hi = self.load_reg(Reg::Hi);
+                self.store_reg(Reg::General(rd), hi);
+            }
+            Opcode::Mflo => {
+                let lo = self.load_reg(Reg::Lo);
+                self.store_reg(Reg::General(rd), lo);
+            }
+            Opcode::Mthi => {
+                let rs = self.load_reg(Reg::General(rs));
+                self.store_reg(Reg::Hi, rs);
+            }
+            Opcode::Mtlo => {
+                let rs = self.load_reg(Reg::General(rs));
+                self.store_reg(Reg::Lo, rs);
+            }
+            Opcode::Mfc0 => {
+                let dest = self.builder.ins().iconst(ptr_ty, rt.cast_signed() as i64);
+                let rd = self.load_reg(Reg::Cop0(rd));
+
+                self.set_pending_load(dest, rd);
                 *self.pending_load_delay_gen = true;
             }
             Opcode::Mtc0 => {
@@ -637,30 +623,13 @@ impl<'a> FnCtx<'a> {
             .builder
             .ins()
             .iconst(ptr_ty, fn_ptr.addr().cast_signed() as i64);
-        let load_delay_dest = {
-            let gv = self
-                .module
-                .declare_data_in_func(self.load_delay_dest, self.builder.func);
-            self.builder.ins().global_value(ptr_ty, gv)
-        };
-        let load_delay_val = {
-            let gv = self
-                .module
-                .declare_data_in_func(self.load_delay_val, self.builder.func);
-            self.builder.ins().global_value(ptr_ty, gv)
-        };
-        let dest = self
-            .builder
-            .ins()
-            .iconst(types::I8, rt.cast_signed() as i64);
+        let dest = self.builder.ins().iconst(ptr_ty, rt.cast_signed() as i64);
         let call = {
             let mut sig = self.module.make_signature();
             sig.params.push(AbiParam::new(ptr_ty));
             sig.params.push(AbiParam::new(ptr_ty));
             sig.params.push(AbiParam::new(ptr_ty));
             sig.params.push(AbiParam::new(ptr_ty));
-            sig.params.push(AbiParam::new(ptr_ty));
-            sig.params.push(AbiParam::new(types::I8));
             sig.params.push(AbiParam::new(types::I32));
             sig.returns.push(AbiParam::new(types::I8));
 
@@ -668,15 +637,7 @@ impl<'a> FnCtx<'a> {
             self.builder.ins().call_indirect(
                 sigref,
                 fn_ptr,
-                &[
-                    self.res_ptr,
-                    self.cpu_ptr,
-                    self.bus_ptr,
-                    load_delay_dest,
-                    load_delay_val,
-                    dest,
-                    addr,
-                ],
+                &[self.res_ptr, self.cpu_ptr, self.bus_ptr, dest, addr],
             )
         };
         let result = self.builder.inst_results(call)[0];
@@ -757,7 +718,7 @@ impl<'a> FnCtx<'a> {
                 types::I32,
                 i64::from(self.last_pc.wrapping_add(8).cast_signed()),
             );
-            self.store_reg(Reg::General(DEFAULT_LINK_REG), link_addr);
+            self.store_reg(Reg::General(Cpu::DEFAULT_LINK_REG), link_addr);
         }
 
         let rs = self.load_reg(Reg::General(rs));
@@ -883,7 +844,6 @@ impl<'a> FnCtx<'a> {
     }
 
     fn commit_load_delay(&mut self, (load_delay_dest, load_delay_val): (Value, Value)) {
-        // In case load_mem fails, so we should skip write to zero reg
         let ptr_ty = self.module.target_config().pointer_type();
 
         let success = self
@@ -891,20 +851,20 @@ impl<'a> FnCtx<'a> {
             .ins()
             .icmp_imm(IntCC::NotEqual, load_delay_dest, 0);
 
-        let ok = self.builder.create_block();
-        let fail = self.builder.create_block();
+        let nonzero = self.builder.create_block();
+        let zero = self.builder.create_block();
         let done = self.builder.create_block();
 
-        self.builder.ins().brif(success, ok, &[], fail, &[]);
+        // In case load_mem fails, so we should skip write to zero reg
+        self.builder.ins().brif(success, nonzero, &[], zero, &[]);
         {
-            self.builder.switch_to_block(ok);
+            self.builder.switch_to_block(nonzero);
             let addr = {
                 let offset1 = self
                     .builder
                     .ins()
-                    .iconst(ptr_ty, offset_of!(Cpu, regs.general).cast_signed() as i64);
+                    .iconst(ptr_ty, offset_of!(Cpu, gpr).cast_signed() as i64);
                 let offset2 = self.builder.ins().imul_imm(load_delay_dest, 4);
-                let offset2 = self.builder.ins().uextend(ptr_ty, offset2);
                 let offset = self.builder.ins().iadd(offset1, offset2);
 
                 self.builder.ins().iadd(self.cpu_ptr, offset)
@@ -915,56 +875,50 @@ impl<'a> FnCtx<'a> {
             self.builder.ins().jump(done, &[]);
         }
         {
-            self.builder.switch_to_block(fail);
+            self.builder.switch_to_block(zero);
             self.builder.ins().jump(done, &[]);
         }
         self.builder.switch_to_block(done);
 
         if !*self.pending_load_delay_gen {
-            self.clear_delay_slot();
+            let dest = self.builder.ins().iconst(ptr_ty, 0);
+            let value = self.builder.ins().iconst(types::I32, 0);
+            self.set_pending_load(dest, value);
         }
     }
 
-    fn load_delay_slot(&mut self) -> (Value, Value) {
-        let (load_delay_dest, load_delay_val) = self.load_delay_slot_addr();
-        let load_delay_dest =
-            self.builder
-                .ins()
-                .load(types::I8, MemFlags::new(), load_delay_dest, 0);
-        let load_delay_val =
-            self.builder
-                .ins()
-                .load(types::I32, MemFlags::new(), load_delay_val, 0);
-
-        (load_delay_dest, load_delay_val)
-    }
-
-    fn clear_delay_slot(&mut self) {
-        let (load_delay_dest, _) = self.load_delay_slot_addr();
-        let zero = self.builder.ins().iconst(types::I8, 0);
-        self.builder
-            .ins()
-            .store(MemFlags::new(), zero, load_delay_dest, 0);
-
-        // No need to clear value, as we don't write at all when dest=0
-    }
-
-    fn load_delay_slot_addr(&mut self) -> (Value, Value) {
+    fn read_pending_load(&mut self) -> (Value, Value) {
         let ptr_ty = self.module.target_config().pointer_type();
-        let load_delay_dest = {
-            let gv = self
-                .module
-                .declare_data_in_func(self.load_delay_dest, self.builder.func);
-            self.builder.ins().global_value(ptr_ty, gv)
-        };
-        let load_delay_val = {
-            let gv = self
-                .module
-                .declare_data_in_func(self.load_delay_val, self.builder.func);
-            self.builder.ins().global_value(ptr_ty, gv)
-        };
+
+        let load_delay_dest = self.builder.ins().load(
+            ptr_ty,
+            MemFlags::new(),
+            self.cpu_ptr,
+            offset_of!(Cpu, pending_load.dest).cast_signed() as i32,
+        );
+        let load_delay_val = self.builder.ins().load(
+            types::I32,
+            MemFlags::new(),
+            self.cpu_ptr,
+            offset_of!(Cpu, pending_load.value).cast_signed() as i32,
+        );
 
         (load_delay_dest, load_delay_val)
+    }
+
+    fn set_pending_load(&mut self, dest: Value, value: Value) {
+        self.builder.ins().store(
+            MemFlags::new(),
+            dest,
+            self.cpu_ptr,
+            offset_of!(Cpu, pending_load.dest).cast_signed() as i32,
+        );
+        self.builder.ins().store(
+            MemFlags::new(),
+            value,
+            self.cpu_ptr,
+            offset_of!(Cpu, pending_load.value).cast_signed() as i32,
+        );
     }
 
     fn load_reg(&mut self, reg: Reg) -> Value {
@@ -997,9 +951,9 @@ enum Reg {
 impl Reg {
     fn byte_offset(self) -> usize {
         match self {
-            Self::Hi => offset_of!(Cpu, regs.hi),
-            Self::Lo => offset_of!(Cpu, regs.lo),
-            Self::General(idx) => offset_of!(Cpu, regs.general) + 4 * idx,
+            Self::Hi => offset_of!(Cpu, hi),
+            Self::Lo => offset_of!(Cpu, lo),
+            Self::General(idx) => offset_of!(Cpu, gpr) + 4 * idx,
             Self::Cop0(idx) => offset_of!(Cpu, cop0.regs) + 4 * idx,
         }
     }

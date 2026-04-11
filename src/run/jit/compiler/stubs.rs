@@ -1,5 +1,5 @@
 use crate::{
-    cpu::Cpu,
+    cpu::{Cpu, PendingLoad},
     interconnect::{Bus, BusError, BusErrorKind},
 };
 
@@ -9,23 +9,13 @@ pub extern "C" fn bus_load<const SIZE: usize, const SIGNED: bool>(
     res: *mut FuncResult,
     cpu: *mut Cpu,
     bus: *mut Bus,
-    load_delay_dest: *mut u8,
-    load_delay_val: *mut u32,
-    dest: u8,
+    dest: usize,
     addr: u32,
 ) -> i8 {
     // Safety: ptr-s are valid, since passed from compiled code.
     let res = unsafe { &mut *res };
     let cpu = unsafe { &mut *cpu };
     let bus = unsafe { &mut *bus };
-    let load_delay_dest = unsafe { &mut *load_delay_dest };
-    let load_delay_val = unsafe { &mut *load_delay_val };
-
-    // Cache detached from memory
-    if cpu.cop0.status().isc() {
-        res.result = ExecutionResult::Success;
-        return 0;
-    }
 
     match match SIZE {
         1 => bus.load(addr).map(|x| {
@@ -46,8 +36,7 @@ pub extern "C" fn bus_load<const SIZE: usize, const SIGNED: bool>(
         _ => unreachable!(),
     } {
         Ok(read) => {
-            *load_delay_dest = dest;
-            *load_delay_val = read;
+            cpu.pending_load = PendingLoad { dest, value: read };
 
             res.result = ExecutionResult::Success;
             0
@@ -82,7 +71,6 @@ pub extern "C" fn bus_store<const SIZE: usize>(
 
     // Cache detached from memory
     if cpu.cop0.status().isc() {
-        res.result = ExecutionResult::Success;
         return 0;
     }
 

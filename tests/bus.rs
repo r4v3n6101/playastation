@@ -1,30 +1,30 @@
 use playastation::{
-    cpu::{Cop0, Cpu, CpuCtx},
+    cpu::Cop0,
     devices::int::InterruptFlags,
     interconnect::Bus,
+    run::{CpuExecutor, interpreter::Interpreter},
 };
 
 #[test]
 fn test_bus_interrupt_triggers_cpu_exception() {
     let mut bus = Bus::default();
-    let mut cpu = Cpu::default();
-    let mut cpu_ctx = CpuCtx::default();
+    let mut executor = CpuExecutor::<Interpreter>::default();
 
-    cpu.regs.pc = 0x1000;
+    executor.cpu.pc = 0x1000;
 
     // Enable CPU interrupts:
     // IEc = bit 0
     // IM bit 2 = hardware IRQ lane used by cop0.set_hw_irq()
-    cpu.cop0.regs[Cop0::STATUS_IDX] = 0x0401;
+    executor.cpu.cop0.regs[Cop0::STATUS_IDX] = 0x0401;
 
     // Make the interrupt controller pending.
     bus.int_ctrl.i_mask = InterruptFlags::VBLANK;
     bus.int_ctrl.raise(InterruptFlags::VBLANK);
 
-    cpu.run(&mut cpu_ctx, &mut bus);
+    executor.cycle(&mut bus);
 
-    assert_eq!(cpu.cop0.cause().excode(), 0);
-    assert!(!cpu.cop0.cause().bd());
-    assert_eq!(cpu.cop0.regs[Cop0::EPC_IDX], 0x1000);
-    assert_eq!(cpu.regs.pc, 0x8000_0080);
+    assert_eq!(executor.cpu.cop0.cause().excode(), 0);
+    assert!(!executor.cpu.cop0.cause().bd());
+    assert_eq!(executor.cpu.cop0.regs[Cop0::EPC_IDX], 0x1000);
+    assert_eq!(executor.cpu.pc, 0x8000_0080);
 }

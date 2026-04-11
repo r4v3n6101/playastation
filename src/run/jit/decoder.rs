@@ -1,6 +1,7 @@
-use crate::interconnect::{Bus, BusError, BusErrorKind};
-
-use super::super::{Exception, ins::Opcode};
+use crate::{
+    cpu::{Exception, Opcode},
+    interconnect::{Bus, BusError, BusErrorKind},
+};
 
 pub enum DecRes {
     Decoded {
@@ -72,6 +73,8 @@ impl Iterator for InsIter<'_> {
                 });
             }
         };
+        *self.pc = pc.wrapping_add(4);
+
         let Some(op) = Opcode::decode(ins) else {
             self.enough();
             return Some(DecRes::Exception {
@@ -100,8 +103,6 @@ impl Iterator for InsIter<'_> {
         } else if op.has_branch_delay() {
             self.pend_delay_slot();
         }
-
-        *self.pc = pc.wrapping_add(4);
 
         Some(DecRes::Decoded {
             pc,
@@ -269,7 +270,7 @@ mod tests {
         ));
 
         // PC should stay on faulting instruction fetch point in this implementation.
-        assert_eq!(pc, 0);
+        assert_eq!(pc, 4);
     }
 
     #[test]

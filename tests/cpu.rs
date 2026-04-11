@@ -1,14 +1,15 @@
 use std::{fs, process::Command};
 
 use playastation::{
-    cpu::{Cpu, CpuCtx},
+    cpu::Cpu,
     interconnect::Bus,
+    run::{CpuExecutor, interpreter::Interpreter},
 };
 
 fn create_and_run_program(name: &'static str, cycles: usize) -> (Cpu, Bus) {
     let mut bus = Bus::default();
-    let mut cpu = Cpu::default();
-    cpu.regs.pc = 0;
+    let mut executor = CpuExecutor::<Interpreter>::default();
+    executor.cpu.pc = 0;
 
     let output = format!("{name}.bin");
     fs::File::create(&output).unwrap();
@@ -22,35 +23,34 @@ fn create_and_run_program(name: &'static str, cycles: usize) -> (Cpu, Bus) {
     bus.ram[..program.len()].copy_from_slice(&program);
     fs::remove_file(output).unwrap();
 
-    let mut cpu_ctx = CpuCtx::default();
     for _ in 0..cycles {
-        cpu.run(&mut cpu_ctx, &mut bus);
+        executor.cycle(&mut bus);
     }
 
-    (cpu, bus)
+    (executor.cpu, bus)
 }
 
 #[test]
 fn test_basic_alu() {
     let (cpu, _) = create_and_run_program("alu_basic", 11);
 
-    assert_eq!(cpu.regs.general[1], 5);
-    assert_eq!(cpu.regs.general[2], 7);
-    assert_eq!(cpu.regs.general[3], 12);
-    assert_eq!(cpu.regs.general[4], 7);
-    assert_eq!(cpu.regs.general[5], 7);
-    assert_eq!(cpu.regs.general[6], 5);
-    assert_eq!(cpu.regs.general[7], 2);
+    assert_eq!(cpu.gpr[1], 5);
+    assert_eq!(cpu.gpr[2], 7);
+    assert_eq!(cpu.gpr[3], 12);
+    assert_eq!(cpu.gpr[4], 7);
+    assert_eq!(cpu.gpr[5], 7);
+    assert_eq!(cpu.gpr[6], 5);
+    assert_eq!(cpu.gpr[7], 2);
 }
 
 #[test]
 fn test_basic_shift() {
     let (cpu, _) = create_and_run_program("shift_basic", 100);
 
-    assert_eq!(cpu.regs.general[2], 16);
-    assert_eq!(cpu.regs.general[3], 4);
-    assert_eq!(cpu.regs.general[4], 4);
-    assert_eq!(cpu.regs.general[6], 8);
+    assert_eq!(cpu.gpr[2], 16);
+    assert_eq!(cpu.gpr[3], 4);
+    assert_eq!(cpu.gpr[4], 4);
+    assert_eq!(cpu.gpr[6], 8);
 }
 
 #[test]
@@ -61,7 +61,7 @@ fn test_mem_basic() {
         u32::from_le_bytes(bus.load::<4>(0x1000).unwrap()),
         0x00001234
     );
-    assert_eq!(cpu.regs.general[3], 0x00001234);
+    assert_eq!(cpu.gpr[3], 0x00001234);
 }
 
 #[test]
@@ -69,53 +69,53 @@ fn test_mem_offset_signed() {
     let (cpu, bus) = create_and_run_program("mem_offset_signed", 100);
 
     assert_eq!(u32::from_le_bytes(bus.load::<4>(0x1000).unwrap()), 99);
-    assert_eq!(cpu.regs.general[3], 99);
+    assert_eq!(cpu.gpr[3], 99);
 }
 
 #[test]
 fn test_branch_not_taken() {
     let (cpu, _) = create_and_run_program("branch_not_taken", 100);
 
-    assert_eq!(cpu.regs.general[3], 11);
-    assert_eq!(cpu.regs.general[4], 22);
-    assert_eq!(cpu.regs.general[5], 33);
+    assert_eq!(cpu.gpr[3], 11);
+    assert_eq!(cpu.gpr[4], 22);
+    assert_eq!(cpu.gpr[5], 33);
 }
 
 #[test]
 fn test_branch_taken_delay_slot() {
     let (cpu, _) = create_and_run_program("branch_taken_delay_slot", 100);
 
-    assert_eq!(cpu.regs.general[3], 11);
-    assert_eq!(cpu.regs.general[4], 0);
-    assert_eq!(cpu.regs.general[5], 33);
+    assert_eq!(cpu.gpr[3], 11);
+    assert_eq!(cpu.gpr[4], 0);
+    assert_eq!(cpu.gpr[5], 33);
 }
 
 #[test]
 fn test_branch_backward_loop() {
     let (cpu, _) = create_and_run_program("branch_backward_loop", 100);
 
-    assert_eq!(cpu.regs.general[1], 0);
-    assert_eq!(cpu.regs.general[2], 3);
+    assert_eq!(cpu.gpr[1], 0);
+    assert_eq!(cpu.gpr[2], 3);
 }
 
 #[test]
 fn test_jump_delay_slot() {
     let (cpu, _) = create_and_run_program("jump_delay_slot", 100);
 
-    assert_eq!(cpu.regs.general[1], 77);
-    assert_eq!(cpu.regs.general[2], 0);
-    assert_eq!(cpu.regs.general[3], 99);
+    assert_eq!(cpu.gpr[1], 77);
+    assert_eq!(cpu.gpr[2], 0);
+    assert_eq!(cpu.gpr[3], 99);
 }
 
 #[test]
 fn test_jal_jr_return() {
     let (cpu, _) = create_and_run_program("jal_jr_return", 100);
 
-    assert_eq!(cpu.regs.general[10], 1);
-    assert_eq!(cpu.regs.general[11], 2);
-    assert_eq!(cpu.regs.general[12], 3);
-    assert_eq!(cpu.regs.general[13], 4);
-    assert_eq!(cpu.regs.general[31], 8);
+    assert_eq!(cpu.gpr[10], 1);
+    assert_eq!(cpu.gpr[11], 2);
+    assert_eq!(cpu.gpr[12], 3);
+    assert_eq!(cpu.gpr[13], 4);
+    assert_eq!(cpu.gpr[31], 8);
 }
 
 #[test]
@@ -123,16 +123,16 @@ fn test_load_use_hazard() {
     let (cpu, _) = create_and_run_program("load_use_hazard", 100);
 
     // Because of old data caused by delay-slot
-    assert_ne!(cpu.regs.general[4], 110);
+    assert_ne!(cpu.gpr[4], 110);
 }
 
 #[test]
 fn test_alu_to_branch_dep() {
     let (cpu, _) = create_and_run_program("alu_to_branch_dep", 100);
 
-    assert_eq!(cpu.regs.general[4], 1);
-    assert_eq!(cpu.regs.general[5], 0);
-    assert_eq!(cpu.regs.general[6], 3);
+    assert_eq!(cpu.gpr[4], 1);
+    assert_eq!(cpu.gpr[5], 0);
+    assert_eq!(cpu.gpr[6], 3);
 }
 
 #[test]
@@ -155,7 +155,7 @@ fn test_break_exception() {
 fn test_overflow_exception() {
     let (cpu, _) = create_and_run_program("overflow_exception", 6);
 
-    assert_eq!(cpu.regs.general[3], 0);
+    assert_eq!(cpu.gpr[3], 0);
     assert_eq!(cpu.cop0.regs[14], 12);
     assert_eq!(cpu.cop0.cause().excode(), 12);
 }
@@ -172,8 +172,8 @@ fn test_reserved_instruction_exception() {
 fn test_div_normal() {
     let (cpu, _) = create_and_run_program("div_normal", 100);
 
-    assert_eq!(cpu.regs.general[3], 3);
-    assert_eq!(cpu.regs.general[4], 1);
+    assert_eq!(cpu.gpr[3], 3);
+    assert_eq!(cpu.gpr[4], 1);
 }
 
 #[test]
@@ -220,5 +220,5 @@ fn test_mtc0_basic() {
 fn test_mfc0_basic() {
     let (cpu, _) = create_and_run_program("mfc0_basic", 12);
 
-    assert_eq!(cpu.regs.general[3], 0x1234_5678);
+    assert_eq!(cpu.gpr[3], 0x1234_5678);
 }
