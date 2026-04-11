@@ -1,8 +1,8 @@
 use std::{fs, time::Instant};
 
 use playastation::{
-    cpu::{CpuExecutor, Interpreter},
     interconnect::Bus,
+    run::{CpuExecutor, interpreter::Interpreter},
 };
 
 #[test]
@@ -18,7 +18,7 @@ fn test_bios_smoke_run() {
 
     let instant = Instant::now();
     for _ in 0..33868800 {
-        executor.cycle(&mut bus);
+        executor.run(&mut bus);
     }
 
     println!("Executed in {:?}", instant.elapsed());

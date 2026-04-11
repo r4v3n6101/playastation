@@ -8,3 +8,5 @@ bytes = "1.11.1"
 strum = { version = "0.28.0", features = ["derive"] }
 bitfield = "0.19.4"
 bitflags = "2.11.0"
+
+cranelift = { version = "0.130", features = ["module", "jit"] }

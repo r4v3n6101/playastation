@@ -1,9 +1,8 @@
 pub use cop0::{Cop0, Exception};
-pub use run::{CpuExecutor, interpreter::Interpreter};
+pub use ins::Opcode;
 
 mod cop0;
 mod ins;
-mod run;
 
 #[derive(Debug, Copy, Clone)]
 pub struct Cpu {
@@ -35,9 +34,7 @@ pub struct PendingLoad {
 
 #[derive(Debug, Default, Copy, Clone)]
 pub struct PendingJump {
-    /// Whether the next op will be in jump delay slot.
-    /// Used for exceptions.
-    pub has_delay_slot: bool,
+    /// Whether a branch/jump was seen.
     /// Whether a jump will happen.
     pub happen: bool,
     /// Jump target.
@@ -55,7 +52,6 @@ impl Default for Cpu {
 
             pending_load: PendingLoad { dest: 0, value: 0 },
             pending_jump: PendingJump {
-                has_delay_slot: false,
                 happen: false,
                 target: 0,
             },
