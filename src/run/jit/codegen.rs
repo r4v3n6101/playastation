@@ -64,6 +64,7 @@ impl<'a> FnCtx<'a> {
             last_pc: enter_pc,
             last_in_delay_slot: false,
             module: &storage.module,
+            // At the start of block assume pending load, so codegen will be generated
             pending_load_delay_gen: true,
         }
     }
@@ -858,39 +859,28 @@ impl<'a> FnCtx<'a> {
     fn commit_load_delay(&mut self, (load_delay_dest, load_delay_val): (Value, Value)) {
         let ptr_ty = self.module.target_config().pointer_type();
 
-        let success = self
-            .builder
-            .ins()
-            .icmp_imm(IntCC::NotEqual, load_delay_dest, 0);
-
-        let nonzero = self.builder.create_block();
-        let zero = self.builder.create_block();
-        let done = self.builder.create_block();
-
-        // In case load_mem fails, so we should skip write to zero reg
-        self.builder.ins().brif(success, nonzero, &[], zero, &[]);
-        {
-            self.builder.switch_to_block(nonzero);
-            let addr = {
-                let offset1 = self
-                    .builder
-                    .ins()
-                    .iconst(ptr_ty, offset_of!(Cpu, gpr).cast_signed() as i64);
-                let offset2 = self.builder.ins().imul_imm(load_delay_dest, 4);
-                let offset = self.builder.ins().iadd(offset1, offset2);
-
-                self.builder.ins().iadd(self.cpu_ptr, offset)
-            };
-            self.builder
+        let addr = {
+            let offset1 = self
+                .builder
                 .ins()
-                .store(MemFlags::new(), load_delay_val, addr, 0);
-            self.builder.ins().jump(done, &[]);
-        }
-        {
-            self.builder.switch_to_block(zero);
-            self.builder.ins().jump(done, &[]);
-        }
-        self.builder.switch_to_block(done);
+                .iconst(ptr_ty, offset_of!(Cpu, gpr).cast_signed() as i64);
+            let offset2 = self.builder.ins().imul_imm(load_delay_dest, 4);
+            let offset = self.builder.ins().iadd(offset1, offset2);
+
+            self.builder.ins().iadd(self.cpu_ptr, offset)
+        };
+        self.builder
+            .ins()
+            .store(MemFlags::new(), load_delay_val, addr, 0);
+
+        // Zeroize gpr[0] in case something was written in previous op
+        let zero = self.builder.ins().iconst(ptr_ty, 0);
+        self.builder.ins().store(
+            MemFlags::new(),
+            zero,
+            self.cpu_ptr,
+            offset_of!(Cpu, gpr).cast_signed() as i32,
+        );
 
         if !self.pending_load_delay_gen {
             let dest = self.builder.ins().iconst(ptr_ty, 0);

@@ -34,9 +34,7 @@ pub struct PendingLoad {
 
 #[derive(Debug, Default, Copy, Clone)]
 pub struct PendingJump {
-    /// Whether the next op will be in jump delay slot.
-    /// Used for exceptions.
-    pub has_delay_slot: bool,
+    /// Whether a branch/jump was seen.
     /// Whether a jump will happen.
     pub happen: bool,
     /// Jump target.
@@ -54,7 +52,6 @@ impl Default for Cpu {
 
             pending_load: PendingLoad { dest: 0, value: 0 },
             pending_jump: PendingJump {
-                has_delay_slot: false,
                 happen: false,
                 target: 0,
             },

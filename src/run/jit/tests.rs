@@ -1,11 +1,9 @@
-use std::cell::UnsafeCell;
-
 use crate::{cpu::Cpu, interconnect::Bus};
 
-use super::{super::decoder::InsIter, ExecutionResult, FuncResult, compile_fn};
+use super::{super::decoder::InsIter, ExecutionResult, FuncResult, Storage, compile_fn};
 
 fn compile_and_run(cpu: &mut Cpu, bus: &mut Bus, words: &[(u32, u32)]) -> FuncResult {
-    let storage = UnsafeCell::default();
+    let mut storage = Storage::default();
 
     words.iter().for_each(|&(addr, val)| {
         let _ = bus.store(addr, val.to_le_bytes());
@@ -13,16 +11,14 @@ fn compile_and_run(cpu: &mut Cpu, bus: &mut Bus, words: &[(u32, u32)]) -> FuncRe
 
     // Storage called once
     let mut pc = 0;
-    let func = unsafe {
-        compile_fn(
-            &storage,
-            0,
-            InsIter::new_start_from(&mut pc, bus, words.len()),
-        )
-    };
+    let func = compile_fn(
+        &mut storage,
+        0,
+        InsIter::new_start_from(&mut pc, bus, words.len()),
+    );
 
     let mut res = Default::default();
-    func.call(&mut res, cpu, bus);
+    func(&mut res, cpu, bus);
     res
 }
 

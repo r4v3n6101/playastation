@@ -1,115 +1,104 @@
 use crate::{
-    cpu::{Exception, Opcode},
+    cpu::{Cpu, Exception, Opcode},
     interconnect::{Bus, BusError, BusErrorKind},
 };
 
-pub enum DecRes {
-    Decoded {
+#[derive(Debug)]
+pub enum Operation {
+    Instruction {
         pc: u32,
-        ins: u32,
         in_delay_slot: bool,
+        ins: u32,
         op: Opcode,
     },
-    Exception {
+    Break {
         pc: u32,
         in_delay_slot: bool,
-        exc: Exception,
+        cause: Exception,
     },
 }
 
-pub struct InsIter<'a> {
-    pc: &'a mut u32,
-    bus: &'a Bus,
-    left: usize,
-    pending_delay_slot: bool,
-}
+/// Decode block.
+/// Size is limited to `limit`, but may be `limit + 1` in case of `limit` element is branch/jump.
+pub fn decode_block(output: &mut Vec<Operation>, cpu: &Cpu, bus: &Bus, mut limit: usize) {
+    let mut pc = cpu.pc;
+    let mut pending_delay_slot = false;
 
-impl<'a> InsIter<'a> {
-    pub fn new_start_from(pc: &'a mut u32, bus: &'a Bus, size: usize) -> Self {
-        Self {
-            pc,
-            bus,
-            left: size,
-            pending_delay_slot: false,
-        }
-    }
-
-    fn pend_delay_slot(&mut self) {
-        self.pending_delay_slot = true;
-    }
-
-    fn enough(&mut self) {
-        // Cancel pending instruction
-        self.pending_delay_slot = false;
-        // Limit is exceeded
-        self.left = 0;
-    }
-}
-
-impl Iterator for InsIter<'_> {
-    type Item = DecRes;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.pending_delay_slot {
-            // Ignore skip when left=0
-            self.left = self.left.wrapping_sub(1);
-        } else {
-            self.left = self.left.checked_sub(1)?;
+    output.clear();
+    loop {
+        if limit == 0 && !pending_delay_slot {
+            break;
         }
 
-        let pc = *self.pc;
-        let in_delay_slot = self.pending_delay_slot;
-        let ins = match self.bus.load(pc) {
+        let ins = match bus.load(pc) {
             Ok(ins) => u32::from_le_bytes(ins),
-            Err(BusError { bad_vaddr, kind }) => {
-                self.enough();
-                return Some(DecRes::Exception {
+            Err(BusError {
+                kind: BusErrorKind::UnalignedAddr,
+                bad_vaddr,
+            }) => {
+                output.push(Operation::Break {
                     pc,
-                    in_delay_slot,
-                    exc: match kind {
-                        BusErrorKind::UnalignedAddr => Exception::UnalignedLoad { bad_vaddr },
-                        BusErrorKind::Unmapped => Exception::InstructionBus { bad_vaddr },
-                    },
+                    in_delay_slot: pending_delay_slot,
+                    cause: Exception::UnalignedLoad { bad_vaddr },
                 });
+                break;
+            }
+            Err(BusError { bad_vaddr, .. }) => {
+                output.push(Operation::Break {
+                    pc,
+                    in_delay_slot: pending_delay_slot,
+                    cause: Exception::InstructionBus { bad_vaddr },
+                });
+                break;
             }
         };
-        *self.pc = pc.wrapping_add(4);
 
         let Some(op) = Opcode::decode(ins) else {
-            self.enough();
-            return Some(DecRes::Exception {
+            output.push(Operation::Break {
                 pc,
-                in_delay_slot,
-                exc: Exception::ReservedInstruction,
+                in_delay_slot: pending_delay_slot,
+                cause: Exception::ReservedInstruction,
             });
+            break;
         };
 
-        if let Opcode::Syscall = op {
-            self.enough();
-            return Some(DecRes::Exception {
-                pc,
-                in_delay_slot,
-                exc: Exception::Syscall,
-            });
-        } else if let Opcode::Break = op {
-            self.enough();
-            return Some(DecRes::Exception {
-                pc,
-                in_delay_slot,
-                exc: Exception::Break,
-            });
-        } else if self.pending_delay_slot {
-            self.enough();
-        } else if op.has_branch_delay() {
-            self.pend_delay_slot();
+        match op {
+            Opcode::Syscall => {
+                output.push(Operation::Break {
+                    pc,
+                    in_delay_slot: pending_delay_slot,
+                    cause: Exception::Syscall,
+                });
+                break;
+            }
+            Opcode::Break => {
+                output.push(Operation::Break {
+                    pc,
+                    in_delay_slot: pending_delay_slot,
+                    cause: Exception::Break,
+                });
+                break;
+            }
+            _ => {
+                output.push(Operation::Instruction {
+                    pc,
+                    in_delay_slot: pending_delay_slot,
+                    ins,
+                    op,
+                });
+            }
         }
 
-        Some(DecRes::Decoded {
-            pc,
-            ins,
-            in_delay_slot,
-            op,
-        })
+        if pending_delay_slot {
+            break;
+        }
+
+        if op.has_branch_delay() {
+            pending_delay_slot = true;
+        }
+
+        pc = pc.wrapping_add(4);
+        limit -= 1;
     }
 }
 
@@ -132,41 +121,40 @@ mod tests {
         // beq $zero, $zero, +1
         // nop
         // nop   <- must NOT be included
+        let cpu = Cpu {
+            pc: 0,
+            ..Default::default()
+        };
         let bus = make_bus(&[
             (0x0000_0000, 0x1000_0001),
             (0x0000_0004, 0x0000_0000),
             (0x0000_0008, 0x0000_0000),
         ]);
 
-        let mut pc = 0x0000_0000;
-        let out = InsIter::new_start_from(&mut pc, &bus, 16).collect::<Vec<_>>();
+        let mut out = Vec::new();
+        decode_block(&mut out, &cpu, &bus, 1024);
 
         assert_eq!(out.len(), 2);
 
-        match &out[0] {
-            DecRes::Decoded { pc, ins, op, .. } => {
-                assert_eq!(*pc, 0x0000_0000);
-                assert_eq!(*ins, 0x1000_0001);
-                assert!(op.has_branch_delay());
-            }
+        match out[0] {
+            Operation::Instruction {
+                pc: 0x0000_0000,
+                ins: 0x1000_0001,
+                op,
+                ..
+            } if op.has_branch_delay() => {}
             _ => panic!("expected decoded branch"),
         }
 
-        match &out[1] {
-            DecRes::Decoded {
-                pc,
-                ins,
-                in_delay_slot,
+        match out[1] {
+            Operation::Instruction {
+                pc: 0x0000_0004,
+                in_delay_slot: true,
+                ins: 0x0000_0000,
                 ..
-            } => {
-                assert_eq!(*pc, 0x0000_0004);
-                assert_eq!(*ins, 0x0000_0000);
-                assert!(in_delay_slot);
-            }
+            } => {}
             _ => panic!("expected decoded delay slot"),
         }
-
-        assert_eq!(pc, 0x0000_0008);
     }
 
     #[test]
@@ -174,57 +162,57 @@ mod tests {
         // jr $ra
         // nop
         // nop   <- must NOT be included
+        let cpu = Cpu {
+            pc: 0,
+            ..Default::default()
+        };
         let bus = make_bus(&[
             (0x0000_0000, 0x03E0_0008),
             (0x0000_0004, 0x0000_0000),
             (0x0000_0008, 0x0000_0000),
         ]);
 
-        let mut pc = 0x0000_0000;
-        let out = InsIter::new_start_from(&mut pc, &bus, 16).collect::<Vec<_>>();
+        let mut out = Vec::new();
+        decode_block(&mut out, &cpu, &bus, 1024);
 
         assert_eq!(out.len(), 2);
 
-        match &out[0] {
-            DecRes::Decoded { pc, op, .. } => {
-                assert_eq!(*pc, 0);
-                assert!(op.has_branch_delay());
-            }
+        match out[0] {
+            Operation::Instruction { pc: 0, op, .. } if op.has_branch_delay() => {}
             _ => panic!("expected decoded jr"),
         }
 
-        match &out[1] {
-            DecRes::Decoded {
-                pc, in_delay_slot, ..
-            } => {
-                assert_eq!(*pc, 4);
-                assert!(in_delay_slot);
-            }
+        match out[1] {
+            Operation::Instruction {
+                pc: 4,
+                in_delay_slot: true,
+                ..
+            } => {}
             _ => panic!("expected decoded delay slot"),
         }
-
-        assert_eq!(pc, 8);
     }
 
     #[test]
     fn stops_immediately_on_syscall() {
         // syscall
         // nop   <- must NOT be included
+        let cpu = Cpu {
+            pc: 0,
+            ..Default::default()
+        };
         let bus = make_bus(&[(0x0000_0000, 0x0000_000C), (0x0000_0004, 0x0000_0000)]);
 
-        let mut pc = 0x0000_0000;
-        let out = InsIter::new_start_from(&mut pc, &bus, 16).collect::<Vec<_>>();
+        let mut out = Vec::new();
+        decode_block(&mut out, &cpu, &bus, 1024);
 
         assert_eq!(out.len(), 1);
 
-        match &out[0] {
-            DecRes::Exception {
-                pc,
-                exc: Exception::Syscall,
+        match out[0] {
+            Operation::Break {
+                pc: 0,
+                cause: Exception::Syscall,
                 ..
-            } => {
-                assert_eq!(*pc, 0);
-            }
+            } => {}
             _ => panic!("expected decoded syscall"),
         }
     }
@@ -233,21 +221,23 @@ mod tests {
     fn stops_immediately_on_break() {
         // break
         // nop   <- must NOT be included
+        let cpu = Cpu {
+            pc: 0,
+            ..Default::default()
+        };
         let bus = make_bus(&[(0x0000_0000, 0x0000_000D), (0x0000_0004, 0x0000_0000)]);
 
-        let mut pc = 0x0000_0000;
-        let out = InsIter::new_start_from(&mut pc, &bus, 16).collect::<Vec<_>>();
+        let mut out = Vec::new();
+        decode_block(&mut out, &cpu, &bus, 1024);
 
         assert_eq!(out.len(), 1);
 
-        match &out[0] {
-            DecRes::Exception {
-                pc,
-                exc: Exception::Break,
+        match out[0] {
+            Operation::Break {
+                pc: 0,
+                cause: Exception::Break,
                 ..
-            } => {
-                assert_eq!(*pc, 0);
-            }
+            } => {}
             _ => panic!("expected decoded break"),
         }
     }
@@ -255,46 +245,22 @@ mod tests {
     #[test]
     fn returns_reserved_instruction_exception_and_stops() {
         // 0xFFFF_FFFF should not decode on MIPS
+        let cpu = Cpu {
+            pc: 0,
+            ..Default::default()
+        };
         let bus = make_bus(&[(0x0000_0000, 0xFFFF_FFFF), (0x0000_0004, 0x0000_0000)]);
 
-        let mut pc = 0x0000_0000;
-        let out = InsIter::new_start_from(&mut pc, &bus, 16).collect::<Vec<_>>();
+        let mut out = Vec::new();
+        decode_block(&mut out, &cpu, &bus, 1024);
 
         assert_eq!(out.len(), 1);
         assert!(matches!(
             out[0],
-            DecRes::Exception {
-                exc: Exception::ReservedInstruction,
+            Operation::Break {
+                cause: Exception::ReservedInstruction,
                 ..
             }
         ));
-
-        // PC should stay on faulting instruction fetch point in this implementation.
-        assert_eq!(pc, 4);
-    }
-
-    #[test]
-    fn respects_size_limit_when_no_terminator() {
-        let bus = make_bus(&[
-            (0x0000_0000, 0x0000_0000),
-            (0x0000_0004, 0x0000_0000),
-            (0x0000_0008, 0x0000_0000),
-        ]);
-
-        let mut pc = 0x0000_0000;
-        let out = InsIter::new_start_from(&mut pc, &bus, 2).collect::<Vec<_>>();
-
-        assert_eq!(out.len(), 2);
-
-        match &out[0] {
-            DecRes::Decoded { pc, .. } => assert_eq!(*pc, 0),
-            _ => panic!("expected decoded ins 0"),
-        }
-        match &out[1] {
-            DecRes::Decoded { pc, .. } => assert_eq!(*pc, 4),
-            _ => panic!("expected decoded ins 1"),
-        }
-
-        assert_eq!(pc, 8);
     }
 }

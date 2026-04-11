@@ -1,4 +1,4 @@
-use std::{cell::UnsafeCell, marker::PhantomData, mem, ptr};
+use std::mem;
 
 use cranelift::{
     codegen::Context,
@@ -9,12 +9,12 @@ use cranelift::{
 
 use crate::{cpu::Cpu, interconnect::Bus};
 
-use super::decoder::{DecRes, InsIter};
-
 mod codegen;
 mod stubs;
 #[cfg(test)]
 mod tests;
+
+type FnPtr = fn(*mut FuncResult, *mut Cpu, *mut Bus);
 
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
 pub struct FuncResult {
@@ -58,13 +58,6 @@ pub struct Storage {
     fn_build_ctx: FunctionBuilderContext,
 }
 
-pub struct CompiledFunc<'a> {
-    /// Pointer to compiled function
-    fnptr: *const u8,
-    /// Storage of compiled function w
-    _storage: PhantomData<&'a Storage>,
-}
-
 impl Default for Storage {
     fn default() -> Self {
         let fn_builder = JITBuilder::new(default_libcall_names()).unwrap();
@@ -81,25 +74,7 @@ impl Default for Storage {
     }
 }
 
-impl CompiledFunc<'_> {
-    pub fn call(&self, res: &mut FuncResult, cpu: &mut Cpu, bus: &mut Bus) {
-        // Safety: we've compiled function with such signature
-        let fnptr: fn(*mut FuncResult, *mut Cpu, *mut Bus) = unsafe { mem::transmute(self.fnptr) };
-
-        fnptr(ptr::from_mut(res), ptr::from_mut(cpu), ptr::from_mut(bus))
-    }
-}
-
-/// Compile a function from iterator of instructions.
-///
-/// Safety: storage is used to bound [`CompiledFunc`] to LT of [`Storage`].
-/// Be sure that the call is unique, otherwise double mutable access occurs.
-pub unsafe fn compile_fn<'a>(
-    storage: &'a UnsafeCell<Storage>,
-    enter_pc: u32,
-    decs: InsIter<'_>,
-) -> CompiledFunc<'a> {
-    let storage = unsafe { &mut *storage.get() };
+pub fn compile_fn<'a>(storage: &mut Storage, enter_pc: u32, decs: InsIter<'_>) -> FnPtr {
     let fn_name = {
         let mut fn_ctx = codegen::FnCtx::create_and_emit_header(storage, enter_pc);
         decs.for_each(|decoded| match decoded {
@@ -133,8 +108,6 @@ pub unsafe fn compile_fn<'a>(
 
     let fnptr = storage.module.get_finalized_function(fn_name);
 
-    CompiledFunc {
-        fnptr,
-        _storage: PhantomData,
-    }
+    // Safety: it was compiled with such type assumption
+    unsafe { mem::transmute(fnptr) }
 }
