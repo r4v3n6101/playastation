@@ -100,3 +100,10 @@ pub extern "C" fn bus_store<const SIZE: usize>(
         }
     }
 }
+
+pub extern "C" fn rfe(cpu: *mut Cpu) {
+    // Safety: ptr-s are valid, since passed from compiled code.
+    let cpu = unsafe { &mut *cpu };
+
+    cpu.cop0.exception_leave();
+}

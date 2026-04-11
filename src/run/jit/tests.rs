@@ -12,8 +12,8 @@ fn compile_and_run(cpu: &mut Cpu, bus: &mut Bus, words: &[(u32, u32)]) -> FuncRe
     });
 
     // Storage called once
+    let mut pc = 0;
     let func = unsafe {
-        let mut pc = 0;
         compile_fn(
             &storage,
             0,

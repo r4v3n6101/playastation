@@ -511,6 +511,21 @@ impl<'a> FnCtx<'a> {
                 let rt = self.load_reg(Reg::General(rt));
                 self.store_reg(Reg::Cop0(rd), rt);
             }
+
+            Opcode::Rfe => {
+                let fn_ptr = self.builder.ins().iconst(
+                    ptr_ty,
+                    (stubs::rfe as *const u8).addr().cast_signed() as i64,
+                );
+
+                let mut sig = self.module.make_signature();
+                sig.params.push(AbiParam::new(ptr_ty));
+
+                let sigref = self.builder.import_signature(sig);
+                self.builder
+                    .ins()
+                    .call_indirect(sigref, fn_ptr, &[self.cpu_ptr]);
+            }
             _ => todo!(),
         }
         if let Some(load_delay_slot) = load_delay_slot {
