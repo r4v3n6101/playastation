@@ -3,12 +3,6 @@
 version = 4
 
 [[package]]
-name = "arraydeque"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d902e3d592a523def97af8f317b08ce16b7ab854c1985a0c671e6f15cebc236"
-
-[[package]]
 name = "bitfield"
 version = "0.19.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -50,7 +44,6 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 name = "playastation"
 version = "0.1.0"
 dependencies = [
- "arraydeque",
  "bitfield",
  "bitflags",
  "bytes",

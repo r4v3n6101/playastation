@@ -1,98 +1,70 @@
-use pipeline::{ErrorKind as PipelineErrorKind, Pipeline};
-
-use crate::interconnect::{Bus, BusError, BusErrorKind};
-
 pub use cop0::{Cop0, Exception};
+pub use run::{CpuExecutor, interpreter::Interpreter};
 
 mod cop0;
-mod pipeline;
+mod ins;
+mod run;
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub struct Cpu {
-    pipeline: Pipeline,
-    pub regs: Registers,
+    /// General purpose registers.
+    pub gpr: [u32; 32],
+    /// Program counter.
+    pub pc: u32,
+    /// High bits part for mul/div ops.
+    pub hi: u32,
+    /// Low bits part for mul/div ops.
+    pub lo: u32,
+
+    /// Pending load from RAM (aka load-delay slot).
+    pub pending_load: PendingLoad,
+    /// Pending jump (aka branch delay slot).
+    pub pending_jump: PendingJump,
+
+    // Soprocessors
     pub cop0: Cop0,
 }
 
-#[derive(Debug, Copy, Clone)]
-pub struct Registers {
-    pub general: [u32; 32],
-    pub pc: u32,
-    pub hi: u32,
-    pub lo: u32,
+#[derive(Debug, Default, Copy, Clone)]
+pub struct PendingLoad {
+    /// Where write to value. Zero ignores any write.
+    pub dest: usize,
+    /// Loaded value.
+    pub value: u32,
+}
+
+#[derive(Debug, Default, Copy, Clone)]
+pub struct PendingJump {
+    /// Whether the next op will be in jump delay slot.
+    /// Used for exceptions.
+    pub has_delay_slot: bool,
+    /// Whether a jump will happen.
+    pub happen: bool,
+    /// Jump target.
+    pub target: u32,
 }
 
 /// Reset state of the CPU.
 impl Default for Cpu {
     fn default() -> Self {
         Self {
-            regs: Registers {
-                general: [0; _],
-                pc: 0xBFC0_0000,
-                hi: 0,
-                lo: 0,
+            gpr: [0; _],
+            pc: 0xBFC0_0000,
+            hi: 0,
+            lo: 0,
+
+            pending_load: PendingLoad { dest: 0, value: 0 },
+            pending_jump: PendingJump {
+                has_delay_slot: false,
+                happen: false,
+                target: 0,
             },
-            pipeline: Pipeline::default(),
+
             cop0: Cop0::default(),
         }
     }
 }
 
 impl Cpu {
-    pub fn cycle(&mut self, bus: &mut Bus) {
-        self.cop0.set_hw_irq(bus.int_ctrl.pending());
-
-        let fetch = self.pipeline.fetch(&mut self.regs.pc, &self.cop0, bus);
-        let decode = self.pipeline.decode(&self.regs);
-        let execute = self.pipeline.execute(&mut self.regs.pc, &mut self.cop0);
-        let mem = self.pipeline.memory(bus, &mut self.cop0);
-        self.pipeline.writeback(&mut self.regs);
-
-        let (err, flush_count) = if let Err(err) = mem {
-            (err, 4)
-        } else if let Err(err) = execute {
-            (err, 3)
-        } else if let Err(err) = decode {
-            (err, 2)
-        } else if let Err(err) = fetch {
-            (err, 1)
-        } else {
-            return;
-        };
-
-        let has_delay_slot = self.pipeline.flush(flush_count);
-
-        let exception = match err.kind {
-            PipelineErrorKind::InvalidInstruction(_) => Exception::ReservedInstruction,
-            PipelineErrorKind::AluOverflow => Exception::Overflow,
-            PipelineErrorKind::Break => Exception::Break,
-            PipelineErrorKind::Syscall => Exception::Syscall,
-            PipelineErrorKind::Interrupt => Exception::Interrupt,
-
-            PipelineErrorKind::MemoryLoad(BusError {
-                bad_vaddr,
-                kind: BusErrorKind::UnalignedAddr,
-            })
-            | PipelineErrorKind::InsLoad(BusError {
-                bad_vaddr,
-                kind: BusErrorKind::UnalignedAddr,
-            }) => Exception::UnalignedLoad { bad_vaddr },
-
-            PipelineErrorKind::MemoryStore(BusError {
-                bad_vaddr,
-                kind: BusErrorKind::UnalignedAddr,
-            }) => Exception::UnalignedStore { bad_vaddr },
-
-            PipelineErrorKind::InsLoad(BusError { bad_vaddr, .. }) => {
-                Exception::InstructionBus { bad_vaddr }
-            }
-            PipelineErrorKind::MemoryLoad(BusError { bad_vaddr, .. })
-            | PipelineErrorKind::MemoryStore(BusError { bad_vaddr, .. }) => {
-                Exception::DataBus { bad_vaddr }
-            }
-        };
-
-        self.cop0.exception_enter(exception, err.pc, has_delay_slot);
-        self.regs.pc = self.cop0.exception_handler();
-    }
+    pub const DEFAULT_LINK_REG: usize = 31;
 }

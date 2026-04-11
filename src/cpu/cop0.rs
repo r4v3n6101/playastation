@@ -39,7 +39,7 @@ bitfield::bitfield! {
 
 /// Simplified Cop0 (coprocessor 0) with the logic used in PSX.
 /// It's not fully implemented, because PSX doesn't use TLB for example.
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub struct Cop0 {
     pub regs: [u32; 32],
 }
@@ -92,7 +92,7 @@ impl Cop0 {
     }
 
     /// Push IEc/KUc to IEp/KUp and IEp/KUp to IEo/KUo, then clear current mode
-    pub fn exception_enter(&mut self, excode: Exception, fault_pc: u32, in_delay_slot: bool) {
+    pub fn exception_enter(&mut self, exception: Exception, fault_pc: u32, in_delay_slot: bool) {
         self.regs[Self::EPC_IDX] = if in_delay_slot {
             fault_pc.wrapping_sub(4)
         } else {
@@ -101,13 +101,13 @@ impl Cop0 {
 
         let mut cause = self.cause();
         cause.set_bd(in_delay_slot);
-        cause.set_excode(excode.discriminant() as u32);
+        cause.set_excode(exception.discriminant() as u32);
         self.regs[Self::CAUSE_IDX] = cause.0;
 
         if let Exception::UnalignedLoad { bad_vaddr }
         | Exception::UnalignedStore { bad_vaddr }
         | Exception::InstructionBus { bad_vaddr }
-        | Exception::DataBus { bad_vaddr } = excode
+        | Exception::DataBus { bad_vaddr } = exception
         {
             self.regs[Self::BAD_VADDR_IDX] = bad_vaddr;
         }
