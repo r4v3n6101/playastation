@@ -8,15 +8,12 @@ use cranelift::{
 
 use crate::cpu::{Cpu, Exception, Opcode};
 
-use super::{
-    super::{ExecutionResult, FuncResult},
-    ModCtx, stubs,
-};
+use super::{ExecutionResult, FuncResult, Storage, stubs};
 
 pub struct FnCtx<'module> {
     module: &'module JITModule,
     /// If val is true then the commit of load-delay slot will be generated
-    pending_load_delay_gen: &'module mut bool,
+    pending_load_delay_gen: bool,
     /// Function builder
     builder: FunctionBuilder<'module>,
     /// Function name in form of an Id
@@ -34,20 +31,20 @@ pub struct FnCtx<'module> {
 }
 
 impl<'a> FnCtx<'a> {
-    pub fn create_and_emit_header(mod_ctx: &'a mut ModCtx, enter_pc: u32) -> Self {
-        let ptr_ty = mod_ctx.module.target_config().pointer_type();
+    pub fn create_and_emit_header(storage: &'a mut Storage, enter_pc: u32) -> Self {
+        let ptr_ty = storage.module.target_config().pointer_type();
 
-        let mut sig = mod_ctx.module.make_signature();
+        let mut sig = storage.module.make_signature();
         sig.params.push(AbiParam::new(ptr_ty)); // *mut res
         sig.params.push(AbiParam::new(ptr_ty)); // *mut cpu
         sig.params.push(AbiParam::new(ptr_ty)); // *mut bus
 
-        let name = mod_ctx
+        let name = storage
             .module
             .declare_function(&format!("enter_{enter_pc:#}"), Linkage::Local, &sig)
             .unwrap();
 
-        let mut builder = FunctionBuilder::new(&mut mod_ctx.ctx.func, &mut mod_ctx.fn_build_ctx);
+        let mut builder = FunctionBuilder::new(&mut storage.ctx.func, &mut storage.fn_build_ctx);
         builder.func.signature = sig;
 
         let entry = builder.create_block();
@@ -66,8 +63,8 @@ impl<'a> FnCtx<'a> {
             bus_ptr,
             last_pc: enter_pc,
             last_in_delay_slot: false,
-            module: &mut mod_ctx.module,
-            pending_load_delay_gen: &mut mod_ctx.pending_load_delay_gen,
+            module: &storage.module,
+            pending_load_delay_gen: true,
         }
     }
 
@@ -86,8 +83,8 @@ impl<'a> FnCtx<'a> {
         self.last_pc = pc;
         self.last_in_delay_slot = in_delay_slot;
 
-        let load_delay_slot = if *self.pending_load_delay_gen {
-            *self.pending_load_delay_gen = false;
+        let load_delay_slot = if self.pending_load_delay_gen {
+            self.pending_load_delay_gen = false;
             Some(self.read_pending_load())
         } else {
             None
@@ -132,8 +129,8 @@ impl<'a> FnCtx<'a> {
         self.last_pc = pc;
         self.last_in_delay_slot = in_delay_slot;
 
-        let load_delay_slot = if *self.pending_load_delay_gen {
-            *self.pending_load_delay_gen = false;
+        let load_delay_slot = if self.pending_load_delay_gen {
+            self.pending_load_delay_gen = false;
             Some(self.read_pending_load())
         } else {
             None
@@ -508,7 +505,7 @@ impl<'a> FnCtx<'a> {
                 let rd = self.load_reg(Reg::Cop0(rd));
 
                 self.set_pending_load(dest, rd);
-                *self.pending_load_delay_gen = true;
+                self.pending_load_delay_gen = true;
             }
             Opcode::Mtc0 => {
                 let rt = self.load_reg(Reg::General(rt));
@@ -659,7 +656,7 @@ impl<'a> FnCtx<'a> {
             self.builder.switch_to_block(ok);
         }
         // Store load-delayed slot into regs will be generated
-        *self.pending_load_delay_gen = true;
+        self.pending_load_delay_gen = true;
     }
 
     fn emit_store(
@@ -880,7 +877,7 @@ impl<'a> FnCtx<'a> {
         }
         self.builder.switch_to_block(done);
 
-        if !*self.pending_load_delay_gen {
+        if !self.pending_load_delay_gen {
             let dest = self.builder.ins().iconst(ptr_ty, 0);
             let value = self.builder.ins().iconst(types::I32, 0);
             self.set_pending_load(dest, value);

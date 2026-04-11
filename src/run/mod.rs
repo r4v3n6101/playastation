@@ -5,6 +5,8 @@ use crate::{
     interconnect::Bus,
 };
 
+// TODO : Rename
+mod decoder;
 pub mod interpreter;
 pub mod jit;
 

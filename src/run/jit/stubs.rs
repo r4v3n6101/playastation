@@ -3,7 +3,7 @@ use crate::{
     interconnect::{Bus, BusError, BusErrorKind},
 };
 
-use super::super::{ExecutionResult, FuncResult};
+use super::{ExecutionResult, FuncResult};
 
 pub extern "C" fn bus_load<const SIZE: usize, const SIGNED: bool>(
     res: *mut FuncResult,

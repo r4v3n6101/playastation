@@ -1,46 +1,45 @@
+use std::cell::UnsafeCell;
+
 use crate::{cpu::Cpu, interconnect::Bus};
 
-use super::{
-    super::{ExecutionResult, FuncResult, decoder::InsIter},
-    ModCtx,
-};
+use super::{super::decoder::InsIter, ExecutionResult, FuncResult, compile_fn};
 
-fn compile_and_run(
-    ctx: &mut ModCtx,
-    enter_pc: u32,
-    words: &[(u32, u32)],
-    cpu: &mut Cpu,
-    bus: &mut Bus,
-) -> FuncResult {
+fn compile_and_run(cpu: &mut Cpu, bus: &mut Bus, words: &[(u32, u32)]) -> FuncResult {
+    let storage = UnsafeCell::default();
+
     words.iter().for_each(|&(addr, val)| {
         let _ = bus.store(addr, val.to_le_bytes());
     });
 
-    let mut pc = enter_pc;
-    let func = ctx.make_new_fn(enter_pc, InsIter::new_start_from(&mut pc, bus, words.len()));
+    // Storage called once
+    let func = unsafe {
+        let mut pc = 0;
+        compile_fn(
+            &storage,
+            0,
+            InsIter::new_start_from(&mut pc, bus, words.len()),
+        )
+    };
 
     let mut res = Default::default();
-    func(&mut res, cpu, bus);
+    func.call(&mut res, cpu, bus);
     res
 }
 
 #[test]
 fn compiles_and_executes_alu_block() {
-    let mut ctx = ModCtx::default();
     let mut cpu = Cpu::default();
     let mut bus = Bus::default();
 
     let res = compile_and_run(
-        &mut ctx,
-        0,
+        &mut cpu,
+        &mut bus,
         &[
             (0x0000_0000, 0x2408_0005), // addiu t0, zero, 5
             (0x0000_0004, 0x2509_0007), // addiu t1, t0, 7
             (0x0000_0008, 0x0109_5021), // addu  t2, t0, t1
             (0x0000_000C, 0x2400_0001), // addiu zero, zero, 1
         ],
-        &mut cpu,
-        &mut bus,
     );
 
     assert_eq!(cpu.gpr[8], 5);
@@ -62,21 +61,18 @@ fn compiles_and_executes_alu_block() {
 
 #[test]
 fn stops_on_overflow_and_preserves_destination_register() {
-    let mut ctx = ModCtx::default();
     let mut cpu = Cpu::default();
     let mut bus = Bus::default();
 
     let res = compile_and_run(
-        &mut ctx,
-        0,
+        &mut cpu,
+        &mut bus,
         &[
             (0x0000_0000, 0x3C08_7FFF), // lui   t0, 0x7fff
             (0x0000_0004, 0x3508_FFFF), // ori   t0, t0, 0xffff
             (0x0000_0008, 0x2108_0001), // addi  t0, t0, 1
             (0x0000_000C, 0x2409_0001), // addiu t1, zero, 1
         ],
-        &mut cpu,
-        &mut bus,
     );
 
     assert_eq!(cpu.gpr[8], 0x7FFF_FFFF);
@@ -96,7 +92,6 @@ fn stops_on_overflow_and_preserves_destination_register() {
 
 #[test]
 fn applies_load_delay_and_handles_nested_loads() {
-    let mut ctx = ModCtx::default();
     let mut cpu = Cpu::default();
     let mut bus = Bus::default();
 
@@ -104,8 +99,8 @@ fn applies_load_delay_and_handles_nested_loads() {
     bus.store(0x24, 0x2222_2222u32.to_le_bytes()).unwrap();
 
     let res = compile_and_run(
-        &mut ctx,
-        0,
+        &mut cpu,
+        &mut bus,
         &[
             (0x0000_0000, 0x2408_0020), // addiu t0, zero, 0x20
             (0x0000_0004, 0x8D09_0000), // lw    t1, 0(t0)
@@ -114,8 +109,6 @@ fn applies_load_delay_and_handles_nested_loads() {
             (0x0000_0010, 0x0120_5821), // addu  t3, t1, zero
             (0x0000_0014, 0x0120_6021), // addu  t4, t1, zero
         ],
-        &mut cpu,
-        &mut bus,
     );
 
     // First dependent instruction must still see the old t1 value.
@@ -140,7 +133,6 @@ fn applies_load_delay_and_handles_nested_loads() {
 
 #[test]
 fn second_load_uses_old_base_when_it_depends_on_previous_load() {
-    let mut ctx = ModCtx::default();
     let mut cpu = Cpu::default();
     let mut bus = Bus::default();
 
@@ -149,8 +141,8 @@ fn second_load_uses_old_base_when_it_depends_on_previous_load() {
     bus.store(0x30, 0x2222_2222u32.to_le_bytes()).unwrap();
 
     let res = compile_and_run(
-        &mut ctx,
-        0,
+        &mut cpu,
+        &mut bus,
         &[
             (0x0000_0000, 0x2408_0020), // addiu t0, zero, 0x20
             (0x0000_0004, 0x8D09_0000), // lw    t1, 0(t0)
@@ -158,8 +150,6 @@ fn second_load_uses_old_base_when_it_depends_on_previous_load() {
             (0x0000_000C, 0x0120_5821), // addu  t3, t1, zero
             (0x0000_0010, 0x0140_6021), // addu  t4, t2, zero
         ],
-        &mut cpu,
-        &mut bus,
     );
 
     // The first load becomes visible only after the second load has already
@@ -184,13 +174,12 @@ fn second_load_uses_old_base_when_it_depends_on_previous_load() {
 
 #[test]
 fn taken_beq_returns_jump_and_executes_delay_slot() {
-    let mut ctx = ModCtx::default();
     let mut cpu = Cpu::default();
     let mut bus = Bus::default();
 
     let res = compile_and_run(
-        &mut ctx,
-        0,
+        &mut cpu,
+        &mut bus,
         &[
             (0x0000_0000, 0x2408_0001), // addiu t0, zero, 1
             (0x0000_0004, 0x2409_0001), // addiu t1, zero, 1
@@ -198,8 +187,6 @@ fn taken_beq_returns_jump_and_executes_delay_slot() {
             (0x0000_000C, 0x240A_0055), // addiu t2, zero, 0x55
             (0x0000_0010, 0x240B_0077), // addiu t3, zero, 0x77
         ],
-        &mut cpu,
-        &mut bus,
     );
 
     assert_eq!(cpu.gpr[10], 0x55);
@@ -219,13 +206,12 @@ fn taken_beq_returns_jump_and_executes_delay_slot() {
 
 #[test]
 fn not_taken_bne_still_executes_delay_slot_but_does_not_jump() {
-    let mut ctx = ModCtx::default();
     let mut cpu = Cpu::default();
     let mut bus = Bus::default();
 
     let res = compile_and_run(
-        &mut ctx,
-        0,
+        &mut cpu,
+        &mut bus,
         &[
             (0x0000_0000, 0x2408_0001), // addiu t0, zero, 1
             (0x0000_0004, 0x2409_0001), // addiu t1, zero, 1
@@ -233,8 +219,6 @@ fn not_taken_bne_still_executes_delay_slot_but_does_not_jump() {
             (0x0000_000C, 0x240A_0066), // addiu t2, zero, 0x66
             (0x0000_0010, 0x240B_0077), // addiu t3, zero, 0x77
         ],
-        &mut cpu,
-        &mut bus,
     );
 
     assert_eq!(cpu.gpr[10], 0x66);
@@ -254,19 +238,16 @@ fn not_taken_bne_still_executes_delay_slot_but_does_not_jump() {
 
 #[test]
 fn jal_sets_ra_and_reports_jump_target() {
-    let mut ctx = ModCtx::default();
     let mut cpu = Cpu::default();
     let mut bus = Bus::default();
 
     let res = compile_and_run(
-        &mut ctx,
-        0,
+        &mut cpu,
+        &mut bus,
         &[
             (0x0000_0000, 0x0C00_0008), // jal   0x20
             (0x0000_0004, 0x2408_0055), // addiu t0, zero, 0x55
         ],
-        &mut cpu,
-        &mut bus,
     );
 
     assert_eq!(cpu.gpr[8], 0x55);
@@ -286,20 +267,17 @@ fn jal_sets_ra_and_reports_jump_target() {
 
 #[test]
 fn jalr_uses_register_target_and_custom_link_register() {
-    let mut ctx = ModCtx::default();
     let mut cpu = Cpu::default();
     let mut bus = Bus::default();
 
     let res = compile_and_run(
-        &mut ctx,
-        0,
+        &mut cpu,
+        &mut bus,
         &[
             (0x0000_0000, 0x2409_0024), // addiu t1, zero, 0x24
             (0x0000_0004, 0x0120_8009), // jalr  s0, t1
             (0x0000_0008, 0x240A_0077), // addiu t2, zero, 0x77
         ],
-        &mut cpu,
-        &mut bus,
     );
 
     assert_eq!(cpu.gpr[10], 0x77);
