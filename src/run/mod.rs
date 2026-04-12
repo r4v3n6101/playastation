@@ -7,6 +7,7 @@ use crate::{
 
 mod decoder;
 pub mod interpreter;
+#[cfg(feature = "jit")]
 pub mod jit;
 
 #[derive(Debug)]

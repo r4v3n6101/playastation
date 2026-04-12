@@ -1,4 +1,4 @@
-use std::{fs, time::Instant};
+use std::{fs, panic::catch_unwind, time::Instant};
 
 use playastation::{
     interconnect::Bus,
@@ -16,17 +16,14 @@ fn test_bios_smoke_run() {
 
     let mut executor = CpuExecutor::<Interpreter>::default();
 
-    let instant = Instant::now();
-    for _ in 0..33868800 {
+    let now = Instant::now();
+    println!("Starts at {now:?}");
+
+    let _ = catch_unwind(move || {
+        println!("Executed at {:?}", Instant::now());
+    });
+
+    loop {
         executor.run(&mut bus);
     }
-
-    println!("Executed in {:?}", instant.elapsed());
-
-    println!(
-        "Cause: {:?}, Status: {:?}, bad_vaddr: {}",
-        executor.cpu.cop0.cause(),
-        executor.cpu.cop0.status(),
-        executor.cpu.cop0.regs[8]
-    );
 }

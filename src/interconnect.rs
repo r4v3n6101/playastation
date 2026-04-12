@@ -124,7 +124,11 @@ impl Bus {
             x if DMA_CTRL.contains(&x) => {
                 self.dma_ctrl.read(&mut bytes, x - DMA_CTRL.start);
             }
-            x if HW_REGS.contains(&x) => {}
+            x if HW_REGS.contains(&x) => {
+                if x == 0x1F801814 || addr == 0x1F801814 {
+                    panic!("GPUSTAT");
+                }
+            }
             _ => {
                 return Err(BusError {
                     bad_vaddr: addr,

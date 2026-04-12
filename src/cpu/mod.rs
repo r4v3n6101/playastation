@@ -20,7 +20,7 @@ pub struct Cpu {
     /// Pending jump (aka branch delay slot).
     pub pending_jump: PendingJump,
 
-    // Soprocessors
+    // Coprocessors
     pub cop0: Cop0,
 }
 

@@ -93,7 +93,7 @@ impl Executor for Jit {
 
         let fnptr = self.compiler.module.get_finalized_function(fn_name);
 
-        // Safety: compiled with suchs signature
+        // Safety: compiled with such signature
         let func: FnPtr = unsafe { mem::transmute(fnptr) };
 
         func(
