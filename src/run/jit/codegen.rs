@@ -1,6 +1,10 @@
-use std::mem::offset_of;
+use std::{
+    mem::{self, offset_of},
+    ptr,
+};
 
 use cranelift::{
+    codegen::ir::SigRef,
     jit::JITModule,
     module::{FuncId, Linkage, Module},
     prelude::{AbiParam, FunctionBuilder, InstBuilder, IntCC, MemFlags, Value, types},
@@ -8,7 +12,7 @@ use cranelift::{
 
 use crate::cpu::{Cpu, Exception, Opcode};
 
-use super::{ExecutionResult, FuncResult, Storage, stubs};
+use super::{CompilerCtx, ExecutionResult, stubs};
 
 pub struct FnCtx<'module> {
     module: &'module JITModule,
@@ -18,33 +22,44 @@ pub struct FnCtx<'module> {
     builder: FunctionBuilder<'module>,
     /// Function name in form of an Id
     name: FuncId,
+
     /// Output result
     res_ptr: Value,
     /// CPU state
     cpu_ptr: Value,
     /// Bus
     bus_ptr: Value,
+
     /// PC of last emitted op
     last_pc: u32,
     /// Same as above, but for delay slot
     last_in_delay_slot: bool,
+
+    /// Stubs cache
+    stubs: Stubs,
+}
+
+struct Stubs {
+    bus_load_fnref: SigRef,
+    bus_store_fnref: SigRef,
+    rfe_fnref: SigRef,
 }
 
 impl<'a> FnCtx<'a> {
-    pub fn create_and_emit_header(storage: &'a mut Storage, enter_pc: u32) -> Self {
-        let ptr_ty = storage.module.target_config().pointer_type();
+    pub fn create_and_emit_header(compiler: &'a mut CompilerCtx, enter_pc: u32) -> Self {
+        let ptr_ty = compiler.module.target_config().pointer_type();
 
-        let mut sig = storage.module.make_signature();
+        let mut sig = compiler.module.make_signature();
         sig.params.push(AbiParam::new(ptr_ty)); // *mut res
         sig.params.push(AbiParam::new(ptr_ty)); // *mut cpu
         sig.params.push(AbiParam::new(ptr_ty)); // *mut bus
 
-        let name = storage
+        let name = compiler
             .module
             .declare_function(&format!("enter_{enter_pc:#}"), Linkage::Local, &sig)
             .unwrap();
 
-        let mut builder = FunctionBuilder::new(&mut storage.ctx.func, &mut storage.fn_build_ctx);
+        let mut builder = FunctionBuilder::new(&mut compiler.ctx.func, &mut compiler.fn_build_ctx);
         builder.func.signature = sig;
 
         let entry = builder.create_block();
@@ -55,22 +70,59 @@ impl<'a> FnCtx<'a> {
         let cpu_ptr = builder.block_params(entry)[1];
         let bus_ptr = builder.block_params(entry)[2];
 
+        let bus_load_fnref = {
+            let mut sig = compiler.module.make_signature();
+            sig.params.push(AbiParam::new(ptr_ty));
+            sig.params.push(AbiParam::new(ptr_ty));
+            sig.params.push(AbiParam::new(ptr_ty));
+            sig.params.push(AbiParam::new(ptr_ty));
+            sig.params.push(AbiParam::new(types::I32));
+            sig.returns.push(AbiParam::new(types::I8));
+
+            builder.import_signature(sig)
+        };
+        let bus_store_fnref = {
+            let mut sig = compiler.module.make_signature();
+            sig.params.push(AbiParam::new(ptr_ty));
+            sig.params.push(AbiParam::new(ptr_ty));
+            sig.params.push(AbiParam::new(ptr_ty));
+            sig.params.push(AbiParam::new(types::I32));
+            sig.params.push(AbiParam::new(types::I32));
+            sig.returns.push(AbiParam::new(types::I8));
+
+            builder.import_signature(sig)
+        };
+        let rfe_fnref = {
+            let mut sig = compiler.module.make_signature();
+            sig.params.push(AbiParam::new(ptr_ty));
+
+            builder.import_signature(sig)
+        };
+
         Self {
             builder,
             name,
             res_ptr,
             cpu_ptr,
             bus_ptr,
+            module: &compiler.module,
+
             last_pc: enter_pc,
             last_in_delay_slot: false,
-            module: &storage.module,
+
             // At the start of block assume pending load, so codegen will be generated
             pending_load_delay_gen: true,
+
+            stubs: Stubs {
+                bus_load_fnref,
+                bus_store_fnref,
+                rfe_fnref,
+            },
         }
     }
 
     pub fn emit_trailer(&mut self) {
-        self.emit_return(None, None, None);
+        self.emit_return(None, None);
     }
 
     pub fn finalize(mut self) -> FuncId {
@@ -80,7 +132,7 @@ impl<'a> FnCtx<'a> {
         self.name
     }
 
-    pub fn emit_exception(&mut self, pc: u32, in_delay_slot: bool, exc: Exception) {
+    pub fn emit_exception(&mut self, pc: u32, in_delay_slot: bool, exception: Exception) {
         self.last_pc = pc;
         self.last_in_delay_slot = in_delay_slot;
 
@@ -91,24 +143,7 @@ impl<'a> FnCtx<'a> {
             None
         };
 
-        let (res, bad_vaddr) = match exc {
-            Exception::UnalignedLoad { bad_vaddr } => {
-                (ExecutionResult::UnalignedLoad, Some(bad_vaddr))
-            }
-            Exception::UnalignedStore { bad_vaddr } => {
-                (ExecutionResult::UnalignedStore, Some(bad_vaddr))
-            }
-            Exception::InstructionBus { bad_vaddr } => {
-                (ExecutionResult::InstructionBus, Some(bad_vaddr))
-            }
-            Exception::DataBus { bad_vaddr } => (ExecutionResult::DataBus, Some(bad_vaddr)),
-            Exception::Syscall => (ExecutionResult::Syscall, None),
-            Exception::Break => (ExecutionResult::Break, None),
-            Exception::ReservedInstruction => (ExecutionResult::ReservedInstruction, None),
-            // Other never parsed or handled from another place
-            _ => unreachable!(),
-        };
-        self.emit_return(Some(res), bad_vaddr, load_delay_slot);
+        self.emit_return(Some(exception), load_delay_slot);
     }
 
     pub fn emit_op(&mut self, pc: u32, in_delay_slot: bool, ins: u32, op: Opcode) {
@@ -137,64 +172,96 @@ impl<'a> FnCtx<'a> {
             None
         };
         match op {
-            Opcode::Add => self.emit_alu_overflow_op(
-                rd,
-                rs,
-                rt,
-                None,
-                |b, x, y| b.ins().sadd_overflow(x, y),
-                load_delay_slot,
-            ),
-            Opcode::Addu => self.emit_alu_op(rd, rs, rt, None, None, |b, x, y| b.ins().iadd(x, y)),
-            Opcode::Sub => self.emit_alu_overflow_op(
-                rd,
-                rs,
-                rt,
-                None,
-                |b, x, y| b.ins().ssub_overflow(x, y),
-                load_delay_slot,
-            ),
-            Opcode::Subu => self.emit_alu_op(rd, rs, rt, None, None, |b, x, y| b.ins().isub(x, y)),
-            Opcode::And => self.emit_alu_op(rd, rs, rt, None, None, |b, x, y| b.ins().band(x, y)),
-            Opcode::Or => self.emit_alu_op(rd, rs, rt, None, None, |b, x, y| b.ins().bor(x, y)),
-            Opcode::Xor => self.emit_alu_op(rd, rs, rt, None, None, |b, x, y| b.ins().bxor(x, y)),
-            Opcode::Nor => self.emit_alu_op(rd, rs, rt, None, None, |b, x, y| {
-                let or = b.ins().bor(x, y);
-                b.ins().bnot(or)
-            }),
-            Opcode::Slt => self.emit_alu_op(rd, rs, rt, None, None, |b, x, y| {
-                let cond = b.ins().icmp(IntCC::SignedLessThan, x, y);
-                let one = b.ins().iconst(types::I32, 1);
-                let zero = b.ins().iconst(types::I32, 0);
-                b.ins().select(cond, one, zero)
-            }),
-            Opcode::Sltu => self.emit_alu_op(rd, rs, rt, None, None, |b, x, y| {
-                let cond = b.ins().icmp(IntCC::UnsignedLessThan, x, y);
-                let one = b.ins().iconst(types::I32, 1);
-                let zero = b.ins().iconst(types::I32, 0);
-                b.ins().select(cond, one, zero)
-            }),
-            Opcode::Sll => self.emit_alu_op(rd, rs, rt, Some(i64::from(shamt)), None, |b, x, y| {
-                b.ins().ishl(x, y)
-            }),
-            Opcode::Srl => self.emit_alu_op(rd, rs, rt, Some(i64::from(shamt)), None, |b, x, y| {
-                b.ins().ushr(x, y)
-            }),
-            Opcode::Sra => self.emit_alu_op(rd, rs, rt, Some(i64::from(shamt)), None, |b, x, y| {
-                b.ins().sshr(x, y)
-            }),
-            Opcode::Sllv => self.emit_alu_op(rd, rs, rt, None, None, |b, x, y| {
-                let var = b.ins().band_imm(y, 0x1F);
-                b.ins().ishl(x, var)
-            }),
-            Opcode::Srlv => self.emit_alu_op(rd, rs, rt, None, None, |b, x, y| {
-                let var = b.ins().band_imm(y, 0x1F);
-                b.ins().ushr(x, var)
-            }),
-            Opcode::Srav => self.emit_alu_op(rd, rs, rt, None, None, |b, x, y| {
-                let var = b.ins().band_imm(y, 0x1F);
-                b.ins().sshr(x, var)
-            }),
+            Opcode::Add => {
+                self.emit_alu_overflow_op(
+                    rd,
+                    rs,
+                    rt,
+                    None,
+                    |b, x, y| b.ins().sadd_overflow(x, y),
+                    load_delay_slot,
+                );
+            }
+            Opcode::Addu => {
+                self.emit_alu_op(rd, rs, rt, None, None, |b, x, y| b.ins().iadd(x, y));
+            }
+            Opcode::Sub => {
+                self.emit_alu_overflow_op(
+                    rd,
+                    rs,
+                    rt,
+                    None,
+                    |b, x, y| b.ins().ssub_overflow(x, y),
+                    load_delay_slot,
+                );
+            }
+            Opcode::Subu => {
+                self.emit_alu_op(rd, rs, rt, None, None, |b, x, y| b.ins().isub(x, y));
+            }
+            Opcode::And => {
+                self.emit_alu_op(rd, rs, rt, None, None, |b, x, y| b.ins().band(x, y));
+            }
+            Opcode::Or => {
+                self.emit_alu_op(rd, rs, rt, None, None, |b, x, y| b.ins().bor(x, y));
+            }
+            Opcode::Xor => {
+                self.emit_alu_op(rd, rs, rt, None, None, |b, x, y| b.ins().bxor(x, y));
+            }
+            Opcode::Nor => {
+                self.emit_alu_op(rd, rs, rt, None, None, |b, x, y| {
+                    let or = b.ins().bor(x, y);
+                    b.ins().bnot(or)
+                });
+            }
+            Opcode::Slt => {
+                self.emit_alu_op(rd, rs, rt, None, None, |b, x, y| {
+                    let cond = b.ins().icmp(IntCC::SignedLessThan, x, y);
+                    let one = b.ins().iconst(types::I32, 1);
+                    let zero = b.ins().iconst(types::I32, 0);
+                    b.ins().select(cond, one, zero)
+                });
+            }
+            Opcode::Sltu => {
+                self.emit_alu_op(rd, rs, rt, None, None, |b, x, y| {
+                    let cond = b.ins().icmp(IntCC::UnsignedLessThan, x, y);
+                    let one = b.ins().iconst(types::I32, 1);
+                    let zero = b.ins().iconst(types::I32, 0);
+                    b.ins().select(cond, one, zero)
+                });
+            }
+            Opcode::Sll => {
+                self.emit_alu_op(rd, rs, rt, Some(i64::from(shamt)), None, |b, x, y| {
+                    b.ins().ishl(x, y)
+                });
+            }
+            Opcode::Srl => {
+                self.emit_alu_op(rd, rs, rt, Some(i64::from(shamt)), None, |b, x, y| {
+                    b.ins().ushr(x, y)
+                });
+            }
+            Opcode::Sra => {
+                self.emit_alu_op(rd, rs, rt, Some(i64::from(shamt)), None, |b, x, y| {
+                    b.ins().sshr(x, y)
+                });
+            }
+            Opcode::Sllv => {
+                self.emit_alu_op(rd, rs, rt, None, None, |b, x, y| {
+                    let var = b.ins().band_imm(y, 0x1F);
+                    b.ins().ishl(x, var)
+                });
+            }
+            Opcode::Srlv => {
+                self.emit_alu_op(rd, rs, rt, None, None, |b, x, y| {
+                    let var = b.ins().band_imm(y, 0x1F);
+                    b.ins().ushr(x, var)
+                });
+            }
+            Opcode::Srav => {
+                self.emit_alu_op(rd, rs, rt, None, None, |b, x, y| {
+                    let var = b.ins().band_imm(y, 0x1F);
+                    b.ins().sshr(x, var)
+                });
+            }
             Opcode::Addi => {
                 self.emit_alu_overflow_op(
                     rd,
@@ -208,7 +275,7 @@ impl<'a> FnCtx<'a> {
             Opcode::Addiu => {
                 self.emit_alu_op(rd, rs, rt, None, Some(i64::from(imm_sext)), |b, x, y| {
                     b.ins().iadd(x, y)
-                })
+                });
             }
             Opcode::Slti => {
                 self.emit_alu_op(rd, rs, rt, None, Some(i64::from(imm_sext)), |b, x, y| {
@@ -216,7 +283,7 @@ impl<'a> FnCtx<'a> {
                     let one = b.ins().iconst(types::I32, 1);
                     let zero = b.ins().iconst(types::I32, 0);
                     b.ins().select(cond, one, zero)
-                })
+                });
             }
             Opcode::Sltiu => {
                 self.emit_alu_op(rd, rs, rt, None, Some(i64::from(imm_sext)), |b, x, y| {
@@ -224,17 +291,23 @@ impl<'a> FnCtx<'a> {
                     let one = b.ins().iconst(types::I32, 1);
                     let zero = b.ins().iconst(types::I32, 0);
                     b.ins().select(cond, one, zero)
-                })
+                });
             }
-            Opcode::Andi => self.emit_alu_op(rd, rs, rt, None, Some(i64::from(imm)), |b, x, y| {
-                b.ins().band(x, y)
-            }),
-            Opcode::Ori => self.emit_alu_op(rd, rs, rt, None, Some(i64::from(imm)), |b, x, y| {
-                b.ins().bor(x, y)
-            }),
-            Opcode::Xori => self.emit_alu_op(rd, rs, rt, None, Some(i64::from(imm)), |b, x, y| {
-                b.ins().bxor(x, y)
-            }),
+            Opcode::Andi => {
+                self.emit_alu_op(rd, rs, rt, None, Some(i64::from(imm)), |b, x, y| {
+                    b.ins().band(x, y)
+                });
+            }
+            Opcode::Ori => {
+                self.emit_alu_op(rd, rs, rt, None, Some(i64::from(imm)), |b, x, y| {
+                    b.ins().bor(x, y)
+                });
+            }
+            Opcode::Xori => {
+                self.emit_alu_op(rd, rs, rt, None, Some(i64::from(imm)), |b, x, y| {
+                    b.ins().bxor(x, y)
+                });
+            }
             Opcode::Lui => {
                 if rt != 0 {
                     let val = self.builder.ins().iconst(types::I32, i64::from(imm) << 16);
@@ -413,7 +486,7 @@ impl<'a> FnCtx<'a> {
             Opcode::Multu => {
                 let rs = self.load_reg(Reg::General(rs));
                 let rt = self.load_reg(Reg::General(rt));
-                let hi = self.builder.ins().smulhi(rs, rt);
+                let hi = self.builder.ins().umulhi(rs, rt);
                 let lo = self.builder.ins().imul(rs, rt);
 
                 self.store_reg(Reg::Hi, hi);
@@ -519,16 +592,13 @@ impl<'a> FnCtx<'a> {
                     (stubs::rfe as *const u8).addr().cast_signed() as i64,
                 );
 
-                let mut sig = self.module.make_signature();
-                sig.params.push(AbiParam::new(ptr_ty));
-
-                let sigref = self.builder.import_signature(sig);
                 self.builder
                     .ins()
-                    .call_indirect(sigref, fn_ptr, &[self.cpu_ptr]);
+                    .call_indirect(self.stubs.rfe_fnref, fn_ptr, &[self.cpu_ptr]);
             }
             _ => todo!(),
         }
+
         if let Some(load_delay_slot) = load_delay_slot {
             self.commit_load_delay(load_delay_slot);
         }
@@ -611,7 +681,7 @@ impl<'a> FnCtx<'a> {
         {
             self.builder.set_cold_block(ov);
             self.builder.switch_to_block(ov);
-            self.emit_return(Some(ExecutionResult::Overflow), None, load_delay_slot);
+            self.emit_return(Some(Exception::Overflow), load_delay_slot);
         }
         {
             self.builder.switch_to_block(ok);
@@ -637,22 +707,11 @@ impl<'a> FnCtx<'a> {
             .ins()
             .iconst(ptr_ty, fn_ptr.addr().cast_signed() as i64);
         let dest = self.builder.ins().iconst(ptr_ty, rt.cast_signed() as i64);
-        let call = {
-            let mut sig = self.module.make_signature();
-            sig.params.push(AbiParam::new(ptr_ty));
-            sig.params.push(AbiParam::new(ptr_ty));
-            sig.params.push(AbiParam::new(ptr_ty));
-            sig.params.push(AbiParam::new(ptr_ty));
-            sig.params.push(AbiParam::new(types::I32));
-            sig.returns.push(AbiParam::new(types::I8));
-
-            let sigref = self.builder.import_signature(sig);
-            self.builder.ins().call_indirect(
-                sigref,
-                fn_ptr,
-                &[self.res_ptr, self.cpu_ptr, self.bus_ptr, dest, addr],
-            )
-        };
+        let call = self.builder.ins().call_indirect(
+            self.stubs.bus_load_fnref,
+            fn_ptr,
+            &[self.res_ptr, self.cpu_ptr, self.bus_ptr, dest, addr],
+        );
         let result = self.builder.inst_results(call)[0];
 
         let failed = self
@@ -666,7 +725,7 @@ impl<'a> FnCtx<'a> {
         {
             self.builder.set_cold_block(fail);
             self.builder.switch_to_block(fail);
-            self.emit_return(None, None, load_delay_slot);
+            self.emit_return(None, load_delay_slot);
         }
         {
             self.builder.switch_to_block(ok);
@@ -689,22 +748,11 @@ impl<'a> FnCtx<'a> {
             .ins()
             .iconst(ptr_ty, fn_ptr.addr().cast_signed() as i64);
 
-        let call = {
-            let mut sig = self.module.make_signature();
-            sig.params.push(AbiParam::new(ptr_ty));
-            sig.params.push(AbiParam::new(ptr_ty));
-            sig.params.push(AbiParam::new(ptr_ty));
-            sig.params.push(AbiParam::new(types::I32));
-            sig.params.push(AbiParam::new(types::I32));
-            sig.returns.push(AbiParam::new(types::I8));
-
-            let sigref = self.builder.import_signature(sig);
-            self.builder.ins().call_indirect(
-                sigref,
-                fn_ptr,
-                &[self.res_ptr, self.cpu_ptr, self.bus_ptr, addr, value],
-            )
-        };
+        let call = self.builder.ins().call_indirect(
+            self.stubs.bus_store_fnref,
+            fn_ptr,
+            &[self.res_ptr, self.cpu_ptr, self.bus_ptr, addr, value],
+        );
         let status = self.builder.inst_results(call)[0];
 
         let failed = self
@@ -718,7 +766,7 @@ impl<'a> FnCtx<'a> {
         {
             self.builder.set_cold_block(fail);
             self.builder.switch_to_block(fail);
-            self.emit_return(None, None, load_delay_slot);
+            self.emit_return(None, load_delay_slot);
         }
         {
             self.builder.switch_to_block(ok);
@@ -775,45 +823,46 @@ impl<'a> FnCtx<'a> {
             self.store_reg(Reg::General(link_reg), link_addr);
         }
 
+        let true_ = self.builder.ins().iconst(types::I8, i64::from(true));
+        self.builder.ins().store(
+            MemFlags::new(),
+            true_,
+            self.cpu_ptr,
+            offset_of!(Cpu, pending_jump.happen).cast_signed() as i32,
+        );
         self.builder.ins().store(
             MemFlags::new(),
             target,
-            self.res_ptr,
-            offset_of!(FuncResult, jump_addr).cast_signed() as i32,
-        );
-        let result = self.builder.ins().iconst(
-            types::I32,
-            i64::from((ExecutionResult::Jump as u32).cast_signed()),
-        );
-        self.builder.ins().store(
-            MemFlags::new(),
-            result,
-            self.res_ptr,
-            offset_of!(FuncResult, result).cast_signed() as i32,
+            self.cpu_ptr,
+            offset_of!(Cpu, pending_jump.target).cast_signed() as i32,
         );
     }
 
     fn emit_return(
         &mut self,
-        err: Option<ExecutionResult>,
-        bad_vaddr: Option<u32>,
+        exception: Option<Exception>,
         load_delay_slot: Option<(Value, Value)>,
     ) {
         if let Some(load_delay_slot) = load_delay_slot {
             self.commit_load_delay(load_delay_slot);
         }
 
-        if let Some(bad_vaddr) = bad_vaddr {
-            let bad_vaddr = self
-                .builder
-                .ins()
-                .iconst(types::I32, i64::from(bad_vaddr.cast_signed()));
-            self.builder.ins().store(
-                MemFlags::new(),
-                bad_vaddr,
-                self.res_ptr,
-                offset_of!(FuncResult, bad_vaddr).cast_signed() as i32,
-            );
+        if let Some(exception) = exception {
+            let raw_exception = ptr::from_ref(&exception).cast::<u8>();
+            for i in 0..mem::size_of_val(&exception) {
+                let byte = self.builder.ins().iconst(
+                    types::I8,
+                    // Safety: just write byte by byte, using correct size_of_val, so no overflows
+                    // or invalid memory region
+                    i64::from(unsafe { *raw_exception.byte_add(i) }.cast_signed()),
+                );
+                self.builder.ins().store(
+                    MemFlags::new(),
+                    byte,
+                    self.res_ptr,
+                    (offset_of!(ExecutionResult, exception) + i).cast_signed() as i32,
+                );
+            }
         }
 
         let pc = self
@@ -824,7 +873,7 @@ impl<'a> FnCtx<'a> {
             MemFlags::new(),
             pc,
             self.res_ptr,
-            offset_of!(FuncResult, last_pc).cast_signed() as i32,
+            offset_of!(ExecutionResult, last_pc).cast_signed() as i32,
         );
 
         let in_delay_slot = self
@@ -835,22 +884,8 @@ impl<'a> FnCtx<'a> {
             MemFlags::new(),
             in_delay_slot,
             self.res_ptr,
-            offset_of!(FuncResult, last_in_delay_slot).cast_signed() as i32,
+            offset_of!(ExecutionResult, last_in_delay_slot).cast_signed() as i32,
         );
-
-        // Force error set
-        if let Some(err) = err {
-            let result = self
-                .builder
-                .ins()
-                .iconst(types::I32, (err as u64).cast_signed());
-            self.builder.ins().store(
-                MemFlags::new(),
-                result,
-                self.res_ptr,
-                offset_of!(FuncResult, result).cast_signed() as i32,
-            );
-        }
 
         // Bye!
         self.builder.ins().return_(&[]);
@@ -874,7 +909,7 @@ impl<'a> FnCtx<'a> {
             .store(MemFlags::new(), load_delay_val, addr, 0);
 
         // Zeroize gpr[0] in case something was written in previous op
-        let zero = self.builder.ins().iconst(ptr_ty, 0);
+        let zero = self.builder.ins().iconst(types::I32, 0);
         self.builder.ins().store(
             MemFlags::new(),
             zero,

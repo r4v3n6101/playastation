@@ -7,7 +7,7 @@ use crate::{
 
 mod decoder;
 pub mod interpreter;
-// pub mod jit;
+pub mod jit;
 
 #[derive(Debug)]
 pub struct CpuExecutor<E> {
@@ -29,7 +29,7 @@ pub trait Executor {
     ) -> ExecutionResult;
 }
 
-#[derive(Debug, Default, Copy, Clone)]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
 pub struct ExecutionResult {
     pub last_pc: u32,
     pub last_in_delay_slot: bool,

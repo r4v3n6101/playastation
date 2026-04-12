@@ -44,7 +44,7 @@ pub struct Cop0 {
     pub regs: [u32; 32],
 }
 
-#[derive(EnumDiscriminants, Debug, Copy, Clone)]
+#[derive(EnumDiscriminants, Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(u32)]
 pub enum Exception {
     Interrupt = 0x00,

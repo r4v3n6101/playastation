@@ -1,12 +1,12 @@
 use crate::{
-    cpu::{Cpu, PendingLoad},
+    cpu::{Cpu, Exception, PendingLoad},
     interconnect::{Bus, BusError, BusErrorKind},
 };
 
-use super::{ExecutionResult, FuncResult};
+use super::ExecutionResult;
 
 pub extern "C" fn bus_load<const SIZE: usize, const SIGNED: bool>(
-    res: *mut FuncResult,
+    res: *mut ExecutionResult,
     cpu: *mut Cpu,
     bus: *mut Bus,
     dest: usize,
@@ -37,28 +37,25 @@ pub extern "C" fn bus_load<const SIZE: usize, const SIGNED: bool>(
     } {
         Ok(read) => {
             cpu.pending_load = PendingLoad { dest, value: read };
-
-            res.result = ExecutionResult::Success;
             0
         }
         Err(BusError {
             bad_vaddr,
             kind: BusErrorKind::UnalignedAddr,
         }) => {
-            res.result = ExecutionResult::UnalignedLoad;
-            res.bad_vaddr = bad_vaddr;
+            res.exception
+                .replace(Exception::UnalignedLoad { bad_vaddr });
             -1
         }
         Err(BusError { bad_vaddr, .. }) => {
-            res.result = ExecutionResult::DataBus;
-            res.bad_vaddr = bad_vaddr;
+            res.exception.replace(Exception::DataBus { bad_vaddr });
             -2
         }
     }
 }
 
 pub extern "C" fn bus_store<const SIZE: usize>(
-    res: *mut FuncResult,
+    res: *mut ExecutionResult,
     cpu: *mut Cpu,
     bus: *mut Bus,
     addr: u32,
@@ -81,21 +78,17 @@ pub extern "C" fn bus_store<const SIZE: usize>(
         4 => bus.store(addr, val.to_le_bytes()),
         _ => unreachable!(),
     } {
-        Ok(()) => {
-            res.result = ExecutionResult::Success;
-            0
-        }
+        Ok(()) => 0,
         Err(BusError {
             bad_vaddr,
             kind: BusErrorKind::UnalignedAddr,
         }) => {
-            res.result = ExecutionResult::UnalignedStore;
-            res.bad_vaddr = bad_vaddr;
+            res.exception
+                .replace(Exception::UnalignedStore { bad_vaddr });
             -1
         }
         Err(BusError { bad_vaddr, .. }) => {
-            res.result = ExecutionResult::DataBus;
-            res.bad_vaddr = bad_vaddr;
+            res.exception.replace(Exception::DataBus { bad_vaddr });
             -2
         }
     }
@@ -103,7 +96,5 @@ pub extern "C" fn bus_store<const SIZE: usize>(
 
 pub extern "C" fn rfe(cpu: *mut Cpu) {
     // Safety: ptr-s are valid, since passed from compiled code.
-    let cpu = unsafe { &mut *cpu };
-
-    cpu.cop0.exception_leave();
+    unsafe { &mut *cpu }.cop0.exception_leave();
 }
