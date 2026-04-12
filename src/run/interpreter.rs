@@ -19,6 +19,8 @@ impl Executor for Interpreter {
             exception: None,
         };
         for ins in ins_block {
+            let load_delay_slot = mem::take(&mut cpu.pending_load);
+
             match *ins {
                 Operation::Instruction {
                     pc,
@@ -28,7 +30,14 @@ impl Executor for Interpreter {
                 } => {
                     result.last_pc = pc;
                     result.last_in_delay_slot = in_delay_slot;
-                    if let Err(exception) = execute(pc, ins, op, cpu, bus) {
+
+                    let res = execute(&mut result, ins, op, cpu, bus);
+
+                    // Store pending load even if execution fails
+                    cpu.gpr[load_delay_slot.dest] = load_delay_slot.value;
+                    cpu.gpr[0] = 0;
+
+                    if let Err(exception) = res {
                         result.exception.replace(exception);
                         break;
                     }
@@ -41,6 +50,11 @@ impl Executor for Interpreter {
                     result.last_pc = pc;
                     result.last_in_delay_slot = in_delay_slot;
                     result.exception.replace(exception);
+
+                    // Exception behaves like an instruction, commiting pending load
+                    cpu.gpr[load_delay_slot.dest] = load_delay_slot.value;
+                    cpu.gpr[0] = 0;
+
                     break;
                 }
             }
@@ -50,9 +64,13 @@ impl Executor for Interpreter {
     }
 }
 
-fn execute(pc: u32, ins: u32, op: Opcode, cpu: &mut Cpu, bus: &mut Bus) -> Result<(), Exception> {
-    let load_delay_slot = mem::take(&mut cpu.pending_load);
-
+fn execute(
+    result: &mut ExecutionResult,
+    ins: u32,
+    op: Opcode,
+    cpu: &mut Cpu,
+    bus: &mut Bus,
+) -> Result<(), Exception> {
     let rs = ((ins >> 21) & 0x1F) as usize;
     let rt = ((ins >> 16) & 0x1F) as usize;
     let rd = ((ins >> 11) & 0x1F) as usize;
@@ -298,53 +316,77 @@ fn execute(pc: u32, ins: u32, op: Opcode, cpu: &mut Cpu, bus: &mut Bus) -> Resul
         Opcode::Beq => {
             cpu.pending_jump = PendingJump {
                 happen: cpu.gpr[rs] == cpu.gpr[rt],
-                target: pc.wrapping_add(4).wrapping_add_signed(imm_sext << 2),
+                target: result
+                    .last_pc
+                    .wrapping_add(4)
+                    .wrapping_add_signed(imm_sext << 2),
             };
         }
         Opcode::Bne => {
             cpu.pending_jump = PendingJump {
                 happen: cpu.gpr[rs] != cpu.gpr[rt],
-                target: pc.wrapping_add(4).wrapping_add_signed(imm_sext << 2),
+                target: result
+                    .last_pc
+                    .wrapping_add(4)
+                    .wrapping_add_signed(imm_sext << 2),
             };
         }
         Opcode::Bgez => {
             cpu.pending_jump = PendingJump {
                 happen: cpu.gpr[rs].cast_signed() >= 0,
-                target: pc.wrapping_add(4).wrapping_add_signed(imm_sext << 2),
+                target: result
+                    .last_pc
+                    .wrapping_add(4)
+                    .wrapping_add_signed(imm_sext << 2),
             };
         }
         Opcode::Blez => {
             cpu.pending_jump = PendingJump {
                 happen: cpu.gpr[rs].cast_signed() <= 0,
-                target: pc.wrapping_add(4).wrapping_add_signed(imm_sext << 2),
+                target: result
+                    .last_pc
+                    .wrapping_add(4)
+                    .wrapping_add_signed(imm_sext << 2),
             };
         }
         Opcode::Bgtz => {
             cpu.pending_jump = PendingJump {
                 happen: cpu.gpr[rs].cast_signed() > 0,
-                target: pc.wrapping_add(4).wrapping_add_signed(imm_sext << 2),
+                target: result
+                    .last_pc
+                    .wrapping_add(4)
+                    .wrapping_add_signed(imm_sext << 2),
             };
         }
         Opcode::Bltz => {
             cpu.pending_jump = PendingJump {
                 happen: cpu.gpr[rs].cast_signed() < 0,
-                target: pc.wrapping_add(4).wrapping_add_signed(imm_sext << 2),
+                target: result
+                    .last_pc
+                    .wrapping_add(4)
+                    .wrapping_add_signed(imm_sext << 2),
             };
         }
         Opcode::Bgezal => {
-            cpu.gpr[Cpu::DEFAULT_LINK_REG] = pc + 8;
+            cpu.gpr[Cpu::DEFAULT_LINK_REG] = result.last_pc.wrapping_add(8);
 
             cpu.pending_jump = PendingJump {
                 happen: cpu.gpr[rs].cast_signed() >= 0,
-                target: pc.wrapping_add(4).wrapping_add_signed(imm_sext << 2),
+                target: result
+                    .last_pc
+                    .wrapping_add(4)
+                    .wrapping_add_signed(imm_sext << 2),
             };
         }
         Opcode::Bltzal => {
-            cpu.gpr[Cpu::DEFAULT_LINK_REG] = pc + 8;
+            cpu.gpr[Cpu::DEFAULT_LINK_REG] = result.last_pc.wrapping_add(8);
 
             cpu.pending_jump = PendingJump {
                 happen: cpu.gpr[rs].cast_signed() < 0,
-                target: pc.wrapping_add(4).wrapping_add_signed(imm_sext << 2),
+                target: result
+                    .last_pc
+                    .wrapping_add(4)
+                    .wrapping_add_signed(imm_sext << 2),
             };
         }
 
@@ -352,15 +394,15 @@ fn execute(pc: u32, ins: u32, op: Opcode, cpu: &mut Cpu, bus: &mut Bus) -> Resul
         Opcode::J => {
             cpu.pending_jump = PendingJump {
                 happen: true,
-                target: (pc.wrapping_add(4) & 0xF000_0000) | (target << 2),
+                target: (result.last_pc.wrapping_add(4) & 0xF000_0000) | (target << 2),
             };
         }
         Opcode::Jal => {
-            cpu.gpr[Cpu::DEFAULT_LINK_REG] = pc.wrapping_add(8);
+            cpu.gpr[Cpu::DEFAULT_LINK_REG] = result.last_pc.wrapping_add(8);
 
             cpu.pending_jump = PendingJump {
                 happen: true,
-                target: (pc.wrapping_add(4) & 0xF000_0000) | (target << 2),
+                target: (result.last_pc.wrapping_add(4) & 0xF000_0000) | (target << 2),
             };
         }
         Opcode::Jr => {
@@ -370,7 +412,7 @@ fn execute(pc: u32, ins: u32, op: Opcode, cpu: &mut Cpu, bus: &mut Bus) -> Resul
             };
         }
         Opcode::Jalr => {
-            cpu.gpr[rd] = pc.wrapping_add(8);
+            cpu.gpr[rd] = result.last_pc.wrapping_add(8);
             cpu.pending_jump = PendingJump {
                 happen: true,
                 target: cpu.gpr[rs],
@@ -451,9 +493,6 @@ fn execute(pc: u32, ins: u32, op: Opcode, cpu: &mut Cpu, bus: &mut Bus) -> Resul
         Opcode::Break => return Err(Exception::Break),
         Opcode::Syscall => return Err(Exception::Syscall),
     }
-
-    cpu.gpr[load_delay_slot.dest] = load_delay_slot.value;
-    cpu.gpr[0] = 0;
 
     Ok(())
 }

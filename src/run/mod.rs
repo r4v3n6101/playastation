@@ -73,7 +73,7 @@ where
                 exception: Some(Exception::Interrupt),
             });
 
-        // Interrupt changes flow like it's an error in the last op
+        // Interrupt changes flow like it's an error occurred in the last op
         let execution = interrupt.unwrap_or(execution);
         if let Some(exception) = execution.exception {
             self.cpu.cop0.exception_enter(
@@ -83,10 +83,9 @@ where
             );
             self.cpu.pc = self.cpu.cop0.exception_handler();
 
-            // Commit, so exception handler could see last load
-            let load_delay_slot = mem::take(&mut self.cpu.pending_load);
-            self.cpu.gpr[load_delay_slot.dest] = load_delay_slot.value;
-            self.cpu.gpr[0] = 0;
+            // Clear out pending ops, will re-execute them later again
+            let _ = mem::take(&mut self.cpu.pending_load);
+            let _ = mem::take(&mut self.cpu.pending_jump);
         } else {
             let delay_slot = mem::take(&mut self.cpu.pending_jump);
             if execution.last_in_delay_slot && delay_slot.happen {
