@@ -1,46 +1,13 @@
+use modular_bitfield::prelude::*;
+
 use super::Mmio;
 
-bitfield::bitfield! {
-    #[derive(Default, Clone, Copy)]
-    pub struct Dpcr(u32);
-    impl Debug;
-
-    // Channel enables
-    pub ch0_enable, set_ch0_enable: 0;
-    pub ch1_enable, set_ch1_enable: 4;
-    pub ch2_enable, set_ch2_enable: 8;
-    pub ch3_enable, set_ch3_enable: 12;
-    pub ch4_enable, set_ch4_enable: 16;
-    pub ch5_enable, set_ch5_enable: 20;
-    pub ch6_enable, set_ch6_enable: 24;
-
-    // Channel priorities (3 bits each)
-    pub ch0_priority, set_ch0_priority: 3, 1;
-    pub ch1_priority, set_ch1_priority: 7, 5;
-    pub ch2_priority, set_ch2_priority: 11, 9;
-    pub ch3_priority, set_ch3_priority: 15, 13;
-    pub ch4_priority, set_ch4_priority: 19, 17;
-    pub ch5_priority, set_ch5_priority: 23, 21;
-    pub ch6_priority, set_ch6_priority: 27, 25;
-}
-
-bitfield::bitfield! {
-    #[derive(Default, Clone, Copy)]
-    pub struct Dicr(u32);
-    impl Debug;
-
-    pub unknown_lo, set_unknown_lo: 5, 0;
-    pub force_irq, set_force_irq: 15;
-    pub irq_enable, set_irq_enable: 22, 16;
-    pub master_enable, set_master_enable: 23;
-    pub irq_flags, set_irq_flags: 30, 24;
-    pub irq_signal, set_irq_signal: 31;
-}
+const CHANNELS: usize = 7;
 
 #[derive(Debug, Default)]
 pub struct DmaController {
     /// Channels.
-    pub channels: [DmaChannel; 7],
+    pub channels: [Channel; CHANNELS],
     /// Control / priority.
     pub dpcr: Dpcr,
     /// Interrupt control.
@@ -48,18 +15,215 @@ pub struct DmaController {
 }
 
 #[derive(Debug, Default)]
-pub struct DmaChannel {
+pub struct Channel {
     /// Memory address.
     pub madr: u32,
     /// Block control.
-    pub bcr: u32,
+    pub bcr: Bcr,
     /// Channel control.
-    pub chcr: u32,
+    pub chcr: Chcr,
 }
 
-impl DmaChannel {
-    pub fn done(&mut self) {
-        self.chcr &= !(1 << 24);
+/// Block control register.
+#[bitfield(bits = 32)]
+#[derive(Specifier, Debug, Default, Clone, Copy)]
+pub struct Bcr {
+    /// Count of blocks for [`SyncMode::Request`].
+    pub block_count: B16,
+    /// Word count/block size, depends on [`SyncMode`]
+    pub word_count_or_block_size: B16,
+}
+
+/// Channel control register.
+#[bitfield(bits = 32)]
+#[derive(Specifier, Debug, Default, Clone, Copy)]
+pub struct Chcr {
+    pub direction: Direction,
+    pub step: Step,
+    #[skip]
+    reserved: B6,
+    pub chopping_enabled: bool,
+    pub sync_mode: SyncMode,
+    #[skip]
+    reserved: B5,
+    pub chopping_dma_window: B3,
+    #[skip]
+    reserved: B1,
+    pub chopping_cpu_window: B3,
+    pub active: bool,
+    #[skip]
+    reserved: B3,
+    pub trigger: bool,
+    #[skip]
+    reserved: B4,
+}
+
+#[derive(Specifier, Debug, Clone, Copy, PartialEq, Eq)]
+#[bits = 1]
+pub enum Direction {
+    ToRam = 0,
+    FromRam = 1,
+}
+
+#[derive(Specifier, Debug, Clone, Copy, PartialEq, Eq)]
+#[bits = 1]
+pub enum Step {
+    Increment = 0,
+    Decrement = 1,
+}
+
+#[derive(Specifier, Debug, Clone, Copy, PartialEq, Eq)]
+#[bits = 2]
+pub enum SyncMode {
+    Manual = 0,
+    Request = 1,
+    LinkedList = 2,
+    Reserved = 3,
+}
+
+/// DMA priority control register.
+#[bitfield(bits = 32)]
+#[derive(Specifier, Debug, Default, Clone, Copy)]
+pub struct Dpcr {
+    pub enabled0: bool,
+    pub priority0: B3,
+    pub enabled1: bool,
+    pub priority1: B3,
+    pub enabled2: bool,
+    pub priority2: B3,
+    pub enabled3: bool,
+    pub priority3: B3,
+    pub enabled4: bool,
+    pub priority4: B3,
+    pub enabled5: bool,
+    pub priority5: B3,
+    pub enabled6: bool,
+    pub priority6: B3,
+    #[skip]
+    reserved: B4,
+}
+
+/// DMA interrupt controller register.
+#[bitfield(bits = 32)]
+#[derive(Specifier, Debug, Default, Clone, Copy)]
+pub struct Dicr {
+    #[skip]
+    reserved: B6,
+    #[skip]
+    reserved: B9,
+    /// Force raising IRQ
+    pub force_irq: bool,
+    /// Enabled interrupts lanes.
+    pub irq_enabled: B7,
+    /// Master flag for all interrupts.
+    pub master_enabled: bool,
+    /// Pending interrupts.
+    pub irq_flags: B7,
+    /// Pending intrrupt controller call.
+    pub irq_signal: bool,
+}
+
+/// I really dislike such methods, but arrays aren't supported
+impl Dpcr {
+    fn chan_enabled(self, ch: usize) -> bool {
+        match ch {
+            0 => self.enabled0(),
+            1 => self.enabled1(),
+            2 => self.enabled2(),
+            3 => self.enabled3(),
+            4 => self.enabled4(),
+            5 => self.enabled5(),
+            6 => self.enabled6(),
+            _ => panic!("only {CHANNELS} channels supported"),
+        }
+    }
+
+    fn chan_priority(self, ch: usize) -> u8 {
+        match ch {
+            0 => self.priority0(),
+            1 => self.priority1(),
+            2 => self.priority2(),
+            3 => self.priority3(),
+            4 => self.priority4(),
+            5 => self.priority5(),
+            6 => self.priority6(),
+            _ => panic!("only {CHANNELS} channels supported"),
+        }
+    }
+}
+
+impl Dicr {
+    pub fn set_irq_lane(&mut self, ch: usize) {
+        assert!(ch <= CHANNELS, "only {CHANNELS} supported");
+
+        self.set_irq_flags(1 << ch);
+        self.update_irq_signal();
+    }
+
+    fn update_irq_signal(&mut self) {
+        if self.force_irq()
+            || (self.master_enabled() && (self.irq_enabled() & self.irq_flags()) != 0)
+        {
+            self.set_irq_signal(true);
+        }
+    }
+}
+
+impl Channel {
+    pub fn start(&mut self) {
+        self.chcr.set_active(true);
+        self.chcr.set_trigger(false);
+    }
+
+    pub fn try_finish(&mut self) -> bool {
+        let finished = match self.chcr.sync_mode() {
+            SyncMode::Manual => self.bcr.word_count_or_block_size() == 0,
+            SyncMode::Request => self.bcr.block_count() == 0,
+            SyncMode::LinkedList => self.madr == 0x00FFFFFF,
+            SyncMode::Reserved => panic!("not available"),
+        };
+
+        if finished {
+            self.chcr.set_active(false);
+        }
+
+        finished
+    }
+}
+
+impl DmaController {
+    /// Pick enabled channel with higher priority
+    /// [`Option::None`] if all chans are disabled
+    pub fn pick_highest_prio_chan(&self) -> Option<usize> {
+        let mut best = None;
+
+        for ch in 0..CHANNELS {
+            let chan = &self.channels[ch];
+
+            if !self.dpcr.chan_enabled(ch) || !chan.chcr.active() {
+                continue;
+            }
+
+            match chan.chcr.sync_mode() {
+                SyncMode::Manual if !chan.chcr.trigger() => continue,
+                // TODO : this is very simplified
+                _ => {}
+            }
+
+            match best {
+                None => best = Some(ch),
+                Some(old) => {
+                    let p_new = self.dpcr.chan_priority(ch);
+                    let p_old = self.dpcr.chan_priority(old);
+
+                    if p_new < p_old || (p_new == p_old && ch > old) {
+                        best = Some(ch);
+                    }
+                }
+            }
+        }
+
+        best
     }
 }
 
@@ -76,13 +240,13 @@ impl Mmio for DmaController {
                 let chan = (reg_addr / 0x10) as usize;
                 match reg {
                     0x0 => self.channels[chan].madr,
-                    0x4 => self.channels[chan].bcr,
-                    0x8 => self.channels[chan].chcr,
+                    0x4 => u32::from_le_bytes(self.channels[chan].bcr.into_bytes()),
+                    0x8 => u32::from_le_bytes(self.channels[chan].chcr.into_bytes()),
                     _ => unreachable!(),
                 }
             }
-            0x70 => self.dpcr.0,
-            0x74 => self.dicr.0,
+            0x70 => u32::from_le_bytes(self.dpcr.into_bytes()),
+            0x74 => u32::from_le_bytes(self.dicr.into_bytes()),
             _ => unimplemented!(),
         };
 
@@ -110,30 +274,27 @@ impl Mmio for DmaController {
                 let chan = (reg_addr / 0x10) as usize;
                 match reg {
                     0x0 => self.channels[chan].madr = val,
-                    0x4 => self.channels[chan].bcr = val,
-                    0x8 => self.channels[chan].chcr = val,
+                    0x4 => self.channels[chan].bcr = Bcr::from_bytes(val.to_le_bytes()),
+                    0x8 => self.channels[chan].chcr = Chcr::from_bytes(val.to_le_bytes()),
                     _ => unreachable!(),
                 }
             }
-            0x70 => self.dpcr.0 = val,
-            0x74 => write_dicr(&mut self.dicr, val),
+            0x70 => self.dpcr = Dpcr::from_bytes(val.to_le_bytes()),
+            0x74 => {
+                let new = Dicr::from_bytes(val.to_le_bytes());
+
+                self.dicr.set_force_irq(new.force_irq());
+                self.dicr.set_irq_enabled(new.irq_enabled());
+                self.dicr.set_master_enabled(new.master_enabled());
+
+                // W1C on bits 24..30: writing 1 clears the corresponding existing flag bit
+                self.dicr
+                    .set_irq_flags(self.dicr.irq_flags() & !new.irq_flags());
+
+                // Recalculate irq signal bit, rather than copy it
+                self.dicr.update_irq_signal();
+            }
             _ => unimplemented!(),
-        };
+        }
     }
-}
-
-fn write_dicr(reg: &mut Dicr, new: u32) {
-    let new = Dicr(new);
-
-    // Plain writable fields
-    reg.set_unknown_lo(new.unknown_lo());
-    reg.set_force_irq(new.force_irq());
-    reg.set_irq_enable(new.irq_enable());
-    reg.set_master_enable(new.master_enable());
-
-    // W1C on bits 24..30: writing 1 clears the corresponding existing flag bit
-    reg.set_irq_flags(reg.irq_flags() & !new.irq_flags());
-
-    // Recompute bit31 instead of writing it directly
-    reg.set_irq_signal(reg.force_irq() || (reg.master_enable() && reg.irq_flags() != 0));
 }
