@@ -81,8 +81,8 @@ impl Default for Bus {
             expansion1,
             expansion2,
 
-            int_ctrl: Default::default(),
-            dma_ctrl: Default::default(),
+            int_ctrl: InterruptController::default(),
+            dma_ctrl: DmaController::default(),
         }
     }
 }

@@ -1,40 +1,44 @@
+use modular_bitfield::prelude::*;
 use strum::{EnumDiscriminants, IntoDiscriminant};
 
-bitfield::bitfield! {
-    #[derive(Clone, Copy, Default, PartialEq, Eq)]
-    pub struct Status(u32);
-    impl Debug;
-
+#[bitfield(bits = 32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Status {
     // IE/KU stack
-    pub iec, _: 0;
-    pub kuc, _: 1;
-    pub iep, _: 2;
-    pub kup, _: 3;
-    pub ieo, _: 4;
-    pub kuo, _: 5;
-
+    pub iec: bool,
+    pub kuc: bool,
+    pub iep: bool,
+    pub kup: bool,
+    pub ieo: bool,
+    pub kuo: bool,
+    #[skip]
+    reserved: B2,
     /// Interrupt mask
-    pub im, _: 15, 8;
-
+    pub im: B8,
     /// Isolate cache
-    pub isc, _: 16;
-
+    pub isc: bool,
+    #[skip]
+    reserved: B5,
     /// Boot vector select
-    pub bev, _: 22;
+    pub bev: bool,
+    #[skip]
+    reserved: B9,
 }
 
-bitfield::bitfield! {
-    #[derive(Clone, Copy, Default, PartialEq, Eq)]
-    pub struct Cause(u32);
-    impl Debug;
-
-    pub excode, set_excode: 6, 2;
-
+#[bitfield(bits = 32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Cause {
+    #[skip]
+    reserved: B2,
+    pub excode: B5,
+    #[skip]
+    reserved: B1,
     // Interrupt pending
-    pub ip, set_ip: 15, 8;
-
+    pub ip: B8,
+    #[skip]
+    reserved: B15,
     // Branch delay flag
-    pub bd, set_bd: 31;
+    pub bd: bool,
 }
 
 /// Simplified Cop0 (coprocessor 0) with the logic used in PSX.
@@ -76,11 +80,11 @@ impl Cop0 {
     pub const EPC_IDX: usize = 14;
 
     pub fn status(&self) -> Status {
-        Status(self.regs[Self::STATUS_IDX])
+        Status::from_bytes(self.regs[Self::STATUS_IDX].to_le_bytes())
     }
 
     pub fn cause(&self) -> Cause {
-        Cause(self.regs[Self::CAUSE_IDX])
+        Cause::from_bytes(self.regs[Self::CAUSE_IDX].to_le_bytes())
     }
 
     pub fn exception_handler(&self) -> u32 {
@@ -101,8 +105,8 @@ impl Cop0 {
 
         let mut cause = self.cause();
         cause.set_bd(in_delay_slot);
-        cause.set_excode(exception.discriminant() as u32);
-        self.regs[Self::CAUSE_IDX] = cause.0;
+        cause.set_excode(exception.discriminant() as u8);
+        self.regs[Self::CAUSE_IDX] = u32::from_le_bytes(cause.into_bytes());
 
         if let Exception::UnalignedLoad { bad_vaddr }
         | Exception::UnalignedStore { bad_vaddr }
@@ -142,6 +146,6 @@ impl Cop0 {
         }
         cause.set_ip(ip);
 
-        self.regs[Self::CAUSE_IDX] = cause.0;
+        self.regs[Self::CAUSE_IDX] = u32::from_le_bytes(cause.into_bytes());
     }
 }
