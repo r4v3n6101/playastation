@@ -1,20 +1,30 @@
 use modular_bitfield::prelude::*;
+use strum::{EnumCount, EnumIter, FromRepr, IntoEnumIterator};
 
 use super::Mmio;
 
-const CHANNELS: usize = 7;
+#[derive(EnumCount, EnumIter, FromRepr, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Port {
+    MdecIn = 0,
+    MdecOut = 1,
+    Gpu = 2,
+    CdRom = 3,
+    Spu = 4,
+    Pio = 5,
+    Otc = 6,
+}
 
 #[derive(Debug, Default)]
 pub struct DmaController {
     /// Channels.
-    pub channels: [Channel; CHANNELS],
+    pub channels: [Channel; Port::COUNT],
     /// Control / priority.
     pub dpcr: Dpcr,
     /// Interrupt control.
     pub dicr: Dicr,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Channel {
     /// Memory address.
     pub madr: u32,
@@ -26,17 +36,17 @@ pub struct Channel {
 
 /// Block control register.
 #[bitfield(bits = 32)]
-#[derive(Specifier, Debug, Default, Clone, Copy)]
+#[derive(Specifier, Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Bcr {
+    /// Word count/block size (in words), depends on [`SyncMode`]
+    pub word_count: B16,
     /// Count of blocks for [`SyncMode::Request`].
     pub block_count: B16,
-    /// Word count/block size, depends on [`SyncMode`]
-    pub word_count_or_block_size: B16,
 }
 
 /// Channel control register.
 #[bitfield(bits = 32)]
-#[derive(Specifier, Debug, Default, Clone, Copy)]
+#[derive(Specifier, Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Chcr {
     pub direction: Direction,
     pub step: Step,
@@ -50,12 +60,14 @@ pub struct Chcr {
     #[skip]
     reserved: B1,
     pub chopping_cpu_window: B3,
+    #[skip]
+    reserved: B1,
     pub active: bool,
     #[skip]
     reserved: B3,
     pub trigger: bool,
     #[skip]
-    reserved: B4,
+    reserved: B3,
 }
 
 #[derive(Specifier, Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,7 +95,7 @@ pub enum SyncMode {
 
 /// DMA priority control register.
 #[bitfield(bits = 32)]
-#[derive(Specifier, Debug, Default, Clone, Copy)]
+#[derive(Specifier, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Dpcr {
     pub enabled0: bool,
     pub priority0: B3,
@@ -105,7 +117,7 @@ pub struct Dpcr {
 
 /// DMA interrupt controller register.
 #[bitfield(bits = 32)]
-#[derive(Specifier, Debug, Default, Clone, Copy)]
+#[derive(Specifier, Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Dicr {
     #[skip]
     reserved: B6,
@@ -123,40 +135,44 @@ pub struct Dicr {
     pub irq_signal: bool,
 }
 
+impl Default for Dpcr {
+    fn default() -> Self {
+        const RESET_VAL: u32 = 0x07654321;
+
+        Self::from_bytes(RESET_VAL.to_le_bytes())
+    }
+}
+
 /// I really dislike such methods, but arrays aren't supported
 impl Dpcr {
-    fn chan_enabled(self, ch: usize) -> bool {
+    fn chan_enabled(self, ch: Port) -> bool {
         match ch {
-            0 => self.enabled0(),
-            1 => self.enabled1(),
-            2 => self.enabled2(),
-            3 => self.enabled3(),
-            4 => self.enabled4(),
-            5 => self.enabled5(),
-            6 => self.enabled6(),
-            _ => panic!("only {CHANNELS} channels supported"),
+            Port::MdecIn => self.enabled0(),
+            Port::MdecOut => self.enabled1(),
+            Port::Gpu => self.enabled2(),
+            Port::CdRom => self.enabled3(),
+            Port::Spu => self.enabled4(),
+            Port::Pio => self.enabled5(),
+            Port::Otc => self.enabled6(),
         }
     }
 
-    fn chan_priority(self, ch: usize) -> u8 {
+    fn chan_priority(self, ch: Port) -> u8 {
         match ch {
-            0 => self.priority0(),
-            1 => self.priority1(),
-            2 => self.priority2(),
-            3 => self.priority3(),
-            4 => self.priority4(),
-            5 => self.priority5(),
-            6 => self.priority6(),
-            _ => panic!("only {CHANNELS} channels supported"),
+            Port::MdecIn => self.priority0(),
+            Port::MdecOut => self.priority1(),
+            Port::Gpu => self.priority2(),
+            Port::CdRom => self.priority3(),
+            Port::Spu => self.priority4(),
+            Port::Pio => self.priority5(),
+            Port::Otc => self.priority6(),
         }
     }
 }
 
 impl Dicr {
-    pub fn set_irq_lane(&mut self, ch: usize) {
-        assert!(ch <= CHANNELS, "only {CHANNELS} supported");
-
-        self.set_irq_flags(1 << ch);
+    pub fn set_irq_lane(&mut self, ch: Port) {
+        self.set_irq_flags(self.irq_flags() | (1 << ch as u8));
         self.update_irq_signal();
     }
 
@@ -172,15 +188,17 @@ impl Dicr {
 impl Channel {
     pub fn start(&mut self) {
         self.chcr.set_active(true);
-        self.chcr.set_trigger(false);
+        if self.chcr.sync_mode() == SyncMode::Manual {
+            self.chcr.set_trigger(false);
+        }
     }
 
     pub fn try_finish(&mut self) -> bool {
         let finished = match self.chcr.sync_mode() {
-            SyncMode::Manual => self.bcr.word_count_or_block_size() == 0,
+            SyncMode::Manual => self.bcr.word_count() == 0,
             SyncMode::Request => self.bcr.block_count() == 0,
             SyncMode::LinkedList => self.madr == 0x00FFFFFF,
-            SyncMode::Reserved => panic!("not available"),
+            SyncMode::Reserved => true,
         };
 
         if finished {
@@ -194,11 +212,11 @@ impl Channel {
 impl DmaController {
     /// Pick enabled channel with higher priority
     /// [`Option::None`] if all chans are disabled
-    pub fn pick_highest_prio_chan(&self) -> Option<usize> {
+    pub fn pick_highest_prio_chan(&self) -> Option<Port> {
         let mut best = None;
 
-        for ch in 0..CHANNELS {
-            let chan = &self.channels[ch];
+        for ch in Port::iter() {
+            let chan = &self.channels[ch as usize];
 
             if !self.dpcr.chan_enabled(ch) || !chan.chcr.active() {
                 continue;
@@ -206,17 +224,17 @@ impl DmaController {
 
             match chan.chcr.sync_mode() {
                 SyncMode::Manual if !chan.chcr.trigger() => continue,
-                // TODO : this is very simplified
+                SyncMode::LinkedList if ch != Port::Gpu => continue,
                 _ => {}
             }
 
             match best {
                 None => best = Some(ch),
                 Some(old) => {
-                    let p_new = self.dpcr.chan_priority(ch);
                     let p_old = self.dpcr.chan_priority(old);
+                    let p_new = self.dpcr.chan_priority(ch);
 
-                    if p_new < p_old || (p_new == p_old && ch > old) {
+                    if p_new <= p_old {
                         best = Some(ch);
                     }
                 }
@@ -247,7 +265,7 @@ impl Mmio for DmaController {
             }
             0x70 => u32::from_le_bytes(self.dpcr.into_bytes()),
             0x74 => u32::from_le_bytes(self.dicr.into_bytes()),
-            _ => unimplemented!(),
+            _ => unreachable!(),
         };
 
         let bytes = reg.to_le_bytes();
@@ -294,7 +312,47 @@ impl Mmio for DmaController {
                 // Recalculate irq signal bit, rather than copy it
                 self.dicr.update_irq_signal();
             }
-            _ => unimplemented!(),
+            _ => unreachable!(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{super::Mmio, Bcr, Chcr, Direction, DmaController, Step, SyncMode};
+
+    fn write(ctrl: &mut DmaController, addr: u32, val: u32) {
+        ctrl.write(addr, val.to_le_bytes().as_slice());
+    }
+
+    #[test]
+    fn verify_bios_seq() {
+        let mut ctrl = DmaController::default();
+
+        write(&mut ctrl, 0x70, 0x076f4321);
+        assert!(ctrl.dpcr.enabled4());
+        assert_eq!(ctrl.dpcr.priority4(), 7);
+
+        write(&mut ctrl, 0x74, 0);
+        // TODO : what to check?
+        //
+        write(&mut ctrl, 0x60, 0x800eb8d4);
+        assert_eq!(ctrl.channels[6].madr, 0x800eb8d4);
+
+        write(&mut ctrl, 0x64, 0x00000400);
+        assert_eq!(ctrl.channels[6].bcr, Bcr::new().with_word_count(1024));
+
+        write(&mut ctrl, 0x68, 0x11000002);
+        assert_eq!(
+            ctrl.channels[6].chcr,
+            Chcr::new()
+                .with_sync_mode(SyncMode::Manual)
+                .with_direction(Direction::ToRam)
+                .with_step(Step::Decrement)
+                .with_active(true)
+                .with_trigger(true)
+        );
+
+        assert!(ctrl.pick_highest_prio_chan().is_some());
     }
 }
