@@ -125,9 +125,10 @@ impl Bus {
                 self.dma_ctrl.read(&mut bytes, x - DMA_CTRL.start);
             }
             x if HW_REGS.contains(&x) => {
-                if x == 0x1F801814 || addr == 0x1F801814 {
-                    panic!("GPUSTAT");
-                }
+                // if x == 0x1F801814 || addr == 0x1F801814 {
+                //     let l = bytes.len();
+                //     bytes.copy_from_slice(&0x1c000000u32.to_le_bytes()[..l]);
+                // }
             }
             _ => {
                 return Err(BusError {

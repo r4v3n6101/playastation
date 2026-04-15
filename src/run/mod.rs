@@ -2,6 +2,7 @@ use std::mem;
 
 use crate::{
     cpu::{Cpu, Exception},
+    dma::Dma,
     interconnect::Bus,
 };
 
@@ -10,9 +11,11 @@ pub mod interpreter;
 #[cfg(feature = "jit")]
 pub mod jit;
 
+// TODO : rename
 #[derive(Debug)]
 pub struct CpuExecutor<E> {
     pub cpu: Cpu,
+    pub dma: Dma,
     pub executor: E,
 
     /// Maximum block size. If the last op is branch delay, block may be max+1
@@ -46,6 +49,7 @@ where
 
         Self {
             cpu: Cpu::default(),
+            dma: Dma::default(),
             executor: E::default(),
 
             block_size: DEFAULT_INS_BLOCK,
@@ -94,5 +98,7 @@ where
                 self.cpu.pc = execution.last_pc.wrapping_add(4);
             }
         }
+
+        self.dma.run(bus);
     }
 }
