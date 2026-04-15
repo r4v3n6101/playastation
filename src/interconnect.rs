@@ -2,7 +2,7 @@ use std::ops::Range;
 
 use bytes::BytesMut;
 
-use crate::devices::{Mmio, dma::DmaController, int::InterruptController};
+use crate::devices::{Mmio, dma::DmaController, gpu::Gpu, int::InterruptController};
 
 // MIPS uses segmented memory, but PSX ignore them and treat all segments as mirror to each other
 const KUSEG: Range<u32> = 0x0000_0000..0x7FFF_FFFF;
@@ -17,8 +17,9 @@ const SCRATCHPAD: Range<u32> = 0x1F80_0000..0x1F80_03FF;
 
 // Hardware registers regions
 const HW_REGS: Range<u32> = 0x1F801000..0x1F801FFF;
-const INT_CTRL: Range<u32> = 0x1F801070..0x1F801078;
-const DMA_CTRL: Range<u32> = 0x1F801080..0x1F8010FF;
+const INT_CTRL: Range<u32> = 0x1F80_1070..0x1F80_1078;
+const DMA_CTRL: Range<u32> = 0x1F80_1080..0x1F80_10FF;
+const GPU: Range<u32> = 0x1F80_1810..0x1F80_1818;
 
 const MISC: Range<u32> = 0x1F80_2000..0x1F80_2FFF;
 const EXPANSION2: Range<u32> = 0x1FA0_0000..0x1FA1_FFFF;
@@ -47,6 +48,7 @@ pub struct Bus {
     // Devices
     pub int_ctrl: InterruptController,
     pub dma_ctrl: DmaController,
+    pub gpu: Gpu,
 }
 
 impl Default for Bus {
@@ -83,6 +85,7 @@ impl Default for Bus {
 
             int_ctrl: InterruptController::default(),
             dma_ctrl: DmaController::default(),
+            gpu: Gpu::default(),
         }
     }
 }
@@ -124,12 +127,10 @@ impl Bus {
             x if DMA_CTRL.contains(&x) => {
                 self.dma_ctrl.read(&mut bytes, x - DMA_CTRL.start);
             }
-            x if HW_REGS.contains(&x) => {
-                // if x == 0x1F801814 || addr == 0x1F801814 {
-                //     let l = bytes.len();
-                //     bytes.copy_from_slice(&0x1c000000u32.to_le_bytes()[..l]);
-                // }
+            x if GPU.contains(&x) => {
+                self.gpu.read(&mut bytes, x - GPU.start);
             }
+            x if HW_REGS.contains(&x) => {}
             _ => {
                 return Err(BusError {
                     bad_vaddr: addr,
@@ -173,6 +174,9 @@ impl Bus {
             }
             x if DMA_CTRL.contains(&x) => {
                 self.dma_ctrl.write(x - DMA_CTRL.start, &value);
+            }
+            x if GPU.contains(&x) => {
+                self.gpu.write(x - GPU.start, &value);
             }
             x if HW_REGS.contains(&x) => {}
             _ => {

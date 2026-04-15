@@ -35,7 +35,7 @@ impl Dma {
             SyncMode::Manual => self.transfer_word(bus, ch, &mut chan),
             SyncMode::Request => self.transfer_block(bus, ch, &mut chan),
             SyncMode::LinkedList => self.transfer_ll(bus, ch),
-            SyncMode::Reserved => {}
+            SyncMode::Reserved => unreachable!(),
         }
 
         if chan.try_finish() {

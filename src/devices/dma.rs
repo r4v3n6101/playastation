@@ -1,7 +1,7 @@
 use modular_bitfield::prelude::*;
 use strum::{EnumCount, EnumIter, FromRepr, IntoEnumIterator};
 
-use super::Mmio;
+use super::{Mmio, MmioExt};
 
 #[derive(EnumCount, EnumIter, FromRepr, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Port {
@@ -53,6 +53,7 @@ pub struct Chcr {
     #[skip]
     reserved: B6,
     pub chopping_enabled: bool,
+    /// Sync mode for choosing transfer type.
     pub sync_mode: SyncMode,
     #[skip]
     reserved: B5,
@@ -62,9 +63,11 @@ pub struct Chcr {
     pub chopping_cpu_window: B3,
     #[skip]
     reserved: B1,
+    /// Start/busy.
     pub active: bool,
     #[skip]
     reserved: B3,
+    /// Trigger for [`SyncMode::Manual`]
     pub trigger: bool,
     #[skip]
     reserved: B3,
@@ -73,23 +76,31 @@ pub struct Chcr {
 #[derive(Specifier, Debug, Clone, Copy, PartialEq, Eq)]
 #[bits = 1]
 pub enum Direction {
+    /// Copy from a device to RAM.
     ToRam = 0,
+    /// Copy from RAM to a device.
     FromRam = 1,
 }
 
 #[derive(Specifier, Debug, Clone, Copy, PartialEq, Eq)]
 #[bits = 1]
 pub enum Step {
+    /// Address goes forward (+4).
     Increment = 0,
+    /// Address foes backward (-4).
     Decrement = 1,
 }
 
 #[derive(Specifier, Debug, Clone, Copy, PartialEq, Eq)]
 #[bits = 2]
 pub enum SyncMode {
+    /// Word-by-word transfer, with `trigger` bit.
     Manual = 0,
+    /// Block transfer, `trigger` bit isn't used.
     Request = 1,
+    /// Linked list works only with GPU (channel = 2).
     LinkedList = 2,
+    /// Unused.
     Reserved = 3,
 }
 
@@ -97,20 +108,20 @@ pub enum SyncMode {
 #[bitfield(bits = 32)]
 #[derive(Specifier, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Dpcr {
-    pub enabled0: bool,
     pub priority0: B3,
-    pub enabled1: bool,
+    pub enabled0: bool,
     pub priority1: B3,
-    pub enabled2: bool,
+    pub enabled1: bool,
     pub priority2: B3,
-    pub enabled3: bool,
+    pub enabled2: bool,
     pub priority3: B3,
-    pub enabled4: bool,
+    pub enabled3: bool,
     pub priority4: B3,
-    pub enabled5: bool,
+    pub enabled4: bool,
     pub priority5: B3,
-    pub enabled6: bool,
+    pub enabled5: bool,
     pub priority6: B3,
+    pub enabled6: bool,
     #[skip]
     reserved: B4,
 }
@@ -137,9 +148,14 @@ pub struct Dicr {
 
 impl Default for Dpcr {
     fn default() -> Self {
-        const RESET_VAL: u32 = 0x07654321;
-
-        Self::from_bytes(RESET_VAL.to_le_bytes())
+        Self::new()
+            .with_priority0(1)
+            .with_priority1(2)
+            .with_priority2(3)
+            .with_priority3(4)
+            .with_priority4(5)
+            .with_priority5(6)
+            .with_priority6(7)
     }
 }
 
@@ -247,15 +263,10 @@ impl DmaController {
 
 impl Mmio for DmaController {
     fn read(&self, dest: &mut [u8], addr: u32) {
-        // Word aligned addr
-        let reg_addr = addr & !0x3;
-        // Position inside a word
-        let off = (addr & 0x3) as usize;
-
-        let reg = match reg_addr {
+        self.read_unaligned(dest, addr, |addr| match addr {
             ..0x70 => {
-                let reg = reg_addr % 0x10;
-                let chan = (reg_addr / 0x10) as usize;
+                let reg = addr % 0x10;
+                let chan = (addr / 0x10) as usize;
                 match reg {
                     0x0 => self.channels[chan].madr,
                     0x4 => u32::from_le_bytes(self.channels[chan].bcr.into_bytes()),
@@ -266,30 +277,15 @@ impl Mmio for DmaController {
             0x70 => u32::from_le_bytes(self.dpcr.into_bytes()),
             0x74 => u32::from_le_bytes(self.dicr.into_bytes()),
             _ => unreachable!(),
-        };
-
-        let bytes = reg.to_le_bytes();
-        dest.copy_from_slice(&bytes[off..][..dest.len()]);
+        });
     }
 
     fn write(&mut self, addr: u32, value: &[u8]) {
-        // Word aligned addr
-        let reg_addr = addr & !0x3;
-        // Position inside a word
-        let off = (addr & 0x3) as usize;
-
-        let val = {
-            let mut buf = [0u8; 4];
-            // Read a word
-            self.read(&mut buf, reg_addr);
-            // ...then put a value inside the word
-            buf[off..off + value.len()].copy_from_slice(value);
-            u32::from_le_bytes(buf)
-        };
-        match reg_addr {
+        let val = self.write_value(addr, value);
+        match addr {
             ..0x70 => {
-                let reg = reg_addr % 0x10;
-                let chan = (reg_addr / 0x10) as usize;
+                let reg = addr % 0x10;
+                let chan = (addr / 0x10) as usize;
                 match reg {
                     0x0 => self.channels[chan].madr = val,
                     0x4 => self.channels[chan].bcr = Bcr::from_bytes(val.to_le_bytes()),
@@ -319,10 +315,18 @@ impl Mmio for DmaController {
 
 #[cfg(test)]
 mod tests {
-    use super::{super::Mmio, Bcr, Chcr, Direction, DmaController, Step, SyncMode};
+    use super::{super::Mmio, Bcr, Chcr, Direction, DmaController, Dpcr, Step, SyncMode};
 
     fn write(ctrl: &mut DmaController, addr: u32, val: u32) {
         ctrl.write(addr, val.to_le_bytes().as_slice());
+    }
+
+    #[test]
+    fn verify_default() {
+        let dpcr = Dpcr::default();
+        let reg = u32::from_le_bytes(dpcr.into_bytes());
+
+        assert_eq!(reg, 0x07654321);
     }
 
     #[test]
@@ -334,8 +338,18 @@ mod tests {
         assert_eq!(ctrl.dpcr.priority4(), 7);
 
         write(&mut ctrl, 0x74, 0);
-        // TODO : what to check?
-        //
+        write(&mut ctrl, 0x74, 0x4840000);
+
+        write(&mut ctrl, 0x28, 0x401);
+        assert_eq!(
+            ctrl.channels[2].chcr,
+            Chcr::new()
+                .with_sync_mode(SyncMode::LinkedList)
+                .with_direction(Direction::FromRam)
+        );
+
+        write(&mut ctrl, 0x70, 0xf6f4321);
+
         write(&mut ctrl, 0x60, 0x800eb8d4);
         assert_eq!(ctrl.channels[6].madr, 0x800eb8d4);
 
