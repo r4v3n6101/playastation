@@ -17,7 +17,7 @@ trait MmioExt: Mmio {
         dest.copy_from_slice(&bytes[off as usize..][..dest.len()]);
     }
 
-    fn write_value(&self, addr: u32, value: &[u8]) -> u32 {
+    fn write_value(&self, addr: u32, value: &[u8]) -> (u32, u32) {
         let (addr, off) = (addr & !0x3, addr & 0x3);
 
         let mut buf = [0u8; 4];
@@ -27,7 +27,7 @@ trait MmioExt: Mmio {
         // ...then put a value inside the word
         buf[off as usize..][..value.len()].copy_from_slice(value);
 
-        u32::from_le_bytes(buf)
+        (addr, u32::from_le_bytes(buf))
     }
 }
 

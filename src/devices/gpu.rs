@@ -103,6 +103,16 @@ impl Default for GpuStat {
     }
 }
 
+impl Gpu {
+    pub fn dispatch_gp0(&mut self, command: u32) {
+        println!("GP0: {command:#x}");
+    }
+
+    pub fn dispatch_gp1(&mut self, command: u32) {
+        println!("GP1: {command:#x}");
+    }
+}
+
 impl Mmio for Gpu {
     fn read(&self, dest: &mut [u8], addr: u32) {
         self.read_unaligned(dest, addr, |addr| match addr {
@@ -113,7 +123,12 @@ impl Mmio for Gpu {
     }
 
     fn write(&mut self, addr: u32, value: &[u8]) {
-        dbg!("gp0/1 commands", addr, value);
+        let (addr, value) = self.write_value(addr, value);
+        match addr {
+            0x0 => self.dispatch_gp0(value),
+            0x4 => self.dispatch_gp1(value),
+            _ => unreachable!(),
+        }
     }
 }
 

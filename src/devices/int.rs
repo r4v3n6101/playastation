@@ -49,6 +49,10 @@ impl Mmio for InterruptController {
             (0x4, 2) => {
                 dest.copy_from_slice(&self.i_mask.bits().to_le_bytes());
             }
+
+            (0x0, 1) => {}
+            (0x4, 1) => {}
+
             _ => unimplemented!(),
         }
     }
@@ -72,6 +76,10 @@ impl Mmio for InterruptController {
                 self.i_mask =
                     InterruptFlags::from_bits_truncate(u16::from_le_bytes([value[0], value[1]]));
             }
+
+            (0x0, 1) => {}
+            (0x4, 1) => {}
+
             _ => unreachable!(),
         }
     }

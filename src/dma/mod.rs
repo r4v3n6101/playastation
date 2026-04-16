@@ -33,8 +33,8 @@ impl Dma {
 
         match chan.chcr.sync_mode() {
             SyncMode::Manual => self.transfer_word(bus, ch, &mut chan),
-            SyncMode::Request => self.transfer_block(bus, ch, &mut chan),
-            SyncMode::LinkedList => self.transfer_ll(bus, ch),
+            SyncMode::Request => self.transfer_block(bus, &mut chan),
+            SyncMode::LinkedList => self.transfer_ll(bus, &mut chan),
             SyncMode::Reserved => unreachable!(),
         }
 
@@ -71,7 +71,7 @@ impl Dma {
                             chan.madr.wrapping_sub(4) & 0x1FFFFF
                         };
 
-                        // TODO : don't silence error
+                        // Silently stores, ignoring errors
                         let _ = bus.store::<4>(addr, word.to_le_bytes());
                     }
                     _ => todo!(),
@@ -86,7 +86,7 @@ impl Dma {
         chan.bcr.set_word_count(word_count);
     }
 
-    fn transfer_block(&mut self, bus: &mut Bus, ch: Port, chan: &mut Channel) {
+    fn transfer_block(&mut self, bus: &mut Bus, chan: &mut Channel) {
         let mut block_count = chan.bcr.block_count();
 
         let step = match chan.chcr.step() {
@@ -109,7 +109,28 @@ impl Dma {
         chan.bcr.set_block_count(block_count);
     }
 
-    fn transfer_ll(&mut self, bus: &mut Bus, ch: Port) {
-        todo!()
+    fn transfer_ll(&mut self, bus: &mut Bus, chan: &mut Channel) {
+        let mut addr = chan.madr & 0x1FFFFC;
+
+        let Ok(header) = bus.load(addr) else {
+            // Skip all packets and mark channel transfer as terminated
+            chan.madr = 0xFFFFFF;
+            return;
+        };
+        let header = u32::from_le_bytes(header);
+        let size = header >> 24;
+        for _ in 0..size {
+            addr = addr.wrapping_add(4);
+
+            let Ok(command) = bus.load(addr) else {
+                // Same as above
+                chan.madr = 0xFFFFFF;
+                return;
+            };
+            let command = u32::from_le_bytes(command);
+            bus.gpu.dispatch_gp0(command);
+        }
+
+        chan.madr = header & 0x1FFFFC;
     }
 }

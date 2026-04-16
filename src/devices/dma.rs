@@ -281,7 +281,7 @@ impl Mmio for DmaController {
     }
 
     fn write(&mut self, addr: u32, value: &[u8]) {
-        let val = self.write_value(addr, value);
+        let (addr, val) = self.write_value(addr, value);
         match addr {
             ..0x70 => {
                 let reg = addr % 0x10;
