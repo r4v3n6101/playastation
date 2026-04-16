@@ -2,7 +2,7 @@ use std::mem;
 
 use crate::{
     cpu::{Cpu, Exception},
-    dma::Dma,
+    devices::{Updater, dma::DmaController, gpu::Gpu},
     interconnect::Bus,
 };
 
@@ -15,7 +15,6 @@ pub mod jit;
 #[derive(Debug)]
 pub struct CpuExecutor<E> {
     pub cpu: Cpu,
-    pub dma: Dma,
     pub executor: E,
 
     /// Maximum block size. If the last op is branch delay, block may be max+1
@@ -49,7 +48,6 @@ where
 
         Self {
             cpu: Cpu::default(),
-            dma: Dma::default(),
             executor: E::default(),
 
             block_size: DEFAULT_INS_BLOCK,
@@ -63,8 +61,13 @@ where
     E: Executor,
 {
     pub fn run(&mut self, bus: &mut Bus) {
+        // CPU first
         decoder::decode_block(&mut self.block, &self.cpu, bus, self.block_size);
         let execution = self.executor.run(&self.block, &mut self.cpu, bus);
+
+        // Other device updates
+        DmaController::tick(bus);
+        Gpu::tick(bus);
 
         self.cpu.cop0.set_hw_irq(bus.int_ctrl.pending());
         let interrupt = self
@@ -98,7 +101,5 @@ where
                 self.cpu.pc = execution.last_pc.wrapping_add(4);
             }
         }
-
-        self.dma.run(bus);
     }
 }
