@@ -355,6 +355,7 @@ dependencies = [
  "bytes",
  "cranelift",
  "modular-bitfield",
+ "smallvec",
  "strum",
 ]
 

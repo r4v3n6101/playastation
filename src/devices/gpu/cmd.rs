@@ -1,82 +1,286 @@
-use strum::FromRepr;
+use std::fmt::Debug;
 
-#[derive(FromRepr, Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum Gp0Opcode {
-    Nop = 0x00,
-    ClearTextureCache = 0x01,
-    FillRectangleInVram = 0x02,
-    InterruptRequest = 0x1F,
-    Monochrome3PointPolygonOpaque = 0x20,
-    Monochrome3PointPolygonSemiTransparent = 0x22,
-    Textured3PointPolygonOpaqueBlend = 0x24,
-    Textured3PointPolygonOpaqueRaw = 0x25,
-    Textured3PointPolygonSemiTransparentBlend = 0x26,
-    Textured3PointPolygonSemiTransparentRaw = 0x27,
-    Monochrome4PointPolygonOpaque = 0x28,
-    Monochrome4PointPolygonSemiTransparent = 0x2A,
-    Textured4PointPolygonOpaqueBlend = 0x2C,
-    Textured4PointPolygonOpaqueRaw = 0x2D,
-    Textured4PointPolygonSemiTransparentBlend = 0x2E,
-    Textured4PointPolygonSemiTransparentRaw = 0x2F,
-    Shaded3PointPolygonOpaque = 0x30,
-    Shaded3PointPolygonSemiTransparent = 0x32,
-    ShadedTextured3PointPolygonOpaqueBlend = 0x34,
-    ShadedTextured3PointPolygonOpaqueRaw = 0x35,
-    ShadedTextured3PointPolygonSemiTransparentBlend = 0x36,
-    ShadedTextured3PointPolygonSemiTransparentRaw = 0x37,
-    Shaded4PointPolygonOpaque = 0x38,
-    Shaded4PointPolygonSemiTransparent = 0x3A,
-    ShadedTextured4PointPolygonOpaqueBlend = 0x3C,
-    ShadedTextured4PointPolygonOpaqueRaw = 0x3D,
-    ShadedTextured4PointPolygonSemiTransparentBlend = 0x3E,
-    ShadedTextured4PointPolygonSemiTransparentRaw = 0x3F,
-    MonochromeLineOpaque = 0x40,
-    MonochromeLineSemiTransparent = 0x42,
-    ShadedLineOpaque = 0x50,
-    ShadedLineSemiTransparent = 0x52,
-    MonochromePolylineOpaque = 0x48,
-    MonochromePolylineSemiTransparent = 0x4A,
-    ShadedPolylineOpaque = 0x58,
-    ShadedPolylineSemiTransparent = 0x5A,
-    MonochromeRectangleVariableOpaque = 0x60,
-    MonochromeRectangleVariableSemiTransparent = 0x62,
-    TexturedRectangleVariableOpaqueBlend = 0x64,
-    TexturedRectangleVariableOpaqueRaw = 0x65,
-    TexturedRectangleVariableSemiTransparentBlend = 0x66,
-    TexturedRectangleVariableSemiTransparentRaw = 0x67,
-    DotRectangleOpaque = 0x68,
-    DotRectangleSemiTransparent = 0x6A,
-    Sprite8x8OpaqueBlend = 0x74,
-    Sprite8x8OpaqueRaw = 0x75,
-    Sprite8x8SemiTransparentBlend = 0x76,
-    Sprite8x8SemiTransparentRaw = 0x77,
-    Sprite16x16OpaqueBlend = 0x7C,
-    Sprite16x16OpaqueRaw = 0x7D,
-    Sprite16x16SemiTransparentBlend = 0x7E,
-    Sprite16x16SemiTransparentRaw = 0x7F,
-    CopyRectangleVramToVram = 0x80,
-    CopyRectangleCpuToVram = 0xA0,
-    CopyRectangleVramToCpu = 0xC0,
-    DrawMode = 0xE1,
-    TextureWindow = 0xE2,
-    DrawingAreaTopLeft = 0xE3,
-    DrawingAreaBottomRight = 0xE4,
-    DrawingOffset = 0xE5,
-    MaskBitSetting = 0xE6,
+use smallvec::SmallVec;
+
+use super::types::{Clut, Color, Position, Size, UV};
+
+const POLYGON_MAX_SIZE: usize = 4;
+const POLYLINE_VERTICES_HARD_LIMIT: usize = 256;
+
+#[derive(Debug)]
+pub enum Packet {
+    Polygon(PolygonPacket),
+    Line(LinePacket),
+    Rect(RectPacket),
 }
 
-#[derive(FromRepr, Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum Gp1Opcode {
-    ResetGpu = 0x00,
-    ResetCommandBuffer = 0x01,
-    AcknowledgeInterrupt = 0x02,
-    DisplayEnable = 0x03,
-    DmaDirection = 0x04,
-    DisplayVramStart = 0x05,
-    DisplayHorizontalRange = 0x06,
-    DisplayVerticalRange = 0x07,
-    DisplayMode = 0x08,
-    GetGpuInfo = 0x10,
+#[derive(Debug)]
+pub enum Remain {
+    Count(usize),
+    Terminator(u32),
+}
+
+#[derive(Debug)]
+pub struct PolygonPacket {
+    quad: bool,
+    gouraud: bool,
+    textured: bool,
+
+    color: Option<Color>,
+    vertices: SmallVec<[VertexPacket; POLYGON_MAX_SIZE]>,
+    clut: Option<Clut>,
+    tpage: Option<()>,
+}
+
+#[derive(Debug)]
+pub struct LinePacket {
+    gouraud: bool,
+
+    color: Option<Color>,
+    vertices: SmallVec<[VertexPacket; POLYLINE_VERTICES_HARD_LIMIT]>,
+}
+
+#[derive(Debug)]
+pub struct RectPacket {
+    textured: bool,
+
+    color: Color,
+    pos: Option<Position>,
+    uv: Option<UV>,
+    clut: Option<Clut>,
+    size: Option<Size>,
+}
+
+#[derive(Debug, Default, Copy, Clone)]
+pub struct VertexPacket {
+    pub pos: Option<Position>,
+    pub color: Option<Color>,
+    pub uv: Option<UV>,
+}
+
+impl PolygonPacket {
+    pub fn init(cmd: u32) -> (Self, Remain) {
+        let op = (cmd >> 24) as u8;
+        let quad = (op & 0x08) != 0;
+        let gouraud = (op & 0x10) != 0;
+        let textured = (op & 0x04) != 0;
+
+        let mut vertices = SmallVec::new();
+        let color = parse_color(cmd);
+        let color = if !gouraud {
+            Some(color)
+        } else {
+            vertices.push(VertexPacket {
+                color: Some(color),
+                ..Default::default()
+            });
+
+            None
+        };
+
+        // The first color is in initial word
+        let more = Remain::Count(match (quad, gouraud, textured) {
+            // 3 vertices
+            (false, false, false) => 3,
+            // 3 vertices + 2 colors
+            (false, true, false) => 5,
+            // 3 vertices + 3 uv-s
+            (false, false, true) => 6,
+            // 3 vertices + 2 colors + 3 uv-s
+            (false, true, true) => 8,
+
+            // 4 vertices
+            (true, false, false) => 4,
+            // 4 vertices + 3 colors
+            (true, true, false) => 7,
+            // 4 vertices + 4 uv-s
+            (true, false, true) => 8,
+            // 4 vertices + 3 colors + 4 uv-s
+            (true, true, true) => 11,
+        });
+
+        (
+            Self {
+                quad,
+                gouraud,
+                textured,
+
+                color,
+                vertices,
+                clut: None,
+                tpage: None,
+            },
+            more,
+        )
+    }
+
+    pub fn push_cmd(&mut self, cmd: u32) {
+        loop {
+            if let Some(last) = self.vertices.last_mut() {
+                if self.gouraud
+                    && let color @ None = &mut last.color
+                {
+                    color.replace(parse_color(cmd));
+                    return;
+                }
+                if let pos @ None = &mut last.pos {
+                    pos.replace(parse_pos(cmd));
+                    return;
+                }
+                if self.textured
+                    && let uv @ None = &mut last.uv
+                {
+                    // TODO : *uv = Some(());
+                    return;
+                }
+            }
+            self.vertices.push(VertexPacket::default());
+        }
+    }
+}
+
+impl LinePacket {
+    pub fn init(cmd: u32) -> (Self, Remain) {
+        const TERMINATOR_CMD: u32 = 0x5000_5000;
+
+        let op = (cmd >> 24) as u8;
+        let polyline = (op & 0x08) != 0;
+        let gouraud = (op & 0x10) != 0;
+
+        let mut vertices = SmallVec::new();
+        let color = parse_color(cmd);
+        let color = if !gouraud {
+            Some(color)
+        } else {
+            vertices.push(VertexPacket {
+                color: Some(color),
+                ..Default::default()
+            });
+            None
+        };
+
+        // The first color is in initial word
+        let more = match (polyline, gouraud) {
+            // 2 vertices
+            (false, false) => Remain::Count(2),
+            // 2 vertices + color
+            (false, true) => Remain::Count(3),
+            // Until terminator
+            (true, _) => Remain::Terminator(TERMINATOR_CMD),
+        };
+
+        (
+            Self {
+                gouraud,
+
+                color,
+                vertices,
+            },
+            more,
+        )
+    }
+
+    pub fn push_cmd(&mut self, cmd: u32) {
+        loop {
+            if let Some(last) = self.vertices.last_mut() {
+                if self.gouraud
+                    && let color @ None = &mut last.color
+                {
+                    color.replace(parse_color(cmd));
+                    return;
+                }
+
+                if let pos @ None = &mut last.pos {
+                    pos.replace(parse_pos(cmd));
+                    return;
+                }
+            }
+
+            self.vertices.push(VertexPacket::default());
+        }
+    }
+}
+
+impl RectPacket {
+    pub fn init(cmd: u32) -> (Self, Remain) {
+        let op = (cmd >> 24) as u8;
+        let textured = (op & 0x04) != 0;
+
+        let color = parse_color(cmd);
+        let size = match op & 0x18 {
+            // Variable sized
+            0x00 => None,
+            // Dot (1x1)
+            0x08 => Some(Size { w: 1, h: 1 }),
+            // Quad (8x8)
+            0x10 => Some(Size { w: 8, h: 8 }),
+            // Quad (16x16)
+            0x18 => Some(Size { w: 16, h: 16 }),
+            _ => unreachable!(),
+        };
+
+        let more = Remain::Count(match (textured, size.is_some()) {
+            // pos + size
+            (false, false) => 2,
+            // pos
+            (false, true) => 1,
+
+            // pos + uv/clut + size
+            (true, false) => 3,
+            // post + uv/clut
+            (true, true) => 2,
+        });
+
+        (
+            Self {
+                textured,
+
+                color,
+                pos: None,
+                uv: None,
+                clut: None,
+                size,
+            },
+            more,
+        )
+    }
+
+    pub fn push_cmd(&mut self, cmd: u32) {
+        if let pos @ None = &mut self.pos {
+            pos.replace(parse_pos(cmd));
+            return;
+        }
+
+        if self.textured
+            && let uv @ None = &mut self.uv
+        {
+            // TODO : *uv = Some(());
+            // TODO : self.clut = Some(());
+            return;
+        }
+
+        self.size.replace(parse_size(cmd));
+    }
+}
+
+fn parse_color(cmd: u32) -> Color {
+    Color {
+        r: cmd as u8,
+        g: (cmd >> 8) as u8,
+        b: (cmd >> 16) as u8,
+    }
+}
+
+fn parse_pos(cmd: u32) -> Position {
+    Position {
+        x: (cmd as u16).cast_signed(),
+        y: ((cmd >> 16) as u16).cast_signed(),
+    }
+}
+
+fn parse_size(cmd: u32) -> Size {
+    Size {
+        w: (cmd as u16),
+        h: (cmd >> 16) as u16,
+    }
 }

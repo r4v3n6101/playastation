@@ -251,7 +251,7 @@ impl Channel {
         let finished = match self.chcr.sync_mode() {
             SyncMode::Manual => self.bcr.word_count() == 0,
             SyncMode::Request => self.bcr.block_count() == 0,
-            SyncMode::LinkedList => self.madr == 0x00FFFFFF,
+            SyncMode::LinkedList => self.madr == 0xFFFFFF,
             SyncMode::Reserved => true,
         };
 
@@ -434,7 +434,7 @@ fn transfer_ll(bus: &mut Bus, chan: &mut Channel) {
         bus.gpu.dispatch_gp0(command);
     }
 
-    chan.madr = header & 0x1FFFFC;
+    chan.madr = header & 0xFFFFFF;
 }
 
 #[cfg(test)]
