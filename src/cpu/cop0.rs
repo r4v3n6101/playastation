@@ -1,6 +1,13 @@
 use modular_bitfield::prelude::*;
 use strum::{EnumDiscriminants, IntoDiscriminant};
 
+/// Simplified Cop0 (coprocessor 0) with the logic used in PSX.
+/// It's not fully implemented, because PSX doesn't use TLB for example.
+#[derive(Debug, Copy, Clone)]
+pub struct Cop0 {
+    pub regs: [u32; 32],
+}
+
 #[bitfield(bits = 32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Status {
@@ -41,13 +48,6 @@ pub struct Cause {
     pub bd: bool,
 }
 
-/// Simplified Cop0 (coprocessor 0) with the logic used in PSX.
-/// It's not fully implemented, because PSX doesn't use TLB for example.
-#[derive(Debug, Copy, Clone)]
-pub struct Cop0 {
-    pub regs: [u32; 32],
-}
-
 #[derive(EnumDiscriminants, Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(u32)]
 pub enum Exception {
@@ -66,8 +66,8 @@ impl Default for Cop0 {
     fn default() -> Self {
         let mut regs = <[_; _]>::default();
 
-        // Status.BEV = 1, everything else 0
-        regs[Self::STATUS_IDX] = 0x0040_0000;
+        let status = Status::new().with_bev(true);
+        regs[Self::STATUS_IDX] = u32::from_le_bytes(status.into_bytes());
 
         Self { regs }
     }

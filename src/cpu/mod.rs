@@ -34,7 +34,6 @@ pub struct PendingLoad {
 
 #[derive(Debug, Default, Copy, Clone)]
 pub struct PendingJump {
-    /// Whether a branch/jump was seen.
     /// Whether a jump will happen.
     pub happen: bool,
     /// Jump target.
