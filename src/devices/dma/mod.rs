@@ -1,31 +1,23 @@
+use std::array;
+
 use modular_bitfield::prelude::*;
-use strum::{EnumCount, EnumIter, FromRepr, IntoEnumIterator};
 
 use crate::{devices::Updater, interconnect::Bus};
 
-use super::{Mmio, MmioExt, int::InterruptFlags};
+use super::{Mmio, MmioExt};
 
-#[derive(EnumCount, EnumIter, FromRepr, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Port {
-    MdecIn = 0,
-    MdecOut = 1,
-    Gpu = 2,
-    CdRom = 3,
-    Spu = 4,
-    Pio = 5,
-    Otc = 6,
-}
+mod handler;
+
+const CHANNELS: usize = 7;
 
 #[derive(Debug, Default)]
 pub struct DmaController {
     /// Channels.
-    pub channels: [Channel; Port::COUNT],
+    pub channels: [Channel; CHANNELS],
     /// Control / priority.
     pub dpcr: Dpcr,
     /// Interrupt control.
     pub dicr: Dicr,
-
-    working: [bool; Port::COUNT],
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -163,103 +155,52 @@ impl Default for Dpcr {
     }
 }
 
-impl DmaController {
-    fn pick_highest_prio_chan(&self) -> Option<Port> {
-        let mut best = None;
-
-        for ch in Port::iter() {
-            let chan = &self.channels[ch as usize];
-
-            if !self.dpcr.chan_enabled(ch) || !chan.chcr.active() {
-                continue;
-            }
-
-            match chan.chcr.sync_mode() {
-                SyncMode::Manual if !chan.chcr.trigger() => continue,
-                SyncMode::LinkedList if ch != Port::Gpu => continue,
-                _ => {}
-            }
-
-            match best {
-                None => best = Some(ch),
-                Some(old) => {
-                    let p_old = self.dpcr.chan_priority(old);
-                    let p_new = self.dpcr.chan_priority(ch);
-
-                    if p_new <= p_old {
-                        best = Some(ch);
-                    }
-                }
-            }
-        }
-
-        best
-    }
-}
-
-/// I really dislike such methods, but arrays aren't supported
 impl Dpcr {
-    fn chan_enabled(self, ch: Port) -> bool {
-        match ch {
-            Port::MdecIn => self.enabled0(),
-            Port::MdecOut => self.enabled1(),
-            Port::Gpu => self.enabled2(),
-            Port::CdRom => self.enabled3(),
-            Port::Spu => self.enabled4(),
-            Port::Pio => self.enabled5(),
-            Port::Otc => self.enabled6(),
-        }
-    }
+    fn sorted_chans(self) -> [(usize, bool); CHANNELS] {
+        let chan_enabled = |ch: usize| match ch {
+            0 => self.enabled0(),
+            1 => self.enabled1(),
+            2 => self.enabled2(),
+            3 => self.enabled3(),
+            4 => self.enabled4(),
+            5 => self.enabled5(),
+            6 => self.enabled6(),
+            _ => unreachable!(),
+        };
+        let chan_prio = |ch: usize| match ch {
+            0 => self.priority0(),
+            1 => self.priority1(),
+            2 => self.priority2(),
+            3 => self.priority3(),
+            4 => self.priority4(),
+            5 => self.priority5(),
+            6 => self.priority6(),
+            _ => unreachable!(),
+        };
+        let mut channels = array::from_fn(|x| (x, chan_enabled(x)));
 
-    fn chan_priority(self, ch: Port) -> u8 {
-        match ch {
-            Port::MdecIn => self.priority0(),
-            Port::MdecOut => self.priority1(),
-            Port::Gpu => self.priority2(),
-            Port::CdRom => self.priority3(),
-            Port::Spu => self.priority4(),
-            Port::Pio => self.priority5(),
-            Port::Otc => self.priority6(),
-        }
+        // Lower prio goes first, if equal then higher index go first
+        channels.sort_unstable_by(|(idx1, _), (idx2, _)| {
+            chan_prio(*idx1)
+                .cmp(&chan_prio(*idx2))
+                .then(idx1.cmp(idx2).reverse())
+        });
+
+        channels
     }
 }
 
 impl Dicr {
-    fn set_irq_lane(&mut self, ch: Port) {
-        self.set_irq_flags(self.irq_flags() | (1 << ch as u8));
+    fn set_irq_lane(&mut self, ch: usize) {
+        self.set_irq_flags(self.irq_flags() | (1 << ch));
         self.update_irq_signal();
     }
 
     fn update_irq_signal(&mut self) {
-        if self.force_irq()
-            || (self.master_enabled() && (self.irq_enabled() & self.irq_flags()) != 0)
-        {
-            self.set_irq_signal(true);
-        }
-    }
-}
-
-impl Channel {
-    fn start(&mut self) {
-        self.chcr.set_active(true);
-        if self.chcr.sync_mode() == SyncMode::Manual {
-            self.chcr.set_trigger(false);
-        }
-    }
-
-    fn try_finish(&mut self) -> bool {
-        let finished = match self.chcr.sync_mode() {
-            SyncMode::Manual => self.bcr.word_count() == 0,
-            SyncMode::Request => self.bcr.block_count() == 0,
-            SyncMode::LinkedList => self.madr == 0x00FFFFFF,
-            SyncMode::Reserved => true,
-        };
-
-        if finished {
-            self.chcr.set_active(false);
-        }
-
-        finished
+        self.set_irq_signal(
+            self.force_irq()
+                || (self.master_enabled() && (self.irq_enabled() & self.irq_flags()) != 0),
+        );
     }
 }
 
@@ -317,124 +258,43 @@ impl Mmio for DmaController {
 
 impl Updater for DmaController {
     fn tick(bus: &mut Bus) {
-        // Find hi-prio enabled channel or any channel in work.
-        let Some(ch) = bus.dma_ctrl.pick_highest_prio_chan().or_else(|| {
-            bus.dma_ctrl
-                .working
-                .iter()
-                .position(|working| *working)
-                .and_then(Port::from_repr)
-        }) else {
-            return;
-        };
-
-        bus.dma_ctrl.working[ch as usize] = true;
-
-        let mut chan = bus.dma_ctrl.channels[ch as usize];
-        chan.start();
-
-        match chan.chcr.sync_mode() {
-            SyncMode::Manual => transfer_word(bus, ch, &mut chan),
-            SyncMode::Request => transfer_block(bus, &mut chan),
-            SyncMode::LinkedList => transfer_ll(bus, &mut chan),
-            SyncMode::Reserved => unreachable!(),
-        }
-
-        if chan.try_finish() {
-            bus.dma_ctrl.working[ch as usize] = false;
-
-            bus.dma_ctrl.dicr.set_irq_lane(ch);
-
-            if bus.dma_ctrl.dicr.irq_signal() {
-                bus.int_ctrl.raise(InterruptFlags::DMA);
+        for (ch, enabled) in bus.dma_ctrl.dpcr.sorted_chans() {
+            if !enabled {
+                continue;
             }
+
+            let mut chan = bus.dma_ctrl.channels[ch];
+
+            // trigger bit must be present when sync_mode is Manual
+            if matches!(chan.chcr.sync_mode(), SyncMode::Manual) && !chan.chcr.trigger() {
+                continue;
+            }
+
+            // non-active skipped at all
+            // TODO : should be for trigger = true, active = false?
+            if !chan.chcr.active() {
+                continue;
+            }
+
+            match chan.chcr.sync_mode() {
+                SyncMode::Manual => handler::do_manual(bus, ch, &mut chan),
+                SyncMode::Request => handler::do_block(bus, ch, &mut chan),
+                SyncMode::LinkedList => handler::do_linked_list(bus, ch, &mut chan),
+                SyncMode::Reserved => unreachable!(),
+            }
+
+            chan.chcr.set_active(false);
+            chan.chcr.set_trigger(false);
+
+            // TODO
+            // bus.dma_ctrl.dicr.set_irq_lane(ch);
+            // if bus.dma_ctrl.dicr.irq_signal() {
+            //     bus.int_ctrl.raise(InterruptFlags::DMA);
+            // }
+
+            bus.dma_ctrl.channels[ch] = chan;
         }
-
-        bus.dma_ctrl.channels[ch as usize] = chan;
     }
-}
-
-fn transfer_word(bus: &mut Bus, ch: Port, chan: &mut Channel) {
-    let mut word_count = chan.bcr.word_count();
-
-    let step = match chan.chcr.step() {
-        Step::Increment => 4,
-        Step::Decrement => -4,
-    };
-    if word_count > 0 {
-        let addr = chan.madr & 0x1FFFFC;
-        match chan.chcr.direction() {
-            Direction::FromRam => todo!(),
-            Direction::ToRam => match ch {
-                Port::Otc => {
-                    let word = if word_count == 1 {
-                        // Terminator for table
-                        0xFFFFFF
-                    } else {
-                        chan.madr.wrapping_sub(4) & 0x1FFFFF
-                    };
-
-                    // Silently stores, ignoring errors
-                    let _ = bus.store::<4>(addr, word.to_le_bytes());
-                }
-                _ => todo!(),
-            },
-        }
-
-        chan.madr = chan.madr.wrapping_add_signed(step);
-
-        word_count -= 1;
-    }
-
-    chan.bcr.set_word_count(word_count);
-}
-
-fn transfer_block(bus: &mut Bus, chan: &mut Channel) {
-    let mut block_count = chan.bcr.block_count();
-
-    let step = match chan.chcr.step() {
-        Step::Increment => 4,
-        Step::Decrement => -4,
-    };
-    if block_count > 0 {
-        for _ in 0..chan.bcr.word_count() {
-            let addr = chan.madr & 0x1FFFFC;
-
-            // TODO : From/ToRam
-            let word = bus.load::<4>(addr);
-
-            chan.madr = chan.madr.wrapping_add_signed(step);
-        }
-
-        block_count -= 1;
-    }
-
-    chan.bcr.set_block_count(block_count);
-}
-
-fn transfer_ll(bus: &mut Bus, chan: &mut Channel) {
-    let mut addr = chan.madr & 0x1FFFFC;
-
-    let Ok(header) = bus.load(addr) else {
-        // Skip all packets and mark channel transfer as terminated
-        chan.madr = 0xFFFFFF;
-        return;
-    };
-    let header = u32::from_le_bytes(header);
-    let size = header >> 24;
-    for _ in 0..size {
-        addr = addr.wrapping_add(4);
-
-        let Ok(command) = bus.load(addr) else {
-            // Same as above
-            chan.madr = 0xFFFFFF;
-            return;
-        };
-        let command = u32::from_le_bytes(command);
-        bus.gpu.dispatch_gp0(command);
-    }
-
-    chan.madr = header & 0x1FFFFC;
 }
 
 #[cfg(test)]
@@ -490,7 +350,5 @@ mod tests {
                 .with_active(true)
                 .with_trigger(true)
         );
-
-        assert!(ctrl.pick_highest_prio_chan().is_some());
     }
 }

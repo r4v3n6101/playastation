@@ -2,7 +2,6 @@ use std::mem;
 
 use crate::{
     cpu::{Cpu, Exception},
-    devices::{Updater, dma::DmaController, gpu::Gpu},
     interconnect::Bus,
 };
 
@@ -65,9 +64,8 @@ where
         decoder::decode_block(&mut self.block, &self.cpu, bus, self.block_size);
         let execution = self.executor.run(&self.block, &mut self.cpu, bus);
 
-        // Other device updates
-        DmaController::tick(bus);
-        Gpu::tick(bus);
+        // Update all bus' devices
+        bus.tick();
 
         self.cpu.cop0.set_hw_irq(bus.int_ctrl.pending());
         let interrupt = self

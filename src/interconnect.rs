@@ -2,7 +2,7 @@ use std::ops::Range;
 
 use bytes::BytesMut;
 
-use crate::devices::{Mmio, dma::DmaController, gpu::Gpu, int::InterruptController};
+use crate::devices::{Mmio, Updater, dma::DmaController, gpu::Gpu, int::InterruptController};
 
 // MIPS uses segmented memory, but PSX ignore them and treat all segments as mirror to each other
 const KUSEG: Range<u32> = 0x0000_0000..0x7FFF_FFFF;
@@ -91,6 +91,11 @@ impl Default for Bus {
 }
 
 impl Bus {
+    pub fn tick(&mut self) {
+        DmaController::tick(self);
+        Gpu::tick(self);
+    }
+
     pub fn load<const N: usize>(&self, addr: u32) -> Result<[u8; N], BusError> {
         if !addr.is_multiple_of(N as u32) {
             return Err(BusError {

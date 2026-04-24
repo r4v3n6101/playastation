@@ -1,18 +1,24 @@
 use modular_bitfield::prelude::*;
 
-use crate::{
-    devices::{Updater, int::InterruptFlags},
-    interconnect::Bus,
-};
+use crate::{devices::Updater, interconnect::Bus};
 
 use super::{Mmio, MmioExt};
 
-mod cmd;
-mod handler;
+mod gp0;
+mod gp1;
+mod types;
 
-#[derive(Debug, Default)]
+type Vram = Box<[[u16; VRAM_WIDTH]; VRAM_HEIGHT]>;
+
+const VRAM_WIDTH: usize = 1024;
+const VRAM_HEIGHT: usize = 512;
+
+#[derive(Debug)]
 pub struct Gpu {
     pub gpustat: GpuStat,
+    pub vram: Vram,
+
+    cmdbuf: gp0::CmdBuf,
 }
 
 #[bitfield(bits = 32)]
@@ -105,19 +111,31 @@ pub enum GpuDmaDirection {
 impl Default for GpuStat {
     fn default() -> Self {
         Self::new()
+            .with_interlace_field(true)
+            .with_display_disabled(true)
             .with_ready_to_receive_command(true)
-            .with_ready_to_send_vram(true)
             .with_ready_to_receive_dma(true)
     }
 }
 
+impl Default for Gpu {
+    fn default() -> Self {
+        Self {
+            gpustat: GpuStat::default(),
+            vram: Box::new([[0; _]; _]),
+
+            cmdbuf: gp0::CmdBuf::default(),
+        }
+    }
+}
+
 impl Gpu {
-    pub fn dispatch_gp0(&mut self, command: u32) {
-        handler::handle_gp0(self, command);
+    pub fn dispatch_gp0(&mut self, cmd: u32) {
+        self.cmdbuf.push_cmd(cmd, &mut self.vram);
     }
 
-    pub fn dispatch_gp1(&mut self, command: u32) {
-        handler::handle_gp1(self, command);
+    pub fn dispatch_gp1(&mut self, cmd: u32) {
+        gp1::process(self, cmd);
     }
 }
 
@@ -142,9 +160,9 @@ impl Mmio for Gpu {
 
 impl Updater for Gpu {
     fn tick(bus: &mut Bus) {
-        if bus.gpu.gpustat.interrupt_request() {
-            bus.int_ctrl.raise(InterruptFlags::GPU);
-        }
+        // if bus.gpu.gpustat.interrupt_request() {
+        //     bus.int_ctrl.raise(InterruptFlags::GPU);
+        // }
     }
 }
 
@@ -157,6 +175,6 @@ mod tests {
         let gpustat = GpuStat::default();
         let reg = u32::from_le_bytes(gpustat.into_bytes());
 
-        assert_eq!(reg, 0x1C000000);
+        assert_eq!(reg, 0x1480_2000);
     }
 }

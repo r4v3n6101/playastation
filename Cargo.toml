@@ -10,6 +10,8 @@ bitflags = "2.11.0"
 modular-bitfield = "0.13.1"
 
 cranelift = { version = "0.130", features = ["module", "jit"], optional = true }
+smallvec = "1.15.1"
+smallbox = { version = "0.8.8", features = ["coerce"] }
 
 [features]
 default = []

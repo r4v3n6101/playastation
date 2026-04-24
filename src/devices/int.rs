@@ -31,6 +31,10 @@ impl InterruptController {
     pub fn raise(&mut self, int: InterruptFlags) {
         self.i_stat.insert(int);
     }
+
+    pub fn clear(&mut self, int: InterruptFlags) {
+        self.i_stat.remove(int);
+    }
 }
 
 impl Mmio for InterruptController {
