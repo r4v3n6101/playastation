@@ -32,22 +32,14 @@ pub fn decode_block(output: &mut Vec<Operation>, cpu: &Cpu, bus: &Bus, mut limit
 
         let ins = match bus.load(pc) {
             Ok(ins) => u32::from_le_bytes(ins),
-            Err(BusError {
-                kind: BusErrorKind::UnalignedAddr,
-                bad_vaddr,
-            }) => {
+            Err(BusError { kind, bad_vaddr }) => {
                 output.push(Operation::Break {
                     pc,
                     in_delay_slot: pending_delay_slot,
-                    cause: Exception::UnalignedLoad { bad_vaddr },
-                });
-                break;
-            }
-            Err(BusError { bad_vaddr, .. }) => {
-                output.push(Operation::Break {
-                    pc,
-                    in_delay_slot: pending_delay_slot,
-                    cause: Exception::InstructionBus { bad_vaddr },
+                    cause: match kind {
+                        BusErrorKind::UnalignedAddr => Exception::UnalignedLoad { bad_vaddr },
+                        _ => Exception::InstructionBus { bad_vaddr },
+                    },
                 });
                 break;
             }

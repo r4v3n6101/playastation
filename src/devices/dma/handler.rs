@@ -65,6 +65,9 @@ pub fn do_block(bus: &mut Bus, ch: usize, chan: &mut Channel) {
             chan.madr = chan.madr.wrapping_add_signed(step);
         }
     }
+
+    chan.bcr.set_word_count(0);
+    chan.bcr.set_block_count(0);
 }
 
 pub fn do_linked_list(bus: &mut Bus, ch: usize, chan: &mut Channel) {
