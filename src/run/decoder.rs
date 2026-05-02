@@ -20,7 +20,7 @@ pub enum Operation {
 
 /// Decode block.
 /// Size is limited to `limit`, but may be `limit + 1` in case of `limit` element is branch/jump.
-pub fn decode_block(output: &mut Vec<Operation>, cpu: &Cpu, bus: &Bus, mut limit: usize) {
+pub fn decode_block(output: &mut Vec<Operation>, cpu: &Cpu, bus: &mut Bus, mut limit: usize) {
     let mut pc = cpu.pc;
     let mut pending_delay_slot = false;
 
@@ -117,14 +117,14 @@ mod tests {
             pc: 0,
             ..Default::default()
         };
-        let bus = make_bus(&[
+        let mut bus = make_bus(&[
             (0x0000_0000, 0x1000_0001),
             (0x0000_0004, 0x0000_0000),
             (0x0000_0008, 0x0000_0000),
         ]);
 
         let mut out = Vec::new();
-        decode_block(&mut out, &cpu, &bus, 1024);
+        decode_block(&mut out, &cpu, &mut bus, 1024);
 
         assert_eq!(out.len(), 2);
 
@@ -158,14 +158,14 @@ mod tests {
             pc: 0,
             ..Default::default()
         };
-        let bus = make_bus(&[
+        let mut bus = make_bus(&[
             (0x0000_0000, 0x03E0_0008),
             (0x0000_0004, 0x0000_0000),
             (0x0000_0008, 0x0000_0000),
         ]);
 
         let mut out = Vec::new();
-        decode_block(&mut out, &cpu, &bus, 1024);
+        decode_block(&mut out, &cpu, &mut bus, 1024);
 
         assert_eq!(out.len(), 2);
 
@@ -192,10 +192,10 @@ mod tests {
             pc: 0,
             ..Default::default()
         };
-        let bus = make_bus(&[(0x0000_0000, 0x0000_000C), (0x0000_0004, 0x0000_0000)]);
+        let mut bus = make_bus(&[(0x0000_0000, 0x0000_000C), (0x0000_0004, 0x0000_0000)]);
 
         let mut out = Vec::new();
-        decode_block(&mut out, &cpu, &bus, 1024);
+        decode_block(&mut out, &cpu, &mut bus, 1024);
 
         assert_eq!(out.len(), 1);
 
@@ -217,10 +217,10 @@ mod tests {
             pc: 0,
             ..Default::default()
         };
-        let bus = make_bus(&[(0x0000_0000, 0x0000_000D), (0x0000_0004, 0x0000_0000)]);
+        let mut bus = make_bus(&[(0x0000_0000, 0x0000_000D), (0x0000_0004, 0x0000_0000)]);
 
         let mut out = Vec::new();
-        decode_block(&mut out, &cpu, &bus, 1024);
+        decode_block(&mut out, &cpu, &mut bus, 1024);
 
         assert_eq!(out.len(), 1);
 
@@ -241,10 +241,10 @@ mod tests {
             pc: 0,
             ..Default::default()
         };
-        let bus = make_bus(&[(0x0000_0000, 0xFFFF_FFFF), (0x0000_0004, 0x0000_0000)]);
+        let mut bus = make_bus(&[(0x0000_0000, 0xFFFF_FFFF), (0x0000_0004, 0x0000_0000)]);
 
         let mut out = Vec::new();
-        decode_block(&mut out, &cpu, &bus, 1024);
+        decode_block(&mut out, &cpu, &mut bus, 1024);
 
         assert_eq!(out.len(), 1);
         assert!(matches!(

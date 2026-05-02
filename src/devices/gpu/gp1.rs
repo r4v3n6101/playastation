@@ -1,6 +1,6 @@
 use strum::FromRepr;
 
-use super::{Gpu, GpuDmaDirection, GpuStat};
+use super::{Gpu, GpuDmaDirection};
 
 #[derive(FromRepr, Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -23,14 +23,14 @@ pub fn process(gpu: &mut Gpu, cmd: u32) {
         return;
     };
 
-    println!("{opcode:?} = {cmd:#x}");
     match opcode {
         Gp1Opcode::ResetGpu => {
-            gpu.gpustat = GpuStat::default();
-            gpu.cmdbuf.clear();
+            gpu.gpustat = Default::default();
+            gpu.cmdbuf = Default::default();
+            gpu.databuf = Default::default();
         }
         Gp1Opcode::ResetCommandBuffer => {
-            gpu.cmdbuf.clear();
+            gpu.cmdbuf = Default::default();
         }
         Gp1Opcode::AcknowledgeInterrupt => gpu.gpustat.set_interrupt_request(false),
         Gp1Opcode::DisplayEnable => gpu.gpustat.set_display_disabled(cmd & 0x1 != 0),

@@ -205,20 +205,20 @@ impl Dicr {
 }
 
 impl Mmio for DmaController {
-    fn read(&self, dest: &mut [u8], addr: u32) {
-        self.read_unaligned(dest, addr, |addr| match addr {
+    fn read(&mut self, dest: &mut [u8], addr: u32) {
+        self.read_unaligned(dest, addr, |this, addr| match addr {
             ..0x70 => {
                 let reg = addr % 0x10;
                 let chan = (addr / 0x10) as usize;
                 match reg {
-                    0x0 => self.channels[chan].madr,
-                    0x4 => u32::from_le_bytes(self.channels[chan].bcr.into_bytes()),
-                    0x8 => u32::from_le_bytes(self.channels[chan].chcr.into_bytes()),
+                    0x0 => this.channels[chan].madr,
+                    0x4 => u32::from_le_bytes(this.channels[chan].bcr.into_bytes()),
+                    0x8 => u32::from_le_bytes(this.channels[chan].chcr.into_bytes()),
                     _ => unreachable!(),
                 }
             }
-            0x70 => u32::from_le_bytes(self.dpcr.into_bytes()),
-            0x74 => u32::from_le_bytes(self.dicr.into_bytes()),
+            0x70 => u32::from_le_bytes(this.dpcr.into_bytes()),
+            0x74 => u32::from_le_bytes(this.dicr.into_bytes()),
             _ => unreachable!(),
         });
     }

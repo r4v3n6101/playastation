@@ -1,11 +1,11 @@
-use std::fmt;
+use std::{fmt, mem};
 
 use smallbox::{SmallBox, space::S32};
 use smallvec::SmallVec;
 use strum::FromRepr;
 
 use super::{
-    VRAM_HEIGHT, VRAM_WIDTH, Vram,
+    Gpu, VRAM_HEIGHT, VRAM_WIDTH,
     types::{Clut, Color, Location, Position, Size, UV},
 };
 
@@ -13,11 +13,6 @@ use super::{
 const POLYGON_STACK_LIMIT: usize = 4;
 /// Points for polyline that will be stored on a stack. If more then heap alloc.
 const POLYLINE_STACK_LIMIT: usize = 10;
-
-#[derive(Debug)]
-pub struct CmdBuf {
-    packet: SmallBox<dyn Packet, S32>,
-}
 
 #[derive(FromRepr, Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -32,6 +27,19 @@ enum Gp0OpcodeGroup {
     Env = 0x7,
 }
 
+#[derive(Debug)]
+pub struct CmdBuf {
+    packet: SmallBox<dyn Packet, S32>,
+}
+
+#[derive(Debug)]
+pub struct DataBuf {
+    pos: Position,
+    size: Size,
+
+    pixels_read: u32,
+}
+
 /// [`Default`] state is like after NOP command.
 impl Default for CmdBuf {
     fn default() -> Self {
@@ -41,55 +49,96 @@ impl Default for CmdBuf {
     }
 }
 
-impl CmdBuf {
-    pub fn clear(&mut self) {
-        self.packet = SmallBox::new(());
+impl Default for DataBuf {
+    fn default() -> Self {
+        Self {
+            pos: Position { x: 0, y: 0 },
+            size: Size { w: 0, h: 0 },
+
+            pixels_read: 0,
+        }
+    }
+}
+
+pub fn process(gpu: &mut Gpu, cmd: u32) {
+    let mut cmdbuf = mem::take(&mut gpu.cmdbuf);
+
+    if cmdbuf.packet.needs_more() {
+        cmdbuf.packet.push_cmd(cmd, gpu);
+    } else {
+        let opcode = (cmd >> 24) as u8;
+        let group = (cmd >> 29) as u8;
+        let group = Gp0OpcodeGroup::from_repr(group);
+        println!("{group:?} = {opcode:#x}");
+        match (group, opcode) {
+            (_, 0x00 | 0x03..=0x1E) => {
+                // NOP
+                cmdbuf.packet = SmallBox::new(());
+            }
+            (_, 0x01) => {
+                // Clear CLUT AFAIK
+                cmdbuf.packet = SmallBox::new(());
+            }
+            (_, 0x02) => {
+                println!("fill vram");
+                // FillVram
+            }
+            (Some(Gp0OpcodeGroup::Polygon), _) => {
+                cmdbuf.packet = SmallBox::new(PolygonPacket::init(cmd));
+            }
+            (Some(Gp0OpcodeGroup::Line), _) => {
+                cmdbuf.packet = SmallBox::new(LinePacket::init(cmd));
+            }
+            (Some(Gp0OpcodeGroup::Rect), _) => {
+                cmdbuf.packet = SmallBox::new(RectPacket::init(cmd));
+            }
+            (Some(Gp0OpcodeGroup::Vram2Vram), _) => {
+                println!("Vram2Vram");
+            }
+            (Some(Gp0OpcodeGroup::Cpu2Vram), _) => {
+                cmdbuf.packet = SmallBox::new(Cpu2VramPacket::init(cmd));
+            }
+            (Some(Gp0OpcodeGroup::Vram2Cpu), _) => {
+                cmdbuf.packet = SmallBox::new(Vram2CpuPacket::init(cmd));
+            }
+            _ => {}
+        }
     }
 
-    pub fn push_cmd(&mut self, cmd: u32, vram: &mut Vram) {
-        if self.packet.needs_more() {
-            self.packet.push_cmd(cmd, vram);
-        } else {
-            let opcode = (cmd >> 24) as u8;
-            let group = (cmd >> 29) as u8;
-            let group = Gp0OpcodeGroup::from_repr(group);
-            println!("{group:?} = {cmd:#x}");
-            match (group, opcode) {
-                (_, 0x00 | 0x03..=0x1E) => {
-                    // NOP
-                    self.packet = SmallBox::new(());
-                }
-                (_, 0x01) => {
-                    // Clear CLUT AFAIK
-                    self.packet = SmallBox::new(());
-                }
-                (_, 0x02) => {
-                    println!("fill vram");
-                    // FillVram
-                }
-                (Some(Gp0OpcodeGroup::Polygon), _) => {
-                    self.packet = SmallBox::new(PolygonPacket::init(cmd));
-                }
-                (Some(Gp0OpcodeGroup::Line), _) => {
-                    self.packet = SmallBox::new(LinePacket::init(cmd));
-                }
-                (Some(Gp0OpcodeGroup::Rect), _) => {
-                    self.packet = SmallBox::new(RectPacket::init(cmd));
-                }
-                (Some(Gp0OpcodeGroup::Vram2Vram), _) => {}
-                (Some(Gp0OpcodeGroup::Cpu2Vram), _) => {
-                    self.packet = SmallBox::new(Cpu2VramPacket::init(cmd));
-                }
-                (Some(Gp0OpcodeGroup::Vram2Cpu), _) => {}
-                _ => {}
+    if !cmdbuf.packet.needs_more() {
+        // TODO : commit
+    } else {
+        gpu.cmdbuf = cmdbuf;
+    }
+}
+
+pub fn read(gpu: &mut Gpu) -> u32 {
+    let databuf = &mut gpu.databuf;
+
+    let mut data = [0u32; 2];
+    for pixel in &mut data {
+        let size = u32::from(databuf.size.w) * u32::from(databuf.size.h);
+        if databuf.pixels_read < size {
+            let (x, y) = (
+                databuf.pixels_read % u32::from(databuf.size.w),
+                databuf.pixels_read / u32::from(databuf.size.w),
+            );
+            let x = (databuf.pos.x as u32 + x) as usize;
+            let y = (databuf.pos.y as u32 + y) as usize;
+
+            if x <= VRAM_WIDTH && y <= VRAM_HEIGHT {
+                *pixel = u32::from(gpu.vram[y][x]);
+            }
+
+            databuf.pixels_read = databuf.pixels_read.wrapping_add(1);
+
+            if databuf.pixels_read >= size {
+                gpu.gpustat.set_ready_to_send_vram(false);
             }
         }
-
-        if !self.packet.needs_more() {
-            // TODO : commit
-            self.clear();
-        }
     }
+
+    data[1] << 16 | data[0]
 }
 
 trait Packet: fmt::Debug {
@@ -97,7 +146,7 @@ trait Packet: fmt::Debug {
     where
         Self: Sized;
 
-    fn push_cmd(&mut self, cmd: u32, vram: &mut Vram);
+    fn push_cmd(&mut self, cmd: u32, gpu: &mut Gpu);
 
     fn needs_more(&self) -> bool;
 }
@@ -147,6 +196,12 @@ struct Cpu2VramPacket {
     pixels_written: u32,
 }
 
+#[derive(Debug)]
+struct Vram2CpuPacket {
+    pos: Option<Position>,
+    size: Option<Size>,
+}
+
 #[derive(Debug, Default, Copy, Clone)]
 struct VertexBuilder {
     loc: Option<Location>,
@@ -161,7 +216,7 @@ impl Packet for () {
     {
     }
 
-    fn push_cmd(&mut self, _: u32, _: &mut Vram) {}
+    fn push_cmd(&mut self, _: u32, _: &mut Gpu) {}
 
     fn needs_more(&self) -> bool {
         false
@@ -225,7 +280,7 @@ impl Packet for PolygonPacket {
         }
     }
 
-    fn push_cmd(&mut self, cmd: u32, _: &mut Vram) {
+    fn push_cmd(&mut self, cmd: u32, _: &mut Gpu) {
         self.words_left -= 1;
 
         loop {
@@ -297,7 +352,7 @@ impl Packet for LinePacket {
         }
     }
 
-    fn push_cmd(&mut self, cmd: u32, _: &mut Vram) {
+    fn push_cmd(&mut self, cmd: u32, _: &mut Gpu) {
         const TERMINATOR_CMD: u32 = 0x5000_5000;
 
         if cmd == TERMINATOR_CMD {
@@ -376,7 +431,7 @@ impl Packet for RectPacket {
         }
     }
 
-    fn push_cmd(&mut self, cmd: u32, _: &mut Vram) {
+    fn push_cmd(&mut self, cmd: u32, _: &mut Gpu) {
         self.words_left -= 1;
 
         if let loc @ None = &mut self.loc {
@@ -411,7 +466,7 @@ impl Packet for Cpu2VramPacket {
         }
     }
 
-    fn push_cmd(&mut self, cmd: u32, vram: &mut Vram) {
+    fn push_cmd(&mut self, cmd: u32, gpu: &mut Gpu) {
         if let pos @ None = &mut self.pos {
             pos.replace(parse_pos(cmd));
             return;
@@ -428,11 +483,11 @@ impl Packet for Cpu2VramPacket {
                         self.pixels_written % u32::from(size.w),
                         self.pixels_written / u32::from(size.w),
                     );
-                    let x = (self.pos.unwrap().x + x as u16) as usize;
-                    let y = (self.pos.unwrap().y + y as u16) as usize;
+                    let x = (self.pos.unwrap().x as u32 + x) as usize;
+                    let y = (self.pos.unwrap().y as u32 + y) as usize;
 
                     if x <= VRAM_WIDTH && y <= VRAM_HEIGHT {
-                        vram[y][x] = pixel;
+                        gpu.vram[y][x] = pixel;
                     }
 
                     self.pixels_written = self.pixels_written.wrapping_add(1);
@@ -448,6 +503,37 @@ impl Packet for Cpu2VramPacket {
         let size = u32::from(size.w) * u32::from(size.h);
 
         self.pixels_written < size
+    }
+}
+
+impl Packet for Vram2CpuPacket {
+    fn init(_: u32) -> Self
+    where
+        Self: Sized,
+    {
+        Self {
+            pos: None,
+            size: None,
+        }
+    }
+
+    fn push_cmd(&mut self, cmd: u32, gpu: &mut Gpu) {
+        if let pos @ None = &mut self.pos {
+            pos.replace(parse_pos(cmd));
+            return;
+        }
+        self.size.replace(parse_size(cmd));
+
+        gpu.gpustat.set_ready_to_send_vram(true);
+        gpu.databuf = DataBuf {
+            pos: self.pos.unwrap(),
+            size: self.size.unwrap(),
+            pixels_read: 0,
+        };
+    }
+
+    fn needs_more(&self) -> bool {
+        self.size.is_none()
     }
 }
 

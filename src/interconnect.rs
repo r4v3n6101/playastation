@@ -96,7 +96,7 @@ impl Bus {
         Gpu::tick(self);
     }
 
-    pub fn load<const N: usize>(&self, addr: u32) -> Result<[u8; N], BusError> {
+    pub fn load<const N: usize>(&mut self, addr: u32) -> Result<[u8; N], BusError> {
         if !addr.is_multiple_of(N as u32) {
             return Err(BusError {
                 bad_vaddr: addr,

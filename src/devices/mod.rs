@@ -10,21 +10,26 @@ pub trait Updater {
 }
 
 pub trait Mmio {
-    fn read(&self, dest: &mut [u8], addr: u32);
+    fn read(&mut self, dest: &mut [u8], addr: u32);
 
     fn write(&mut self, addr: u32, value: &[u8]);
 }
 
 trait MmioExt: Mmio {
-    fn read_unaligned(&self, dest: &mut [u8], addr: u32, read: impl Fn(u32) -> u32) {
+    fn read_unaligned(
+        &mut self,
+        dest: &mut [u8],
+        addr: u32,
+        read: impl FnOnce(&mut Self, u32) -> u32,
+    ) {
         let (addr, off) = (addr & !0x3, addr & 0x3);
-        let val = read(addr);
+        let val = read(self, addr);
 
         let bytes = val.to_le_bytes();
         dest.copy_from_slice(&bytes[off as usize..][..dest.len()]);
     }
 
-    fn write_value(&self, addr: u32, value: &[u8]) -> (u32, u32) {
+    fn write_value(&mut self, addr: u32, value: &[u8]) -> (u32, u32) {
         let (addr, off) = (addr & !0x3, addr & 0x3);
 
         let mut buf = [0u8; 4];

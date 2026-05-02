@@ -6,6 +6,7 @@ use super::{Mmio, MmioExt};
 
 mod gp0;
 mod gp1;
+// TODO : move to renderer module
 mod types;
 
 type Vram = Box<[[u16; VRAM_WIDTH]; VRAM_HEIGHT]>;
@@ -19,6 +20,7 @@ pub struct Gpu {
     pub vram: Vram,
 
     cmdbuf: gp0::CmdBuf,
+    databuf: gp0::DataBuf,
 }
 
 #[bitfield(bits = 32)]
@@ -125,13 +127,14 @@ impl Default for Gpu {
             vram: Box::new([[0; _]; _]),
 
             cmdbuf: gp0::CmdBuf::default(),
+            databuf: gp0::DataBuf::default(),
         }
     }
 }
 
 impl Gpu {
     pub fn dispatch_gp0(&mut self, cmd: u32) {
-        self.cmdbuf.push_cmd(cmd, &mut self.vram);
+        gp0::process(self, cmd);
     }
 
     pub fn dispatch_gp1(&mut self, cmd: u32) {
@@ -140,10 +143,10 @@ impl Gpu {
 }
 
 impl Mmio for Gpu {
-    fn read(&self, dest: &mut [u8], addr: u32) {
-        self.read_unaligned(dest, addr, |addr| match addr {
-            0x0 => 0,
-            0x4 => u32::from_le_bytes(self.gpustat.into_bytes()),
+    fn read(&mut self, dest: &mut [u8], addr: u32) {
+        self.read_unaligned(dest, addr, |this, addr| match addr {
+            0x0 => gp0::read(this),
+            0x4 => u32::from_le_bytes(this.gpustat.into_bytes()),
             _ => unreachable!(),
         });
     }
