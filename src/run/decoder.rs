@@ -38,7 +38,11 @@ pub fn decode_block(output: &mut Vec<Operation>, cpu: &Cpu, bus: &mut Bus, mut l
                     bad_vaddr,
                 },
             ) => {
-                tracing::warn!(?err, %pc, "ins fetch failed");
+                tracing::warn!(
+                    ?err,
+                    pc=%format_args!("{pc:#X}"),
+                    "ins fetch failed"
+                );
                 output.push(Operation::Break {
                     pc,
                     in_delay_slot: pending_delay_slot,
@@ -52,7 +56,10 @@ pub fn decode_block(output: &mut Vec<Operation>, cpu: &Cpu, bus: &mut Bus, mut l
         };
 
         let Some(op) = Opcode::decode(ins) else {
-            tracing::warn!(%pc, "ins decode failed");
+            tracing::warn!(
+                pc=%format_args!("{pc:#X}"),
+                "ins decode failed"
+            );
             output.push(Operation::Break {
                 pc,
                 in_delay_slot: pending_delay_slot,
@@ -99,8 +106,6 @@ pub fn decode_block(output: &mut Vec<Operation>, cpu: &Cpu, bus: &mut Bus, mut l
         pc = pc.wrapping_add(4);
         limit -= 1;
     }
-
-    tracing::trace!(size=%output.len(), %limit, "instruction block decoded");
 }
 
 #[cfg(test)]

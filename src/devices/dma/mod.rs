@@ -257,7 +257,6 @@ impl Mmio for DmaController {
 }
 
 impl Updater for DmaController {
-    #[tracing::instrument(target = "dma", level = "DEBUG", skip(bus))]
     fn tick(bus: &mut Bus) {
         for (ch, enabled) in bus.dma_ctrl.dpcr.sorted_chans() {
             if !enabled {

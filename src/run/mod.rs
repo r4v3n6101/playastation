@@ -59,10 +59,11 @@ impl<E> CpuExecutor<E>
 where
     E: Executor,
 {
-    #[tracing::instrument(target = "executor", level = "DEBUG", skip(self, bus))]
     pub fn run(&mut self, bus: &mut Bus) {
-        // CPU first
+        // Decode batch of instructions, stopping at an error in fetch/decode or Syscall/Break.
         decoder::decode_block(&mut self.block, &self.cpu, bus, self.block_size);
+
+        // CPU first
         let execution = self.executor.run(&self.block, &mut self.cpu, bus);
 
         // Then devices on the bus are updated
@@ -84,7 +85,7 @@ where
         if let Some(exception) = execution.exception {
             tracing::debug!(
                 ?exception,
-                epc=%execution.last_pc,
+                epc=%format_args!("{:#X}", execution.last_pc),
                 delay_slot=%execution.last_in_delay_slot,
                 "entering exception handler"
             );

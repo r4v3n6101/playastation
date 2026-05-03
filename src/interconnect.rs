@@ -136,7 +136,7 @@ impl Bus {
                 self.gpu.read(&mut bytes, x - GPU.start);
             }
             x if HW_REGS.contains(&x) => {
-                tracing::trace!(addr=%x, "HW regs touched");
+                tracing::trace!(addr=%format_args!("{x:#X}"), "HW regs touched");
             }
             _ => {
                 return Err(BusError {
@@ -186,7 +186,7 @@ impl Bus {
                 self.gpu.write(x - GPU.start, &value);
             }
             x if HW_REGS.contains(&x) => {
-                tracing::trace!(addr=%x, "HW regs touched");
+                tracing::trace!(addr=%format_args!("{x:#X}"), "HW regs touched");
             }
             _ => {
                 return Err(BusError {

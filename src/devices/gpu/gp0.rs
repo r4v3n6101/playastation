@@ -60,12 +60,10 @@ impl Default for DataBuf {
     }
 }
 
-#[tracing::instrument(target = "gpu.gp0", level = "DEBUG", skip(gpu))]
 pub fn dispatch(gpu: &mut Gpu, cmd: u32) {
     let mut cmdbuf = mem::take(&mut gpu.cmdbuf);
 
     if cmdbuf.packet.needs_more() {
-        tracing::trace!(packet=?cmdbuf.packet, %cmd, "more commands needed for packet");
         cmdbuf.packet.push_cmd(cmd, gpu);
     } else {
         let opcode = (cmd >> 24) as u8;
@@ -113,7 +111,6 @@ pub fn dispatch(gpu: &mut Gpu, cmd: u32) {
     }
 }
 
-#[tracing::instrument(target = "gpu.gp0", level = "DEBUG", skip(gpu))]
 pub fn read(gpu: &mut Gpu) -> u32 {
     let databuf = &mut gpu.databuf;
 
@@ -135,8 +132,8 @@ pub fn read(gpu: &mut Gpu) -> u32 {
             databuf.pixels_read = databuf.pixels_read.wrapping_add(1);
 
             if databuf.pixels_read >= size {
-                tracing::debug!("GPUREAD data transfer done");
                 gpu.gpustat.set_ready_to_send_vram(false);
+                tracing::debug!("GPUREAD data transfer done");
             }
         }
     }
@@ -301,7 +298,8 @@ impl Packet for PolygonPacket {
                 if self.textured
                     && let uv @ None = &mut last.uv
                 {
-                    // TODO : *uv = Some(());
+                    // TODO
+                    uv.replace(UV { u: 0, v: 0 });
                     return;
                 }
             }
@@ -444,8 +442,8 @@ impl Packet for RectPacket {
         if self.textured
             && let uv @ None = &mut self.uv
         {
-            // TODO : *uv = Some(());
-            // TODO : self.clut = Some(());
+            // TODO
+            uv.replace(UV { u: 0, v: 0 });
             return;
         }
 
@@ -527,12 +525,13 @@ impl Packet for Vram2CpuPacket {
         }
         self.size.replace(parse_size(cmd));
 
-        gpu.gpustat.set_ready_to_send_vram(true);
         gpu.databuf = DataBuf {
             pos: self.pos.unwrap(),
             size: self.size.unwrap(),
             pixels_read: 0,
         };
+
+        gpu.gpustat.set_ready_to_send_vram(true);
         tracing::debug!("GPUREAD data transfer ready");
     }
 
@@ -567,5 +566,183 @@ fn parse_size(cmd: u32) -> Size {
     Size {
         w: (cmd as u16),
         h: (cmd >> 16) as u16,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        super::{
+            Gpu,
+            types::{Color, Location, Size},
+        },
+        LinePacket, Packet, PolygonPacket, RectPacket,
+    };
+
+    fn loc(x: i16, y: i16) -> u32 {
+        u16::from_ne_bytes(x.to_ne_bytes()) as u32
+            | ((u16::from_ne_bytes(y.to_ne_bytes()) as u32) << 16)
+    }
+
+    fn rgb(r: u8, g: u8, b: u8) -> u32 {
+        u32::from(r) | (u32::from(g) << 8) | (u32::from(b) << 16)
+    }
+
+    #[test]
+    fn builds_monochrome_triangle_packet() {
+        let mut gpu = Gpu::default();
+        let mut packet = PolygonPacket::init(0x2000_0000 | rgb(0x11, 0x22, 0x33));
+
+        assert!(packet.needs_more());
+        assert!(!packet.gouraud);
+        assert!(!packet.textured);
+        assert_eq!(
+            packet.color,
+            Some(Color {
+                r: 0x11,
+                g: 0x22,
+                b: 0x33,
+            })
+        );
+        assert_eq!(packet.vertices.len(), 0);
+
+        packet.push_cmd(loc(1, 2), &mut gpu);
+        packet.push_cmd(loc(-3, 4), &mut gpu);
+        packet.push_cmd(loc(5, -6), &mut gpu);
+
+        assert!(!packet.needs_more());
+        assert_eq!(packet.vertices.len(), 3);
+        assert_eq!(packet.vertices[0].loc, Some(Location { x: 1, y: 2 }));
+        assert_eq!(packet.vertices[1].loc, Some(Location { x: -3, y: 4 }));
+        assert_eq!(packet.vertices[2].loc, Some(Location { x: 5, y: -6 }));
+    }
+
+    #[test]
+    fn builds_gouraud_quad_packet() {
+        let mut gpu = Gpu::default();
+        let mut packet = PolygonPacket::init(0x3800_0000 | rgb(0x10, 0x20, 0x30));
+
+        assert!(packet.gouraud);
+        assert!(!packet.textured);
+        assert_eq!(packet.color, None);
+        assert_eq!(packet.vertices.len(), 1);
+        assert_eq!(
+            packet.vertices[0].color,
+            Some(Color {
+                r: 0x10,
+                g: 0x20,
+                b: 0x30,
+            })
+        );
+
+        packet.push_cmd(loc(1, 2), &mut gpu);
+        packet.push_cmd(rgb(0x40, 0x50, 0x60), &mut gpu);
+        packet.push_cmd(loc(3, 4), &mut gpu);
+        packet.push_cmd(rgb(0x70, 0x80, 0x90), &mut gpu);
+        packet.push_cmd(loc(5, 6), &mut gpu);
+        packet.push_cmd(rgb(0xA0, 0xB0, 0xC0), &mut gpu);
+        packet.push_cmd(loc(7, 8), &mut gpu);
+
+        assert!(!packet.needs_more());
+        assert_eq!(packet.vertices.len(), 4);
+        assert_eq!(packet.vertices[0].loc, Some(Location { x: 1, y: 2 }));
+        assert_eq!(packet.vertices[1].loc, Some(Location { x: 3, y: 4 }));
+        assert_eq!(packet.vertices[2].loc, Some(Location { x: 5, y: 6 }));
+        assert_eq!(packet.vertices[3].loc, Some(Location { x: 7, y: 8 }));
+        assert_eq!(
+            packet.vertices[3].color,
+            Some(Color {
+                r: 0xA0,
+                g: 0xB0,
+                b: 0xC0,
+            })
+        );
+    }
+
+    #[test]
+    fn builds_monochrome_line_packet() {
+        let mut gpu = Gpu::default();
+        let mut packet = LinePacket::init(0x4000_0000 | rgb(0x01, 0x02, 0x03));
+
+        assert!(packet.needs_more());
+        assert!(!packet.gouraud);
+        assert_eq!(
+            packet.color,
+            Some(Color {
+                r: 0x01,
+                g: 0x02,
+                b: 0x03,
+            })
+        );
+
+        packet.push_cmd(loc(10, 20), &mut gpu);
+        packet.push_cmd(loc(30, 40), &mut gpu);
+
+        assert!(!packet.needs_more());
+        assert_eq!(packet.vertices.len(), 2);
+        assert_eq!(packet.vertices[0].loc, Some(Location { x: 10, y: 20 }));
+        assert_eq!(packet.vertices[1].loc, Some(Location { x: 30, y: 40 }));
+    }
+
+    #[test]
+    fn builds_polyline_until_terminator() {
+        let mut gpu = Gpu::default();
+        let mut packet = LinePacket::init(0x4800_0000 | rgb(0xAA, 0xBB, 0xCC));
+
+        assert!(packet.needs_more());
+        assert_eq!(packet.words_left, None);
+
+        packet.push_cmd(loc(1, 1), &mut gpu);
+        packet.push_cmd(loc(2, 2), &mut gpu);
+        packet.push_cmd(loc(3, 3), &mut gpu);
+
+        assert!(packet.needs_more());
+        assert_eq!(packet.vertices.len(), 3);
+
+        packet.push_cmd(0x5000_5000, &mut gpu);
+
+        assert!(!packet.needs_more());
+        assert_eq!(packet.vertices.len(), 3);
+    }
+
+    #[test]
+    fn builds_variable_rectangle_packet() {
+        let mut gpu = Gpu::default();
+        let mut packet = RectPacket::init(0x6000_0000 | rgb(0x12, 0x34, 0x56));
+
+        assert!(packet.needs_more());
+        assert!(!packet.textured);
+        assert_eq!(
+            packet.color,
+            Color {
+                r: 0x12,
+                g: 0x34,
+                b: 0x56,
+            }
+        );
+        assert_eq!(packet.size, None);
+
+        packet.push_cmd(loc(-12, 34), &mut gpu);
+        packet.push_cmd(20 | (30 << 16), &mut gpu);
+
+        assert!(!packet.needs_more());
+        assert_eq!(packet.loc, Some(Location { x: -12, y: 34 }));
+        assert_eq!(packet.size, Some(Size { w: 20, h: 30 }));
+    }
+
+    #[test]
+    fn builds_fixed_size_sprite_packet() {
+        let mut gpu = Gpu::default();
+        let mut packet = RectPacket::init(0x7800_0000 | rgb(0xFE, 0xDC, 0xBA));
+
+        assert!(packet.needs_more());
+        assert!(!packet.textured);
+        assert_eq!(packet.size, Some(Size { w: 16, h: 16 }));
+
+        packet.push_cmd(loc(100, 200), &mut gpu);
+
+        assert!(!packet.needs_more());
+        assert_eq!(packet.loc, Some(Location { x: 100, y: 200 }));
+        assert_eq!(packet.size, Some(Size { w: 16, h: 16 }));
     }
 }
