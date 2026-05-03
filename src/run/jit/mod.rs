@@ -54,6 +54,7 @@ impl Executor for Jit {
         let mut result = ExecutionResult {
             last_pc: cpu.pc,
             last_in_delay_slot: false,
+            cycles_elapsed: 0,
             exception: None,
         };
 

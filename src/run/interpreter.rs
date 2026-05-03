@@ -7,17 +7,34 @@ use crate::{
 
 use super::{ExecutionResult, Executor, decoder::Operation};
 
+/// How many cycles need to be elapsed, so hi/lo become available after Mul op.
+const MULT_HI_LO_LOAD_LATENCY: u64 = 5;
+/// Same as above, but for Div ops.
+const DIV_HI_LO_LOAD_LATENCY: u64 = 35;
+
+struct Context {
+    result: ExecutionResult,
+    load_delay_slot: PendingLoad,
+    hi_lo_latency: u64,
+}
+
 #[derive(Debug, Default)]
 pub struct Interpreter;
 
 impl Executor for Interpreter {
     fn run(&mut self, ins_block: &[Operation], cpu: &mut Cpu, bus: &mut Bus) -> ExecutionResult {
-        let mut result = ExecutionResult {
-            last_pc: cpu.pc,
-            // Branch delay is cancelled (exception) or handled in other block
-            last_in_delay_slot: false,
-            exception: None,
+        let mut ctx = Context {
+            result: ExecutionResult {
+                last_pc: cpu.pc,
+                // Branch delay is cancelled (exception) or handled in other block
+                last_in_delay_slot: false,
+                cycles_elapsed: 0,
+                exception: None,
+            },
+            load_delay_slot: PendingLoad::default(),
+            hi_lo_latency: 0,
         };
+
         for ins in ins_block {
             let load_delay_slot = mem::take(&mut cpu.pending_load);
 
@@ -28,17 +45,22 @@ impl Executor for Interpreter {
                     ins,
                     op,
                 } => {
-                    result.last_pc = pc;
-                    result.last_in_delay_slot = in_delay_slot;
+                    ctx.result.last_pc = pc;
+                    ctx.result.last_in_delay_slot = in_delay_slot;
 
-                    let res = execute(&mut result, ins, op, cpu, bus);
+                    // For Lwl/Lwr we need to forward value from the pending slot
+                    ctx.load_delay_slot = load_delay_slot;
+
+                    let res = execute(&mut ctx, ins, op, cpu, bus);
+                    ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(1);
+                    ctx.hi_lo_latency = ctx.hi_lo_latency.saturating_sub(1);
 
                     // Store pending load even if execution fails
                     cpu.gpr[load_delay_slot.dest] = load_delay_slot.value;
                     cpu.gpr[0] = 0;
 
                     if let Err(exception) = res {
-                        result.exception.replace(exception);
+                        ctx.result.exception.replace(exception);
                         break;
                     }
                 }
@@ -47,11 +69,15 @@ impl Executor for Interpreter {
                     in_delay_slot,
                     cause: exception,
                 } => {
-                    result.last_pc = pc;
-                    result.last_in_delay_slot = in_delay_slot;
-                    result.exception.replace(exception);
+                    ctx.result.last_pc = pc;
+                    ctx.result.last_in_delay_slot = in_delay_slot;
+                    ctx.result.exception.replace(exception);
 
-                    // Exception behaves like an instruction, commiting pending load
+                    // Cycles
+                    ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(1);
+                    ctx.hi_lo_latency = ctx.hi_lo_latency.saturating_sub(1);
+
+                    // Exception behaves like an instruction, so commit the pending load
                     cpu.gpr[load_delay_slot.dest] = load_delay_slot.value;
                     cpu.gpr[0] = 0;
 
@@ -60,12 +86,15 @@ impl Executor for Interpreter {
             }
         }
 
-        result
+        // The next block won't wait latency before HI/LO, because we emulate it in the current one.
+        ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(ctx.hi_lo_latency);
+
+        ctx.result
     }
 }
 
 fn execute(
-    result: &mut ExecutionResult,
+    ctx: &mut Context,
     ins: u32,
     op: Opcode,
     cpu: &mut Cpu,
@@ -245,13 +274,18 @@ fn execute(
                 .load(addr & !3)
                 .map(u32::from_le_bytes)
                 .map_err(|BusError { bad_vaddr, .. }| Exception::DataBus { bad_vaddr })?;
+            let old = if rt == ctx.load_delay_slot.dest {
+                ctx.load_delay_slot.value
+            } else {
+                cpu.gpr[rt]
+            };
 
             cpu.pending_load = PendingLoad {
                 dest: rt,
                 value: match addr & 3 {
-                    0 => (cpu.gpr[rt] & 0x00FF_FFFF) | (word << 24),
-                    1 => (cpu.gpr[rt] & 0x0000_FFFF) | (word << 16),
-                    2 => (cpu.gpr[rt] & 0x0000_00FF) | (word << 8),
+                    0 => (old & 0x00FF_FFFF) | (word << 24),
+                    1 => (old & 0x0000_FFFF) | (word << 16),
+                    2 => (old & 0x0000_00FF) | (word << 8),
                     3 => word,
                     _ => unreachable!(),
                 },
@@ -263,14 +297,19 @@ fn execute(
                 .load(addr & !3)
                 .map(u32::from_le_bytes)
                 .map_err(|BusError { bad_vaddr, .. }| Exception::DataBus { bad_vaddr })?;
+            let old = if rt == ctx.load_delay_slot.dest {
+                ctx.load_delay_slot.value
+            } else {
+                cpu.gpr[rt]
+            };
 
             cpu.pending_load = PendingLoad {
                 dest: rt,
                 value: match addr & 3 {
                     0 => word,
-                    1 => (cpu.gpr[rt] & 0xFF00_0000) | (word >> 8),
-                    2 => (cpu.gpr[rt] & 0xFFFF_0000) | (word >> 16),
-                    3 => (cpu.gpr[rt] & 0xFFFF_FF00) | (word >> 24),
+                    1 => (old & 0xFF00_0000) | (word >> 8),
+                    2 => (old & 0xFFFF_0000) | (word >> 16),
+                    3 => (old & 0xFFFF_FF00) | (word >> 24),
                     _ => unreachable!(),
                 },
             };
@@ -352,7 +391,8 @@ fn execute(
         Opcode::Beq => {
             cpu.pending_jump = PendingJump {
                 happen: cpu.gpr[rs] == cpu.gpr[rt],
-                target: result
+                target: ctx
+                    .result
                     .last_pc
                     .wrapping_add(4)
                     .wrapping_add_signed(imm_sext << 2),
@@ -361,7 +401,8 @@ fn execute(
         Opcode::Bne => {
             cpu.pending_jump = PendingJump {
                 happen: cpu.gpr[rs] != cpu.gpr[rt],
-                target: result
+                target: ctx
+                    .result
                     .last_pc
                     .wrapping_add(4)
                     .wrapping_add_signed(imm_sext << 2),
@@ -370,7 +411,8 @@ fn execute(
         Opcode::Bgez => {
             cpu.pending_jump = PendingJump {
                 happen: cpu.gpr[rs].cast_signed() >= 0,
-                target: result
+                target: ctx
+                    .result
                     .last_pc
                     .wrapping_add(4)
                     .wrapping_add_signed(imm_sext << 2),
@@ -379,7 +421,8 @@ fn execute(
         Opcode::Blez => {
             cpu.pending_jump = PendingJump {
                 happen: cpu.gpr[rs].cast_signed() <= 0,
-                target: result
+                target: ctx
+                    .result
                     .last_pc
                     .wrapping_add(4)
                     .wrapping_add_signed(imm_sext << 2),
@@ -388,7 +431,8 @@ fn execute(
         Opcode::Bgtz => {
             cpu.pending_jump = PendingJump {
                 happen: cpu.gpr[rs].cast_signed() > 0,
-                target: result
+                target: ctx
+                    .result
                     .last_pc
                     .wrapping_add(4)
                     .wrapping_add_signed(imm_sext << 2),
@@ -397,29 +441,32 @@ fn execute(
         Opcode::Bltz => {
             cpu.pending_jump = PendingJump {
                 happen: cpu.gpr[rs].cast_signed() < 0,
-                target: result
+                target: ctx
+                    .result
                     .last_pc
                     .wrapping_add(4)
                     .wrapping_add_signed(imm_sext << 2),
             };
         }
         Opcode::Bgezal => {
-            cpu.gpr[Cpu::DEFAULT_LINK_REG] = result.last_pc.wrapping_add(8);
+            cpu.gpr[Cpu::DEFAULT_LINK_REG] = ctx.result.last_pc.wrapping_add(8);
 
             cpu.pending_jump = PendingJump {
                 happen: cpu.gpr[rs].cast_signed() >= 0,
-                target: result
+                target: ctx
+                    .result
                     .last_pc
                     .wrapping_add(4)
                     .wrapping_add_signed(imm_sext << 2),
             };
         }
         Opcode::Bltzal => {
-            cpu.gpr[Cpu::DEFAULT_LINK_REG] = result.last_pc.wrapping_add(8);
+            cpu.gpr[Cpu::DEFAULT_LINK_REG] = ctx.result.last_pc.wrapping_add(8);
 
             cpu.pending_jump = PendingJump {
                 happen: cpu.gpr[rs].cast_signed() < 0,
-                target: result
+                target: ctx
+                    .result
                     .last_pc
                     .wrapping_add(4)
                     .wrapping_add_signed(imm_sext << 2),
@@ -430,15 +477,15 @@ fn execute(
         Opcode::J => {
             cpu.pending_jump = PendingJump {
                 happen: true,
-                target: (result.last_pc.wrapping_add(4) & 0xF000_0000) | (target << 2),
+                target: (ctx.result.last_pc.wrapping_add(4) & 0xF000_0000) | (target << 2),
             };
         }
         Opcode::Jal => {
-            cpu.gpr[Cpu::DEFAULT_LINK_REG] = result.last_pc.wrapping_add(8);
+            cpu.gpr[Cpu::DEFAULT_LINK_REG] = ctx.result.last_pc.wrapping_add(8);
 
             cpu.pending_jump = PendingJump {
                 happen: true,
-                target: (result.last_pc.wrapping_add(4) & 0xF000_0000) | (target << 2),
+                target: (ctx.result.last_pc.wrapping_add(4) & 0xF000_0000) | (target << 2),
             };
         }
         Opcode::Jr => {
@@ -448,7 +495,7 @@ fn execute(
             };
         }
         Opcode::Jalr => {
-            cpu.gpr[rd] = result.last_pc.wrapping_add(8);
+            cpu.gpr[rd] = ctx.result.last_pc.wrapping_add(8);
             cpu.pending_jump = PendingJump {
                 happen: true,
                 target: cpu.gpr[rs],
@@ -463,6 +510,8 @@ fn execute(
 
             cpu.hi = (res >> 32) as u32;
             cpu.lo = res as u32;
+
+            ctx.hi_lo_latency = MULT_HI_LO_LOAD_LATENCY;
         }
         Opcode::Multu => {
             let a = u64::from(cpu.gpr[rs]);
@@ -471,6 +520,8 @@ fn execute(
 
             cpu.hi = (res >> 32) as u32;
             cpu.lo = res as u32;
+
+            ctx.hi_lo_latency = MULT_HI_LO_LOAD_LATENCY;
         }
         Opcode::Div => {
             let a = cpu.gpr[rs].cast_signed();
@@ -485,6 +536,8 @@ fn execute(
 
             cpu.hi = hi;
             cpu.lo = lo;
+
+            ctx.hi_lo_latency = DIV_HI_LO_LOAD_LATENCY;
         }
         Opcode::Divu => {
             let a = cpu.gpr[rs];
@@ -493,14 +546,22 @@ fn execute(
 
             cpu.hi = hi;
             cpu.lo = lo;
+
+            ctx.hi_lo_latency = DIV_HI_LO_LOAD_LATENCY;
         }
 
         // From/to copies
         Opcode::Mfhi => {
             cpu.gpr[rd] = cpu.hi;
+
+            ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(ctx.hi_lo_latency);
+            ctx.hi_lo_latency = 0;
         }
         Opcode::Mflo => {
             cpu.gpr[rd] = cpu.lo;
+
+            ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(ctx.hi_lo_latency);
+            ctx.hi_lo_latency = 0;
         }
         Opcode::Mtlo => {
             cpu.lo = cpu.gpr[rs];

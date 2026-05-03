@@ -15,9 +15,9 @@ pub mod jit;
 pub struct CpuExecutor<E> {
     pub cpu: Cpu,
     pub executor: E,
-
     /// Maximum block size. If the last op is branch delay, block may be max+1
     pub block_size: usize,
+
     /// Cache of decoded block of ops
     block: Vec<decoder::Operation>,
 }
@@ -35,6 +35,7 @@ pub trait Executor {
 pub struct ExecutionResult {
     pub last_pc: u32,
     pub last_in_delay_slot: bool,
+    pub cycles_elapsed: u64,
     pub exception: Option<Exception>,
 }
 
@@ -43,7 +44,7 @@ where
     E: Default,
 {
     fn default() -> Self {
-        const DEFAULT_INS_BLOCK: usize = 4096;
+        const DEFAULT_INS_BLOCK: usize = 1024;
 
         Self {
             cpu: Cpu::default(),
@@ -67,7 +68,7 @@ where
         let execution = self.executor.run(&self.block, &mut self.cpu, bus);
 
         // Then devices on the bus are updated
-        bus.tick();
+        bus.tick(execution.cycles_elapsed);
 
         self.cpu.cop0.set_hw_irq(bus.int_ctrl.pending());
         let interrupt = self
@@ -75,9 +76,8 @@ where
             .cop0
             .interrupt_pending()
             .then_some(ExecutionResult {
-                last_pc: execution.last_pc,
-                last_in_delay_slot: execution.last_in_delay_slot,
                 exception: Some(Exception::Interrupt),
+                ..execution
             });
 
         // Interrupt changes flow like it's an error occurred in the last op

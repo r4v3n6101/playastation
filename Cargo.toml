@@ -8,7 +8,6 @@ tracing = "0.1.44"
 # TODO : remove
 tracing-subscriber = "0.3.23"
 
-bytes = "1.11.1"
 strum = { version = "0.28.0", features = ["derive"] }
 bitflags = "2.11.0"
 modular-bitfield = "0.13.1"

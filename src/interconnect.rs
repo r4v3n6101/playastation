@@ -1,8 +1,6 @@
 use std::ops::Range;
 
-use bytes::BytesMut;
-
-use crate::devices::{Mmio, Updater, dma::DmaController, gpu::Gpu, int::InterruptController};
+use crate::devices::{Mmio, dma::DmaController, gpu::Gpu, int::InterruptController};
 
 // MIPS uses segmented memory, but PSX ignore them and treat all segments as mirror to each other
 const KUSEG: Range<u32> = 0x0000_0000..0x7FFF_FFFF;
@@ -38,12 +36,12 @@ pub enum BusErrorKind {
 }
 
 pub struct Bus {
-    pub bios: BytesMut,
-    pub ram: BytesMut,
-    pub misc: BytesMut,
-    pub scratchpad: BytesMut,
-    pub expansion1: BytesMut,
-    pub expansion2: BytesMut,
+    pub bios: Vec<u8>,
+    pub ram: Vec<u8>,
+    pub misc: Vec<u8>,
+    pub scratchpad: Vec<u8>,
+    pub expansion1: Vec<u8>,
+    pub expansion2: Vec<u8>,
 
     // Devices
     pub int_ctrl: InterruptController,
@@ -53,27 +51,12 @@ pub struct Bus {
 
 impl Default for Bus {
     fn default() -> Self {
-        let mut buf = BytesMut::zeroed(
-            RAM.len()
-                + 1
-                + EXPANSION1.len()
-                + 1
-                + SCRATCHPAD.len()
-                + 1
-                + MISC.len()
-                + 1
-                + EXPANSION2.len()
-                + 1
-                + BIOS.len()
-                + 1,
-        );
-
-        let bios = buf.split_to(BIOS.len() + 1);
-        let ram = buf.split_to(RAM.len() + 1);
-        let misc = buf.split_to(MISC.len() + 1);
-        let scratchpad = buf.split_to(SCRATCHPAD.len() + 1);
-        let expansion1 = buf.split_to(EXPANSION1.len() + 1);
-        let expansion2 = buf.split_to(EXPANSION2.len() + 1);
+        let bios = vec![0; BIOS.len() + 1];
+        let ram = vec![0; RAM.len() + 1];
+        let misc = vec![0; MISC.len() + 1];
+        let scratchpad = vec![0; SCRATCHPAD.len() + 1];
+        let expansion1 = vec![0; EXPANSION1.len() + 1];
+        let expansion2 = vec![0; EXPANSION2.len() + 1];
 
         Self {
             bios,
@@ -91,9 +74,8 @@ impl Default for Bus {
 }
 
 impl Bus {
-    pub fn tick(&mut self) {
-        DmaController::tick(self);
-        Gpu::tick(self);
+    pub fn tick(&mut self, cpu_cycles: u64) {
+        DmaController::run(self);
     }
 
     pub fn load<const N: usize>(&mut self, addr: u32) -> Result<[u8; N], BusError> {

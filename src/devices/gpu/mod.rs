@@ -1,7 +1,5 @@
 use modular_bitfield::prelude::*;
 
-use crate::{devices::Updater, interconnect::Bus};
-
 use super::{Mmio, MmioExt};
 
 mod gp0;
@@ -158,14 +156,6 @@ impl Mmio for Gpu {
             0x4 => self.dispatch_gp1(value),
             _ => unreachable!(),
         }
-    }
-}
-
-impl Updater for Gpu {
-    fn tick(bus: &mut Bus) {
-        // if bus.gpu.gpustat.interrupt_request() {
-        //     bus.int_ctrl.raise(InterruptFlags::GPU);
-        // }
     }
 }
 

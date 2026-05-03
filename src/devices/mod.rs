@@ -1,13 +1,6 @@
-use crate::interconnect::Bus;
-
 pub mod dma;
 pub mod gpu;
 pub mod int;
-
-pub trait Updater {
-    // TODO : rename?
-    fn tick(bus: &mut Bus);
-}
 
 pub trait Mmio {
     fn read(&mut self, dest: &mut [u8], addr: u32);

@@ -2,7 +2,7 @@ use std::array;
 
 use modular_bitfield::prelude::*;
 
-use crate::{devices::Updater, interconnect::Bus};
+use crate::interconnect::Bus;
 
 use super::{Mmio, MmioExt};
 
@@ -204,6 +204,51 @@ impl Dicr {
     }
 }
 
+impl DmaController {
+    pub fn run(bus: &mut Bus) {
+        for (ch, enabled) in bus.dma_ctrl.dpcr.sorted_chans() {
+            if !enabled {
+                continue;
+            }
+
+            let mut chan = bus.dma_ctrl.channels[ch];
+
+            // trigger bit must be present when sync_mode is Manual
+            if matches!(chan.chcr.sync_mode(), SyncMode::Manual) && !chan.chcr.trigger() {
+                continue;
+            }
+
+            // non-active skipped at all
+            // TODO : should be for trigger = true, active = false?
+            if !chan.chcr.active() {
+                continue;
+            }
+
+            tracing::debug!(idx=%ch, ?chan, "DMA transfer started");
+
+            match chan.chcr.sync_mode() {
+                SyncMode::Manual => handler::do_manual(bus, ch, &mut chan),
+                SyncMode::Request => handler::do_block(bus, ch, &mut chan),
+                SyncMode::LinkedList => handler::do_linked_list(bus, ch, &mut chan),
+                SyncMode::Reserved => unreachable!(),
+            }
+
+            chan.chcr.set_active(false);
+            chan.chcr.set_trigger(false);
+
+            tracing::debug!(idx=%ch, ?chan, "DMA transfer done");
+
+            // TODO
+            // bus.dma_ctrl.dicr.set_irq_lane(ch);
+            // if bus.dma_ctrl.dicr.irq_signal() {
+            //     bus.int_ctrl.raise(InterruptFlags::DMA);
+            // }
+
+            bus.dma_ctrl.channels[ch] = chan;
+        }
+    }
+}
+
 impl Mmio for DmaController {
     fn read(&mut self, dest: &mut [u8], addr: u32) {
         self.read_unaligned(dest, addr, |this, addr| match addr {
@@ -252,51 +297,6 @@ impl Mmio for DmaController {
                 self.dicr.update_irq_signal();
             }
             _ => unreachable!(),
-        }
-    }
-}
-
-impl Updater for DmaController {
-    fn tick(bus: &mut Bus) {
-        for (ch, enabled) in bus.dma_ctrl.dpcr.sorted_chans() {
-            if !enabled {
-                continue;
-            }
-
-            let mut chan = bus.dma_ctrl.channels[ch];
-
-            // trigger bit must be present when sync_mode is Manual
-            if matches!(chan.chcr.sync_mode(), SyncMode::Manual) && !chan.chcr.trigger() {
-                continue;
-            }
-
-            // non-active skipped at all
-            // TODO : should be for trigger = true, active = false?
-            if !chan.chcr.active() {
-                continue;
-            }
-
-            tracing::debug!(idx=%ch, ?chan, "DMA transfer started");
-
-            match chan.chcr.sync_mode() {
-                SyncMode::Manual => handler::do_manual(bus, ch, &mut chan),
-                SyncMode::Request => handler::do_block(bus, ch, &mut chan),
-                SyncMode::LinkedList => handler::do_linked_list(bus, ch, &mut chan),
-                SyncMode::Reserved => unreachable!(),
-            }
-
-            chan.chcr.set_active(false);
-            chan.chcr.set_trigger(false);
-
-            tracing::debug!(idx=%ch, ?chan, "DMA transfer done");
-
-            // TODO
-            // bus.dma_ctrl.dicr.set_irq_lane(ch);
-            // if bus.dma_ctrl.dicr.irq_signal() {
-            //     bus.int_ctrl.raise(InterruptFlags::DMA);
-            // }
-
-            bus.dma_ctrl.channels[ch] = chan;
         }
     }
 }
