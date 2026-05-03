@@ -205,7 +205,9 @@ impl Dicr {
 }
 
 impl DmaController {
-    pub fn run(bus: &mut Bus) {
+    pub fn run(bus: &mut Bus) -> u64 {
+        let mut cycles = 0u64;
+
         for (ch, enabled) in bus.dma_ctrl.dpcr.sorted_chans() {
             if !enabled {
                 continue;
@@ -226,17 +228,18 @@ impl DmaController {
 
             tracing::debug!(idx=%ch, ?chan, "DMA transfer started");
 
-            match chan.chcr.sync_mode() {
+            let elapsed_cycles = match chan.chcr.sync_mode() {
                 SyncMode::Manual => handler::do_manual(bus, ch, &mut chan),
                 SyncMode::Request => handler::do_block(bus, ch, &mut chan),
                 SyncMode::LinkedList => handler::do_linked_list(bus, ch, &mut chan),
                 SyncMode::Reserved => unreachable!(),
-            }
+            };
+            cycles = cycles.saturating_add(elapsed_cycles);
 
             chan.chcr.set_active(false);
             chan.chcr.set_trigger(false);
 
-            tracing::debug!(idx=%ch, ?chan, "DMA transfer done");
+            tracing::debug!(idx=%ch, ?chan, %elapsed_cycles, "DMA transfer done");
 
             // TODO
             // bus.dma_ctrl.dicr.set_irq_lane(ch);
@@ -246,6 +249,8 @@ impl DmaController {
 
             bus.dma_ctrl.channels[ch] = chan;
         }
+
+        cycles
     }
 }
 
