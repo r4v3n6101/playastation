@@ -59,12 +59,13 @@ impl<E> CpuExecutor<E>
 where
     E: Executor,
 {
+    #[tracing::instrument(target = "executor", level = "DEBUG", skip(self, bus))]
     pub fn run(&mut self, bus: &mut Bus) {
         // CPU first
         decoder::decode_block(&mut self.block, &self.cpu, bus, self.block_size);
         let execution = self.executor.run(&self.block, &mut self.cpu, bus);
 
-        // Update all bus' devices
+        // Then devices on the bus are updated
         bus.tick();
 
         self.cpu.cop0.set_hw_irq(bus.int_ctrl.pending());
@@ -81,6 +82,13 @@ where
         // Interrupt changes flow like it's an error occurred in the last op
         let execution = interrupt.unwrap_or(execution);
         if let Some(exception) = execution.exception {
+            tracing::debug!(
+                ?exception,
+                epc=%execution.last_pc,
+                delay_slot=%execution.last_in_delay_slot,
+                "entering exception handler"
+            );
+
             self.cpu.cop0.exception_enter(
                 exception,
                 execution.last_pc,

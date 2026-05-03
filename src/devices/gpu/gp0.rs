@@ -60,16 +60,19 @@ impl Default for DataBuf {
     }
 }
 
-pub fn process(gpu: &mut Gpu, cmd: u32) {
+#[tracing::instrument(target = "gpu.gp0", level = "DEBUG", skip(gpu))]
+pub fn dispatch(gpu: &mut Gpu, cmd: u32) {
     let mut cmdbuf = mem::take(&mut gpu.cmdbuf);
 
     if cmdbuf.packet.needs_more() {
+        tracing::trace!(packet=?cmdbuf.packet, %cmd, "more commands needed for packet");
         cmdbuf.packet.push_cmd(cmd, gpu);
     } else {
         let opcode = (cmd >> 24) as u8;
         let group = (cmd >> 29) as u8;
         let group = Gp0OpcodeGroup::from_repr(group);
-        println!("{group:?} = {opcode:#x}");
+        tracing::trace!(?group, %opcode, "command decoded");
+
         match (group, opcode) {
             (_, 0x00 | 0x03..=0x1E) => {
                 // NOP
@@ -80,7 +83,6 @@ pub fn process(gpu: &mut Gpu, cmd: u32) {
                 cmdbuf.packet = SmallBox::new(());
             }
             (_, 0x02) => {
-                println!("fill vram");
                 // FillVram
             }
             (Some(Gp0OpcodeGroup::Polygon), _) => {
@@ -92,9 +94,7 @@ pub fn process(gpu: &mut Gpu, cmd: u32) {
             (Some(Gp0OpcodeGroup::Rect), _) => {
                 cmdbuf.packet = SmallBox::new(RectPacket::init(cmd));
             }
-            (Some(Gp0OpcodeGroup::Vram2Vram), _) => {
-                println!("Vram2Vram");
-            }
+            (Some(Gp0OpcodeGroup::Vram2Vram), _) => {}
             (Some(Gp0OpcodeGroup::Cpu2Vram), _) => {
                 cmdbuf.packet = SmallBox::new(Cpu2VramPacket::init(cmd));
             }
@@ -106,12 +106,14 @@ pub fn process(gpu: &mut Gpu, cmd: u32) {
     }
 
     if !cmdbuf.packet.needs_more() {
+        tracing::debug!(packet=?cmdbuf.packet, "packet gathered");
         // TODO : commit
     } else {
         gpu.cmdbuf = cmdbuf;
     }
 }
 
+#[tracing::instrument(target = "gpu.gp0", level = "DEBUG", skip(gpu))]
 pub fn read(gpu: &mut Gpu) -> u32 {
     let databuf = &mut gpu.databuf;
 
@@ -133,6 +135,7 @@ pub fn read(gpu: &mut Gpu) -> u32 {
             databuf.pixels_read = databuf.pixels_read.wrapping_add(1);
 
             if databuf.pixels_read >= size {
+                tracing::debug!("GPUREAD data transfer done");
                 gpu.gpustat.set_ready_to_send_vram(false);
             }
         }
@@ -530,6 +533,7 @@ impl Packet for Vram2CpuPacket {
             size: self.size.unwrap(),
             pixels_read: 0,
         };
+        tracing::debug!("GPUREAD data transfer ready");
     }
 
     fn needs_more(&self) -> bool {

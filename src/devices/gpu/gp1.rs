@@ -17,11 +17,13 @@ enum Gp1Opcode {
     GetGpuInfo = 0x10,
 }
 
-pub fn process(gpu: &mut Gpu, cmd: u32) {
+#[tracing::instrument(target = "gpu.gp1", level = "DEBUG", skip(gpu))]
+pub fn dispatch(gpu: &mut Gpu, cmd: u32) {
     let opcode = (cmd >> 24) as u8;
     let Some(opcode) = Gp1Opcode::from_repr(opcode) else {
         return;
     };
+    tracing::trace!(?opcode, "command decoded");
 
     match opcode {
         Gp1Opcode::ResetGpu => {

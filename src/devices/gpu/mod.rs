@@ -134,11 +134,11 @@ impl Default for Gpu {
 
 impl Gpu {
     pub fn dispatch_gp0(&mut self, cmd: u32) {
-        gp0::process(self, cmd);
+        gp0::dispatch(self, cmd);
     }
 
     pub fn dispatch_gp1(&mut self, cmd: u32) {
-        gp1::process(self, cmd);
+        gp1::dispatch(self, cmd);
     }
 }
 

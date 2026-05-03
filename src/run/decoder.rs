@@ -32,7 +32,13 @@ pub fn decode_block(output: &mut Vec<Operation>, cpu: &Cpu, bus: &mut Bus, mut l
 
         let ins = match bus.load(pc) {
             Ok(ins) => u32::from_le_bytes(ins),
-            Err(BusError { kind, bad_vaddr }) => {
+            Err(
+                ref err @ BusError {
+                    ref kind,
+                    bad_vaddr,
+                },
+            ) => {
+                tracing::warn!(?err, %pc, "ins fetch failed");
                 output.push(Operation::Break {
                     pc,
                     in_delay_slot: pending_delay_slot,
@@ -46,6 +52,7 @@ pub fn decode_block(output: &mut Vec<Operation>, cpu: &Cpu, bus: &mut Bus, mut l
         };
 
         let Some(op) = Opcode::decode(ins) else {
+            tracing::warn!(%pc, "ins decode failed");
             output.push(Operation::Break {
                 pc,
                 in_delay_slot: pending_delay_slot,
@@ -92,6 +99,8 @@ pub fn decode_block(output: &mut Vec<Operation>, cpu: &Cpu, bus: &mut Bus, mut l
         pc = pc.wrapping_add(4);
         limit -= 1;
     }
+
+    tracing::trace!(size=%output.len(), %limit, "instruction block decoded");
 }
 
 #[cfg(test)]
