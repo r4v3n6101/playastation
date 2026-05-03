@@ -1,6 +1,7 @@
 pub mod dma;
 pub mod gpu;
 pub mod int;
+pub mod timer;
 
 pub trait Mmio {
     fn read(&mut self, dest: &mut [u8], addr: u32);

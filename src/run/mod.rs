@@ -68,7 +68,7 @@ where
         let execution = self.executor.run(&self.block, &mut self.cpu, bus);
 
         // Then devices on the bus are updated
-        bus.tick(execution.cycles_elapsed);
+        bus.update(execution.cycles_elapsed);
 
         self.cpu.cop0.set_hw_irq(bus.int_ctrl.pending());
         let interrupt = self

@@ -1,6 +1,8 @@
 use std::ops::Range;
 
-use crate::devices::{Mmio, dma::DmaController, gpu::Gpu, int::InterruptController};
+use crate::devices::{
+    Mmio, dma::DmaController, gpu::Gpu, int::InterruptController, timer::TimerController,
+};
 
 // MIPS uses segmented memory, but PSX ignore them and treat all segments as mirror to each other
 const KUSEG: Range<u32> = 0x0000_0000..0x7FFF_FFFF;
@@ -17,6 +19,7 @@ const SCRATCHPAD: Range<u32> = 0x1F80_0000..0x1F80_03FF;
 const HW_REGS: Range<u32> = 0x1F801000..0x1F801FFF;
 const INT_CTRL: Range<u32> = 0x1F80_1070..0x1F80_1078;
 const DMA_CTRL: Range<u32> = 0x1F80_1080..0x1F80_10FF;
+const TIMER_CTRL: Range<u32> = 0x1F80_1100..0x1F80_1130;
 const GPU: Range<u32> = 0x1F80_1810..0x1F80_1818;
 
 const MISC: Range<u32> = 0x1F80_2000..0x1F80_2FFF;
@@ -46,6 +49,7 @@ pub struct Bus {
     // Devices
     pub int_ctrl: InterruptController,
     pub dma_ctrl: DmaController,
+    pub timer_ctrl: TimerController,
     pub gpu: Gpu,
 }
 
@@ -68,16 +72,25 @@ impl Default for Bus {
 
             int_ctrl: InterruptController::default(),
             dma_ctrl: DmaController::default(),
+            timer_ctrl: TimerController::default(),
             gpu: Gpu::default(),
         }
     }
 }
 
 impl Bus {
-    pub fn tick(&mut self, cpu_cycles: u64) {
-        DmaController::run(self);
+    pub fn update(&mut self, cpu_cycles: u64) {
+        let dma_cycles = DmaController::run(self);
     }
 
+    #[tracing::instrument(
+        target = "bus",
+        level = "TRACE",
+        skip(self),
+        fields(
+            addr=%format_args!("{addr:#X}")
+        )
+    )]
     pub fn load<const N: usize>(&mut self, addr: u32) -> Result<[u8; N], BusError> {
         if !addr.is_multiple_of(N as u32) {
             return Err(BusError {
@@ -109,16 +122,23 @@ impl Bus {
                 bytes.copy_from_slice(&self.bios[(x - BIOS.start) as usize..][..N]);
             }
             x if INT_CTRL.contains(&x) => {
+                tracing::trace!(translated_addr=%format_args!("{x:#X}"), "int ctrl read");
                 self.int_ctrl.read(&mut bytes, x - INT_CTRL.start);
             }
             x if DMA_CTRL.contains(&x) => {
+                tracing::trace!(translated_addr=%format_args!("{x:#X}"), "dma ctrl read");
                 self.dma_ctrl.read(&mut bytes, x - DMA_CTRL.start);
             }
+            x if TIMER_CTRL.contains(&x) => {
+                tracing::trace!(translated_addr=%format_args!("{x:#X}"), "timer ctrl read");
+                self.timer_ctrl.read(&mut bytes, x - TIMER_CTRL.start);
+            }
             x if GPU.contains(&x) => {
+                tracing::trace!(translated_addr=%format_args!("{x:#X}"), "gpu read");
                 self.gpu.read(&mut bytes, x - GPU.start);
             }
             x if HW_REGS.contains(&x) => {
-                tracing::trace!(addr=%format_args!("{x:#X}"), "HW regs touched");
+                tracing::trace!(translated_addr=%format_args!("{x:#X}"), "HW regs touched");
             }
             _ => {
                 return Err(BusError {
@@ -131,6 +151,15 @@ impl Bus {
         Ok(bytes)
     }
 
+    #[tracing::instrument(
+        target = "bus",
+        level = "TRACE",
+        skip(self),
+        fields(
+            addr=%format_args!("{addr:#X}"),
+            ?value
+        )
+    )]
     pub fn store<const N: usize>(&mut self, addr: u32, value: [u8; N]) -> Result<(), BusError> {
         if !addr.is_multiple_of(N as u32) {
             return Err(BusError {
@@ -159,16 +188,23 @@ impl Bus {
                 self.bios[(x - BIOS.start) as usize..][..N].copy_from_slice(&value);
             }
             x if INT_CTRL.contains(&x) => {
+                tracing::trace!(translated_addr=%format_args!("{x:#X}"), "int ctrl write");
                 self.int_ctrl.write(x - INT_CTRL.start, &value);
             }
             x if DMA_CTRL.contains(&x) => {
+                tracing::trace!(translated_addr=%format_args!("{x:#X}"), "dma ctrl write");
                 self.dma_ctrl.write(x - DMA_CTRL.start, &value);
             }
+            x if TIMER_CTRL.contains(&x) => {
+                tracing::trace!(translated_addr=%format_args!("{x:#X}"), "timer ctrl write");
+                self.timer_ctrl.write(x - TIMER_CTRL.start, &value);
+            }
             x if GPU.contains(&x) => {
+                tracing::trace!(translated_addr=%format_args!("{x:#X}"), "gpu write");
                 self.gpu.write(x - GPU.start, &value);
             }
             x if HW_REGS.contains(&x) => {
-                tracing::trace!(addr=%format_args!("{x:#X}"), "HW regs touched");
+                tracing::trace!(translated_addr=%format_args!("{x:#X}"), "HW regs touched");
             }
             _ => {
                 return Err(BusError {

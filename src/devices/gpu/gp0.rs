@@ -69,7 +69,11 @@ pub fn dispatch(gpu: &mut Gpu, cmd: u32) {
         let opcode = (cmd >> 24) as u8;
         let group = (cmd >> 29) as u8;
         let group = Gp0OpcodeGroup::from_repr(group);
-        tracing::trace!(?group, %opcode, "command decoded");
+        tracing::trace!(
+            ?group,
+            opcode=%format_args!("{opcode:#X}"),
+            "command decoded"
+        );
 
         match (group, opcode) {
             (_, 0x00 | 0x03..=0x1E) => {
