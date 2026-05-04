@@ -83,14 +83,6 @@ impl Bus {
         let dma_cycles = DmaController::run(self);
     }
 
-    #[tracing::instrument(
-        target = "bus",
-        level = "TRACE",
-        skip(self),
-        fields(
-            addr=%format_args!("{addr:#X}")
-        )
-    )]
     pub fn load<const N: usize>(&mut self, addr: u32) -> Result<[u8; N], BusError> {
         if !addr.is_multiple_of(N as u32) {
             return Err(BusError {
@@ -101,7 +93,11 @@ impl Bus {
 
         let mut bytes = [0; N];
 
-        // TODO : cache control 0xFFFE0130
+        let mmio_span = tracing::trace_span!(
+            target: "bus.mmio",
+            "load",
+            addr=%format_args!("{addr:#X}")
+        );
         match translate_addr(addr)? {
             x if RAM.contains(&x) => {
                 bytes.copy_from_slice(&self.ram[(x - RAM.start) as usize..][..N]);
@@ -122,22 +118,35 @@ impl Bus {
                 bytes.copy_from_slice(&self.bios[(x - BIOS.start) as usize..][..N]);
             }
             x if INT_CTRL.contains(&x) => {
-                tracing::trace!(translated_addr=%format_args!("{x:#X}"), "int ctrl read");
-                self.int_ctrl.read(&mut bytes, x - INT_CTRL.start);
+                let mmio_addr = x - INT_CTRL.start;
+                mmio_span.in_scope(|| {
+                    tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "int ctrl read");
+                    self.int_ctrl.read(&mut bytes, mmio_addr);
+                });
             }
             x if DMA_CTRL.contains(&x) => {
-                tracing::trace!(translated_addr=%format_args!("{x:#X}"), "dma ctrl read");
-                self.dma_ctrl.read(&mut bytes, x - DMA_CTRL.start);
+                let mmio_addr = x - DMA_CTRL.start;
+                mmio_span.in_scope(|| {
+                    tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "dma ctrl read");
+                    self.dma_ctrl.read(&mut bytes, mmio_addr);
+                });
             }
             x if TIMER_CTRL.contains(&x) => {
-                tracing::trace!(translated_addr=%format_args!("{x:#X}"), "timer ctrl read");
-                self.timer_ctrl.read(&mut bytes, x - TIMER_CTRL.start);
+                let mmio_addr = x - TIMER_CTRL.start;
+                mmio_span.in_scope(|| {
+                    tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "timer ctrl read");
+                    self.timer_ctrl.read(&mut bytes, mmio_addr);
+                });
             }
             x if GPU.contains(&x) => {
-                tracing::trace!(translated_addr=%format_args!("{x:#X}"), "gpu read");
-                self.gpu.read(&mut bytes, x - GPU.start);
+                let mmio_addr = x - GPU.start;
+                mmio_span.in_scope(|| {
+                    tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "gpu read");
+                    self.gpu.read(&mut bytes, mmio_addr);
+                });
             }
             x if HW_REGS.contains(&x) => {
+                let _guard = mmio_span.enter();
                 tracing::trace!(translated_addr=%format_args!("{x:#X}"), "HW regs touched");
             }
             _ => {
@@ -151,15 +160,6 @@ impl Bus {
         Ok(bytes)
     }
 
-    #[tracing::instrument(
-        target = "bus",
-        level = "TRACE",
-        skip(self),
-        fields(
-            addr=%format_args!("{addr:#X}"),
-            ?value
-        )
-    )]
     pub fn store<const N: usize>(&mut self, addr: u32, value: [u8; N]) -> Result<(), BusError> {
         if !addr.is_multiple_of(N as u32) {
             return Err(BusError {
@@ -168,6 +168,12 @@ impl Bus {
             });
         }
 
+        let mmio_span = tracing::trace_span!(
+            target: "bus.mmio",
+            "store",
+            addr=%format_args!("{addr:#X}"),
+            ?value
+        );
         match translate_addr(addr)? {
             x if RAM.contains(&x) => {
                 self.ram[(x - RAM.start) as usize..][..N].copy_from_slice(&value);
@@ -188,22 +194,35 @@ impl Bus {
                 self.bios[(x - BIOS.start) as usize..][..N].copy_from_slice(&value);
             }
             x if INT_CTRL.contains(&x) => {
-                tracing::trace!(translated_addr=%format_args!("{x:#X}"), "int ctrl write");
-                self.int_ctrl.write(x - INT_CTRL.start, &value);
+                let mmio_addr = x - INT_CTRL.start;
+                mmio_span.in_scope(|| {
+                    tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "int ctrl write");
+                    self.int_ctrl.write(mmio_addr, &value);
+                });
             }
             x if DMA_CTRL.contains(&x) => {
-                tracing::trace!(translated_addr=%format_args!("{x:#X}"), "dma ctrl write");
-                self.dma_ctrl.write(x - DMA_CTRL.start, &value);
+                let mmio_addr = x - DMA_CTRL.start;
+                mmio_span.in_scope(|| {
+                    tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "dma ctrl write");
+                    self.dma_ctrl.write(mmio_addr, &value);
+                });
             }
             x if TIMER_CTRL.contains(&x) => {
-                tracing::trace!(translated_addr=%format_args!("{x:#X}"), "timer ctrl write");
-                self.timer_ctrl.write(x - TIMER_CTRL.start, &value);
+                let mmio_addr = x - TIMER_CTRL.start;
+                mmio_span.in_scope(|| {
+                    tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "timer ctrl write");
+                    self.timer_ctrl.write(mmio_addr, &value);
+                });
             }
             x if GPU.contains(&x) => {
-                tracing::trace!(translated_addr=%format_args!("{x:#X}"), "gpu write");
-                self.gpu.write(x - GPU.start, &value);
+                let mmio_addr = x - GPU.start;
+                mmio_span.in_scope(|| {
+                    tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "gpu write");
+                    self.gpu.write(mmio_addr, &value);
+                });
             }
             x if HW_REGS.contains(&x) => {
+                let _guard = mmio_span.enter();
                 tracing::trace!(translated_addr=%format_args!("{x:#X}"), "HW regs touched");
             }
             _ => {

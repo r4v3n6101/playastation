@@ -40,7 +40,12 @@ pub fn do_manual(bus: &mut Bus, ch: usize, chan: &mut Channel) -> u64 {
 
                     // Silently stores, ignoring errors
                     if let Err(err) = bus.store::<4>(addr, word.to_le_bytes()) {
-                        tracing::warn!(?err, %addr, %word, "OTC DMA store error");
+                        tracing::warn!(
+                            ?err,
+                            addr=%format_args!("{addr:#X}"),
+                            %word,
+                            "OTC DMA store error"
+                        );
                     }
 
                     cycles = cycles.saturating_add(TIMINGS[OTC]);
@@ -75,7 +80,11 @@ pub fn do_block(bus: &mut Bus, ch: usize, chan: &mut Channel) -> u64 {
                         let word = match bus.load::<4>(addr) {
                             Ok(res) => res,
                             Err(err) => {
-                                tracing::warn!(?err, %addr, "RAM->GPU DMA block load error");
+                                tracing::warn!(
+                                    ?err,
+                                    addr=%format_args!("{addr:#X}"),
+                                    "RAM->GPU DMA block load error"
+                                );
                                 return cycles;
                             }
                         };
@@ -109,7 +118,11 @@ pub fn do_linked_list(bus: &mut Bus, ch: usize, chan: &mut Channel) -> u64 {
         let header = match bus.load(addr) {
             Ok(res) => res,
             Err(err) => {
-                tracing::warn!(?err, %addr, "DMA LinkedList load header error");
+                tracing::warn!(
+                    ?err,
+                    addr=%format_args!("{addr:#X}"),
+                    "DMA LinkedList load header error"
+                );
 
                 chan.madr = 0xFFFFFF;
                 return cycles;
@@ -124,7 +137,11 @@ pub fn do_linked_list(bus: &mut Bus, ch: usize, chan: &mut Channel) -> u64 {
             let command = match bus.load(addr) {
                 Ok(res) => res,
                 Err(err) => {
-                    tracing::warn!(?err, %addr, "DMA LinkedList load command error");
+                    tracing::warn!(
+                        ?err,
+                        addr=%format_args!("{addr:#X}"),
+                        "DMA LinkedList load command error"
+                    );
 
                     chan.madr = 0xFFFFFF;
                     return cycles;

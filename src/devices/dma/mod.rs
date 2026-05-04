@@ -226,20 +226,25 @@ impl DmaController {
                 continue;
             }
 
-            tracing::debug!(idx=%ch, ?chan, "DMA transfer started");
-
-            let elapsed_cycles = match chan.chcr.sync_mode() {
-                SyncMode::Manual => handler::do_manual(bus, ch, &mut chan),
-                SyncMode::Request => handler::do_block(bus, ch, &mut chan),
-                SyncMode::LinkedList => handler::do_linked_list(bus, ch, &mut chan),
-                SyncMode::Reserved => unreachable!(),
-            };
-            cycles = cycles.saturating_add(elapsed_cycles);
+            let transfer_span = tracing::debug_span!(
+                target: "dma",
+                "transfer",
+                index=%ch,
+                ?chan
+            );
+            transfer_span.in_scope(|| {
+                let elapsed_cycles = match chan.chcr.sync_mode() {
+                    SyncMode::Manual => handler::do_manual(bus, ch, &mut chan),
+                    SyncMode::Request => handler::do_block(bus, ch, &mut chan),
+                    SyncMode::LinkedList => handler::do_linked_list(bus, ch, &mut chan),
+                    SyncMode::Reserved => unreachable!(),
+                };
+                tracing::trace!(%elapsed_cycles, "dma cycles spent");
+                cycles = cycles.saturating_add(elapsed_cycles);
+            });
 
             chan.chcr.set_active(false);
             chan.chcr.set_trigger(false);
-
-            tracing::debug!(idx=%ch, ?chan, %elapsed_cycles, "DMA transfer done");
 
             // TODO
             // bus.dma_ctrl.dicr.set_irq_lane(ch);
