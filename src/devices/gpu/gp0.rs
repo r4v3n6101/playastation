@@ -60,6 +60,13 @@ impl Default for DataBuf {
     }
 }
 
+#[tracing::instrument(
+    target = "gpu.gp0",
+    "dispatch",
+    level = "DEBUG",
+    skip(gpu),
+    fields(cmd=%format_args!("{cmd:#X}"))
+)]
 pub fn dispatch(gpu: &mut Gpu, cmd: u32) {
     let mut cmdbuf = mem::take(&mut gpu.cmdbuf);
 
@@ -115,6 +122,7 @@ pub fn dispatch(gpu: &mut Gpu, cmd: u32) {
     }
 }
 
+#[tracing::instrument(target = "gpu.gp0", "gpuread", level = "DEBUG", skip(gpu))]
 pub fn read(gpu: &mut Gpu) -> u32 {
     let databuf = &mut gpu.databuf;
 

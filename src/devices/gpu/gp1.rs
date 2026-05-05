@@ -17,6 +17,13 @@ enum Gp1Opcode {
     GetGpuInfo = 0x10,
 }
 
+#[tracing::instrument(
+    target = "gpu.gp1",
+    "dispatch",
+    level = "DEBUG",
+    skip(gpu),
+    fields(cmd=%format_args!("{cmd:#X}"))
+)]
 pub fn dispatch(gpu: &mut Gpu, cmd: u32) {
     let opcode = (cmd >> 24) as u8;
     let Some(opcode) = Gp1Opcode::from_repr(opcode) else {

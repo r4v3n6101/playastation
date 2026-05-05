@@ -101,9 +101,9 @@ where
             let _ = mem::take(&mut self.cpu.pending_load);
             let _ = mem::take(&mut self.cpu.pending_jump);
         } else {
-            let delay_slot = mem::take(&mut self.cpu.pending_jump);
-            if execution.last_in_delay_slot && delay_slot.happen {
-                self.cpu.pc = delay_slot.target;
+            let pending_jump = mem::take(&mut self.cpu.pending_jump);
+            if execution.last_in_delay_slot && pending_jump.happen {
+                self.cpu.pc = pending_jump.target;
             } else {
                 self.cpu.pc = execution.last_pc.wrapping_add(4);
             }

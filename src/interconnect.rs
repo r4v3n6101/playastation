@@ -16,11 +16,14 @@ const EXPANSION1: Range<u32> = 0x1F00_0000..0x1F7F_FFFF;
 const SCRATCHPAD: Range<u32> = 0x1F80_0000..0x1F80_03FF;
 
 // Hardware registers regions
-const HW_REGS: Range<u32> = 0x1F801000..0x1F801FFF;
+const HW_REGS: Range<u32> = 0x1F80_1000..0x1F80_1FFF;
+
 const INT_CTRL: Range<u32> = 0x1F80_1070..0x1F80_1078;
 const DMA_CTRL: Range<u32> = 0x1F80_1080..0x1F80_10FF;
 const TIMER_CTRL: Range<u32> = 0x1F80_1100..0x1F80_1130;
+const CDROM: Range<u32> = 0x1F80_1800..0x1F80_1803;
 const GPU: Range<u32> = 0x1F80_1810..0x1F80_1818;
+const SPU: Range<u32> = 0x1F80_1C00..0x1F80_1FFF;
 
 const MISC: Range<u32> = 0x1F80_2000..0x1F80_2FFF;
 const EXPANSION2: Range<u32> = 0x1FA0_0000..0x1FA1_FFFF;
@@ -138,11 +141,23 @@ impl Bus {
                     self.timer_ctrl.read(&mut bytes, mmio_addr);
                 });
             }
+            x if CDROM.contains(&x) => {
+                let mmio_addr = x - CDROM.start;
+                mmio_span.in_scope(|| {
+                    tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "cdrom read");
+                });
+            }
             x if GPU.contains(&x) => {
                 let mmio_addr = x - GPU.start;
                 mmio_span.in_scope(|| {
                     tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "gpu read");
                     self.gpu.read(&mut bytes, mmio_addr);
+                });
+            }
+            x if SPU.contains(&x) => {
+                let mmio_addr = x - SPU.start;
+                mmio_span.in_scope(|| {
+                    tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "spu read");
                 });
             }
             x if HW_REGS.contains(&x) => {
@@ -214,11 +229,23 @@ impl Bus {
                     self.timer_ctrl.write(mmio_addr, &value);
                 });
             }
+            x if CDROM.contains(&x) => {
+                let mmio_addr = x - CDROM.start;
+                mmio_span.in_scope(|| {
+                    tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "cdrom write");
+                });
+            }
             x if GPU.contains(&x) => {
                 let mmio_addr = x - GPU.start;
                 mmio_span.in_scope(|| {
                     tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "gpu write");
                     self.gpu.write(mmio_addr, &value);
+                });
+            }
+            x if SPU.contains(&x) => {
+                let mmio_addr = x - SPU.start;
+                mmio_span.in_scope(|| {
+                    tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "spu write");
                 });
             }
             x if HW_REGS.contains(&x) => {

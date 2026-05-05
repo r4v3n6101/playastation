@@ -39,7 +39,7 @@ pub struct TimerMode {
     /// Clock source. Meaning depends on timer index.
     pub clock_source: ClockSource,
     /// Interrupt request line status: 0 = request, 1 = no request.
-    pub irq_request: bool,
+    pub irq_inhibit: bool,
     /// Latched when the counter reaches target; cleared after mode read.
     pub reached_target: bool,
     /// Latched when the counter reaches 0xFFFF; cleared after mode read.
@@ -100,7 +100,7 @@ impl Mmio for TimerController {
                 let timer = &mut self.timers[timer];
                 timer.counter = 0;
                 timer.mode = TimerMode::from_bytes((val as u16).to_le_bytes())
-                    .with_irq_request(true)
+                    .with_irq_inhibit(true)
                     .with_reached_target(false)
                     .with_reached_overflow(false);
             }
@@ -132,7 +132,7 @@ mod tests {
         write(&mut ctrl, 0x4, 0x0038);
 
         assert_eq!(ctrl.timers[0].counter, 0);
-        assert!(ctrl.timers[0].mode.irq_request());
+        assert!(ctrl.timers[0].mode.irq_inhibit());
         assert!(ctrl.timers[0].mode.reset_on_target());
         assert!(ctrl.timers[0].mode.irq_on_target());
         assert!(ctrl.timers[0].mode.irq_on_overflow());
