@@ -1,7 +1,7 @@
 use std::mem;
 
 use crate::{
-    cpu::{Cpu, Exception, Opcode, PendingJump, PendingLoad},
+    cpu::{Cpu, Exception, Opcode, PendingLoad},
     interconnect::{Bus, BusError, BusErrorKind},
 };
 
@@ -28,6 +28,8 @@ impl Executor for Interpreter {
                 last_pc: cpu.pc,
                 // Branch delay is cancelled (exception) or handled in other block
                 last_in_delay_slot: false,
+                jump: false,
+                jump_target: 0,
                 cycles_elapsed: 0,
                 exception: None,
             },
@@ -389,117 +391,95 @@ fn execute(
 
         // Branches
         Opcode::Beq => {
-            cpu.pending_jump = PendingJump {
-                happen: cpu.gpr[rs] == cpu.gpr[rt],
-                target: ctx
-                    .result
-                    .last_pc
-                    .wrapping_add(4)
-                    .wrapping_add_signed(imm_sext << 2),
-            };
+            ctx.result.jump = cpu.gpr[rs] == cpu.gpr[rt];
+            ctx.result.jump_target = ctx
+                .result
+                .last_pc
+                .wrapping_add(4)
+                .wrapping_add_signed(imm_sext << 2);
         }
         Opcode::Bne => {
-            cpu.pending_jump = PendingJump {
-                happen: cpu.gpr[rs] != cpu.gpr[rt],
-                target: ctx
-                    .result
-                    .last_pc
-                    .wrapping_add(4)
-                    .wrapping_add_signed(imm_sext << 2),
-            };
+            ctx.result.jump = cpu.gpr[rs] != cpu.gpr[rt];
+            ctx.result.jump_target = ctx
+                .result
+                .last_pc
+                .wrapping_add(4)
+                .wrapping_add_signed(imm_sext << 2);
         }
         Opcode::Bgez => {
-            cpu.pending_jump = PendingJump {
-                happen: cpu.gpr[rs].cast_signed() >= 0,
-                target: ctx
-                    .result
-                    .last_pc
-                    .wrapping_add(4)
-                    .wrapping_add_signed(imm_sext << 2),
-            };
+            ctx.result.jump = cpu.gpr[rs].cast_signed() >= 0;
+            ctx.result.jump_target = ctx
+                .result
+                .last_pc
+                .wrapping_add(4)
+                .wrapping_add_signed(imm_sext << 2);
         }
         Opcode::Blez => {
-            cpu.pending_jump = PendingJump {
-                happen: cpu.gpr[rs].cast_signed() <= 0,
-                target: ctx
-                    .result
-                    .last_pc
-                    .wrapping_add(4)
-                    .wrapping_add_signed(imm_sext << 2),
-            };
+            ctx.result.jump = cpu.gpr[rs].cast_signed() <= 0;
+            ctx.result.jump_target = ctx
+                .result
+                .last_pc
+                .wrapping_add(4)
+                .wrapping_add_signed(imm_sext << 2);
         }
         Opcode::Bgtz => {
-            cpu.pending_jump = PendingJump {
-                happen: cpu.gpr[rs].cast_signed() > 0,
-                target: ctx
-                    .result
-                    .last_pc
-                    .wrapping_add(4)
-                    .wrapping_add_signed(imm_sext << 2),
-            };
+            ctx.result.jump = cpu.gpr[rs].cast_signed() > 0;
+            ctx.result.jump_target = ctx
+                .result
+                .last_pc
+                .wrapping_add(4)
+                .wrapping_add_signed(imm_sext << 2);
         }
         Opcode::Bltz => {
-            cpu.pending_jump = PendingJump {
-                happen: cpu.gpr[rs].cast_signed() < 0,
-                target: ctx
-                    .result
-                    .last_pc
-                    .wrapping_add(4)
-                    .wrapping_add_signed(imm_sext << 2),
-            };
+            ctx.result.jump = cpu.gpr[rs].cast_signed() < 0;
+            ctx.result.jump_target = ctx
+                .result
+                .last_pc
+                .wrapping_add(4)
+                .wrapping_add_signed(imm_sext << 2);
         }
         Opcode::Bgezal => {
             cpu.gpr[Cpu::DEFAULT_LINK_REG] = ctx.result.last_pc.wrapping_add(8);
 
-            cpu.pending_jump = PendingJump {
-                happen: cpu.gpr[rs].cast_signed() >= 0,
-                target: ctx
-                    .result
-                    .last_pc
-                    .wrapping_add(4)
-                    .wrapping_add_signed(imm_sext << 2),
-            };
+            ctx.result.jump = cpu.gpr[rs].cast_signed() >= 0;
+            ctx.result.jump_target = ctx
+                .result
+                .last_pc
+                .wrapping_add(4)
+                .wrapping_add_signed(imm_sext << 2);
         }
         Opcode::Bltzal => {
             cpu.gpr[Cpu::DEFAULT_LINK_REG] = ctx.result.last_pc.wrapping_add(8);
 
-            cpu.pending_jump = PendingJump {
-                happen: cpu.gpr[rs].cast_signed() < 0,
-                target: ctx
-                    .result
-                    .last_pc
-                    .wrapping_add(4)
-                    .wrapping_add_signed(imm_sext << 2),
-            };
+            ctx.result.jump = cpu.gpr[rs].cast_signed() < 0;
+            ctx.result.jump_target = ctx
+                .result
+                .last_pc
+                .wrapping_add(4)
+                .wrapping_add_signed(imm_sext << 2);
         }
 
         // Jumps
         Opcode::J => {
-            cpu.pending_jump = PendingJump {
-                happen: true,
-                target: (ctx.result.last_pc.wrapping_add(4) & 0xF000_0000) | (target << 2),
-            };
+            ctx.result.jump = true;
+            ctx.result.jump_target =
+                (ctx.result.last_pc.wrapping_add(4) & 0xF000_0000) | (target << 2);
         }
         Opcode::Jal => {
             cpu.gpr[Cpu::DEFAULT_LINK_REG] = ctx.result.last_pc.wrapping_add(8);
 
-            cpu.pending_jump = PendingJump {
-                happen: true,
-                target: (ctx.result.last_pc.wrapping_add(4) & 0xF000_0000) | (target << 2),
-            };
+            ctx.result.jump = true;
+            ctx.result.jump_target =
+                (ctx.result.last_pc.wrapping_add(4) & 0xF000_0000) | (target << 2);
         }
         Opcode::Jr => {
-            cpu.pending_jump = PendingJump {
-                happen: true,
-                target: cpu.gpr[rs],
-            };
+            ctx.result.jump = true;
+            ctx.result.jump_target = cpu.gpr[rs];
         }
         Opcode::Jalr => {
             cpu.gpr[rd] = ctx.result.last_pc.wrapping_add(8);
-            cpu.pending_jump = PendingJump {
-                happen: true,
-                target: cpu.gpr[rs],
-            };
+            ctx.result.jump = true;
+            ctx.result.jump_target = cpu.gpr[rs];
         }
 
         // MulDiv

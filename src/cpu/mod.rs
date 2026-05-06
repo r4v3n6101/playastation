@@ -17,8 +17,6 @@ pub struct Cpu {
 
     /// Pending load from RAM (aka load-delay slot).
     pub pending_load: PendingLoad,
-    /// Pending jump (aka branch delay slot).
-    pub pending_jump: PendingJump,
 
     // Coprocessors
     pub cop0: Cop0,
@@ -32,14 +30,6 @@ pub struct PendingLoad {
     pub value: u32,
 }
 
-#[derive(Debug, Default, Copy, Clone)]
-pub struct PendingJump {
-    /// Whether a jump will happen.
-    pub happen: bool,
-    /// Jump target.
-    pub target: u32,
-}
-
 /// Reset state of the CPU.
 impl Default for Cpu {
     fn default() -> Self {
@@ -50,10 +40,6 @@ impl Default for Cpu {
             lo: 0,
 
             pending_load: PendingLoad { dest: 0, value: 0 },
-            pending_jump: PendingJump {
-                happen: false,
-                target: 0,
-            },
 
             cop0: Cop0::default(),
         }

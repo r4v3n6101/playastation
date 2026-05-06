@@ -827,14 +827,14 @@ impl<'a> FnCtx<'a> {
         self.builder.ins().store(
             MemFlags::new(),
             true_,
-            self.cpu_ptr,
-            offset_of!(Cpu, pending_jump.happen).cast_signed() as i32,
+            self.res_ptr,
+            offset_of!(ExecutionResult, jump).cast_signed() as i32,
         );
         self.builder.ins().store(
             MemFlags::new(),
             target,
-            self.cpu_ptr,
-            offset_of!(Cpu, pending_jump.target).cast_signed() as i32,
+            self.res_ptr,
+            offset_of!(ExecutionResult, jump_target).cast_signed() as i32,
         );
     }
 

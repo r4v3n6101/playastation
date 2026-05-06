@@ -35,6 +35,8 @@ pub trait Executor {
 pub struct ExecutionResult {
     pub last_pc: u32,
     pub last_in_delay_slot: bool,
+    pub jump: bool,
+    pub jump_target: u32,
     pub cycles_elapsed: u64,
     pub exception: Option<Exception>,
 }
@@ -97,13 +99,11 @@ where
             );
             self.cpu.pc = self.cpu.cop0.exception_handler();
 
-            // Clear out pending ops, will re-execute them later again
+            // Clear out pending load, will load it later again
             let _ = mem::take(&mut self.cpu.pending_load);
-            let _ = mem::take(&mut self.cpu.pending_jump);
         } else {
-            let pending_jump = mem::take(&mut self.cpu.pending_jump);
-            if execution.last_in_delay_slot && pending_jump.happen {
-                self.cpu.pc = pending_jump.target;
+            if execution.jump {
+                self.cpu.pc = execution.jump_target;
             } else {
                 self.cpu.pc = execution.last_pc.wrapping_add(4);
             }
