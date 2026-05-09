@@ -1,5 +1,7 @@
 use modular_bitfield::prelude::*;
 
+use crate::interconnect::Bus;
+
 use super::{Mmio, MmioExt};
 
 const TIMERS: usize = 3;
@@ -20,7 +22,7 @@ pub struct Timer {
 }
 
 #[bitfield(bits = 16)]
-#[derive(Specifier, Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Specifier, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TimerMode {
     /// Synchronize counter with HBlank/VBlank depending on timer index.
     pub sync_enabled: bool,
@@ -64,6 +66,62 @@ pub enum ClockSource {
     Source1 = 1,
     Source2 = 2,
     Source3 = 3,
+}
+
+impl Default for TimerMode {
+    fn default() -> Self {
+        Self::new().with_irq_inhibit(true)
+    }
+}
+
+impl Timer {
+    fn inc_counter(&mut self, cnt: u16) {
+        if cnt == 0 {
+            return;
+        }
+
+        let old = self.counter;
+        let (new, overflow) = old.overflowing_add(cnt);
+        self.counter = new;
+
+        let crossed = if overflow {
+            // target resides in (old; MAX] U [MIN; new]
+            old < self.target || self.target <= new
+        } else {
+            // target inbetween (old; new]
+            old < self.target && self.target <= new
+        };
+
+        if crossed {
+            self.mode.set_reached_target(true);
+            if self.mode.irq_on_target() {
+                self.mode.set_irq_inhibit(false);
+            }
+            if self.mode.reset_on_target() {
+                let distance = self.target.wrapping_sub(old);
+                let exceed = cnt.wrapping_sub(distance);
+                self.counter = exceed;
+
+                // `cnt` is u16, so after reset there cannot be another overflow.
+                if old < self.target {
+                    return;
+                }
+            }
+        }
+
+        if overflow {
+            self.mode.set_reached_overflow(true);
+            if self.mode.irq_on_overflow() {
+                self.mode.set_irq_inhibit(false);
+            }
+        }
+    }
+}
+
+impl TimerController {
+    pub fn update(bus: &mut Bus, sys_cycles: u64) {
+        // TODO
+    }
 }
 
 impl Mmio for TimerController {
@@ -112,7 +170,7 @@ impl Mmio for TimerController {
 
 #[cfg(test)]
 mod tests {
-    use super::{super::Mmio, TimerController};
+    use super::{super::Mmio, TimerController, TimerMode};
 
     fn read(ctrl: &mut TimerController, addr: u32) -> u32 {
         let mut buf = [0; 4];
@@ -122,6 +180,13 @@ mod tests {
 
     fn write(ctrl: &mut TimerController, addr: u32, val: u32) {
         ctrl.write(addr, val.to_le_bytes().as_slice());
+    }
+
+    #[test]
+    fn verify_default_mode() {
+        let reg = u16::from_le_bytes(TimerMode::default().into_bytes());
+
+        assert_eq!(reg, 0x0400);
     }
 
     #[test]

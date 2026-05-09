@@ -64,7 +64,7 @@ where
 {
     pub fn run(&mut self, bus: &mut Bus) {
         // Decode batch of instructions, stopping at an error in fetch/decode or Syscall/Break.
-        decoder::decode_block(&mut self.block, &self.cpu, bus, self.block_size);
+        decoder::fetch_and_decode_block(&mut self.block, &self.cpu, bus, self.block_size);
 
         // CPU first
         let execution = self.executor.run(&self.block, &mut self.cpu, bus);
@@ -101,12 +101,10 @@ where
 
             // Clear out pending load, will load it later again
             let _ = mem::take(&mut self.cpu.pending_load);
+        } else if execution.jump {
+            self.cpu.pc = execution.jump_target;
         } else {
-            if execution.jump {
-                self.cpu.pc = execution.jump_target;
-            } else {
-                self.cpu.pc = execution.last_pc.wrapping_add(4);
-            }
+            self.cpu.pc = execution.last_pc.wrapping_add(4);
         }
     }
 }

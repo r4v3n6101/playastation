@@ -84,6 +84,9 @@ impl Default for Bus {
 impl Bus {
     pub fn update(&mut self, cpu_cycles: u64) {
         let dma_cycles = DmaController::run(self);
+
+        let sys_cycles = cpu_cycles.saturating_add(dma_cycles);
+        TimerController::update(self, sys_cycles);
     }
 
     pub fn load<const N: usize>(&mut self, addr: u32) -> Result<[u8; N], BusError> {

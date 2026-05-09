@@ -141,7 +141,7 @@ pub fn read(gpu: &mut Gpu) -> u32 {
                 *pixel = u32::from(gpu.vram[y][x]);
             }
 
-            databuf.pixels_read = databuf.pixels_read.wrapping_add(1);
+            databuf.pixels_read = databuf.pixels_read.saturating_add(1);
 
             if databuf.pixels_read >= size {
                 gpu.gpustat.set_ready_to_send_vram(false);
@@ -503,7 +503,7 @@ impl Packet for Cpu2VramPacket {
                         gpu.vram[y][x] = pixel;
                     }
 
-                    self.pixels_written = self.pixels_written.wrapping_add(1);
+                    self.pixels_written = self.pixels_written.saturating_add(1);
                 }
             }
         }
