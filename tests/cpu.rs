@@ -1,14 +1,10 @@
 use std::{fs, process::Command};
 
-use playastation::{
-    cpu::Cpu,
-    interconnect::Bus,
-    run::{CpuExecutor, interpreter::Interpreter},
-};
+use playastation::{cpu::Cpu, interconnect::Bus, run::CpuExecutor};
 
 fn create_and_run_program(name: &'static str) -> (Cpu, Bus) {
     let mut bus = Bus::default();
-    let mut executor = CpuExecutor::<Interpreter>::default();
+    let mut executor = CpuExecutor::default();
     executor.cpu.pc = 0;
 
     let output = format!("{name}.bin");

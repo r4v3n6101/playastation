@@ -1,14 +1,9 @@
-use playastation::{
-    cpu::Cop0,
-    devices::int::InterruptFlags,
-    interconnect::Bus,
-    run::{CpuExecutor, interpreter::Interpreter},
-};
+use playastation::{cpu::Cop0, devices::int::InterruptFlags, interconnect::Bus, run::CpuExecutor};
 
 #[test]
 fn test_bus_interrupt_triggers_cpu_exception() {
     let mut bus = Bus::default();
-    let mut executor = CpuExecutor::<Interpreter>::default();
+    let mut executor = CpuExecutor::default();
 
     executor.cpu.pc = 4;
     executor.block_size = 1024;

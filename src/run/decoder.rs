@@ -1,5 +1,5 @@
 use crate::{
-    cpu::{Cpu, Exception, Opcode},
+    cpu::{Exception, Opcode},
     interconnect::{Bus, BusError, BusErrorKind},
 };
 
@@ -22,11 +22,10 @@ pub enum Operation {
 /// Size is limited to `limit`, but may be `limit + 1` in case of `limit` element is branch/jump.
 pub fn fetch_and_decode_block(
     output: &mut Vec<Operation>,
-    cpu: &Cpu,
-    bus: &mut Bus,
     mut limit: usize,
+    mut pc: u32,
+    bus: &mut Bus,
 ) {
-    let mut pc = cpu.pc;
     let mut pending_delay_slot = false;
 
     output.clear();
@@ -115,6 +114,8 @@ pub fn fetch_and_decode_block(
 
 #[cfg(test)]
 mod tests {
+    use crate::cpu::Cpu;
+
     use super::*;
 
     fn make_bus(words: &[(u32, u32)]) -> Bus {
@@ -143,7 +144,7 @@ mod tests {
         ]);
 
         let mut out = Vec::new();
-        fetch_and_decode_block(&mut out, &cpu, &mut bus, 1024);
+        fetch_and_decode_block(&mut out, 1024, cpu.pc, &mut bus);
 
         assert_eq!(out.len(), 2);
 
@@ -184,7 +185,7 @@ mod tests {
         ]);
 
         let mut out = Vec::new();
-        fetch_and_decode_block(&mut out, &cpu, &mut bus, 1024);
+        fetch_and_decode_block(&mut out, 1024, cpu.pc, &mut bus);
 
         assert_eq!(out.len(), 2);
 
@@ -214,7 +215,7 @@ mod tests {
         let mut bus = make_bus(&[(0x0000_0000, 0x0000_000C), (0x0000_0004, 0x0000_0000)]);
 
         let mut out = Vec::new();
-        fetch_and_decode_block(&mut out, &cpu, &mut bus, 1024);
+        fetch_and_decode_block(&mut out, 1024, cpu.pc, &mut bus);
 
         assert_eq!(out.len(), 1);
 
@@ -239,7 +240,7 @@ mod tests {
         let mut bus = make_bus(&[(0x0000_0000, 0x0000_000D), (0x0000_0004, 0x0000_0000)]);
 
         let mut out = Vec::new();
-        fetch_and_decode_block(&mut out, &cpu, &mut bus, 1024);
+        fetch_and_decode_block(&mut out, 1024, cpu.pc, &mut bus);
 
         assert_eq!(out.len(), 1);
 
@@ -263,7 +264,7 @@ mod tests {
         let mut bus = make_bus(&[(0x0000_0000, 0xFFFF_FFFF), (0x0000_0004, 0x0000_0000)]);
 
         let mut out = Vec::new();
-        fetch_and_decode_block(&mut out, &cpu, &mut bus, 1024);
+        fetch_and_decode_block(&mut out, 1024, cpu.pc, &mut bus);
 
         assert_eq!(out.len(), 1);
         assert!(matches!(

@@ -5,7 +5,7 @@ use crate::{
     interconnect::{Bus, BusError, BusErrorKind},
 };
 
-use super::{ExecutionResult, Executor, decoder::Operation};
+use super::{ExecutionResult, decoder::Operation};
 
 /// How many cycles need to be elapsed, so hi/lo become available after Mul op.
 const MULT_HI_LO_LOAD_LATENCY: u64 = 5;
@@ -18,81 +18,74 @@ struct Context {
     hi_lo_latency: u64,
 }
 
-#[derive(Debug, Default)]
-pub struct Interpreter;
+pub fn run(ins_block: &[Operation], cpu: &mut Cpu, bus: &mut Bus) -> ExecutionResult {
+    let mut ctx = Context {
+        result: ExecutionResult {
+            last_pc: cpu.pc,
+            // Branch delay is cancelled (exception) or handled in other block
+            last_in_delay_slot: false,
+            jump: false,
+            jump_target: 0,
+            cycles_elapsed: 0,
+            exception: None,
+        },
+        load_delay_slot: PendingLoad::default(),
+        hi_lo_latency: 0,
+    };
 
-impl Executor for Interpreter {
-    fn run(&mut self, ins_block: &[Operation], cpu: &mut Cpu, bus: &mut Bus) -> ExecutionResult {
-        let mut ctx = Context {
-            result: ExecutionResult {
-                last_pc: cpu.pc,
-                // Branch delay is cancelled (exception) or handled in other block
-                last_in_delay_slot: false,
-                jump: false,
-                jump_target: 0,
-                cycles_elapsed: 0,
-                exception: None,
-            },
-            load_delay_slot: PendingLoad::default(),
-            hi_lo_latency: 0,
-        };
+    for ins in ins_block {
+        // Save delay slot for commit after execution of operation or for Lwl/Lwr ops
+        ctx.load_delay_slot = mem::take(&mut cpu.pending_load);
 
-        for ins in ins_block {
-            let load_delay_slot = mem::take(&mut cpu.pending_load);
+        match *ins {
+            Operation::Instruction {
+                pc,
+                in_delay_slot,
+                ins,
+                op,
+            } => {
+                ctx.result.last_pc = pc;
+                ctx.result.last_in_delay_slot = in_delay_slot;
 
-            match *ins {
-                Operation::Instruction {
-                    pc,
-                    in_delay_slot,
-                    ins,
-                    op,
-                } => {
-                    ctx.result.last_pc = pc;
-                    ctx.result.last_in_delay_slot = in_delay_slot;
+                let res = execute(&mut ctx, ins, op, cpu, bus);
+                ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(1);
+                ctx.hi_lo_latency = ctx.hi_lo_latency.saturating_sub(1);
 
-                    // For Lwl/Lwr we need to forward value from the pending slot
-                    ctx.load_delay_slot = load_delay_slot;
+                // Store pending load even if execution fails
+                cpu.gpr[ctx.load_delay_slot.dest] = ctx.load_delay_slot.value;
+                cpu.gpr[0] = 0;
 
-                    let res = execute(&mut ctx, ins, op, cpu, bus);
-                    ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(1);
-                    ctx.hi_lo_latency = ctx.hi_lo_latency.saturating_sub(1);
-
-                    // Store pending load even if execution fails
-                    cpu.gpr[load_delay_slot.dest] = load_delay_slot.value;
-                    cpu.gpr[0] = 0;
-
-                    if let Err(exception) = res {
-                        ctx.result.exception.replace(exception);
-                        break;
-                    }
-                }
-                Operation::Break {
-                    pc,
-                    in_delay_slot,
-                    cause: exception,
-                } => {
-                    ctx.result.last_pc = pc;
-                    ctx.result.last_in_delay_slot = in_delay_slot;
+                if let Err(exception) = res {
                     ctx.result.exception.replace(exception);
-
-                    // Cycles
-                    ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(1);
-                    ctx.hi_lo_latency = ctx.hi_lo_latency.saturating_sub(1);
-
-                    // Exception behaves like an instruction, so commit the pending load
-                    cpu.gpr[load_delay_slot.dest] = load_delay_slot.value;
-                    cpu.gpr[0] = 0;
-
                     break;
                 }
             }
+            Operation::Break {
+                pc,
+                in_delay_slot,
+                cause: exception,
+            } => {
+                ctx.result.last_pc = pc;
+                ctx.result.last_in_delay_slot = in_delay_slot;
+                ctx.result.exception.replace(exception);
+
+                // Cycles
+                ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(1);
+                ctx.hi_lo_latency = ctx.hi_lo_latency.saturating_sub(1);
+
+                // Exception behaves like an instruction, so commit the pending load
+                cpu.gpr[ctx.load_delay_slot.dest] = ctx.load_delay_slot.value;
+                cpu.gpr[0] = 0;
+
+                break;
+            }
         }
-
-        // The next block won't wait latency before HI/LO, because we emulate it in the current one.
-        ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(ctx.hi_lo_latency);
-
-        ctx.result
     }
+
+    // The next block won't wait latency before HI/LO, because we emulate it in the current one.
+    ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(ctx.hi_lo_latency);
+
+    ctx.result
 }
 
 fn execute(

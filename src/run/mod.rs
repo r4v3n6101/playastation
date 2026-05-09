@@ -6,29 +6,17 @@ use crate::{
 };
 
 mod decoder;
-pub mod interpreter;
-#[cfg(feature = "jit")]
-pub mod jit;
+mod interpreter;
 
 // TODO : rename
 #[derive(Debug)]
-pub struct CpuExecutor<E> {
+pub struct CpuExecutor {
     pub cpu: Cpu,
-    pub executor: E,
     /// Maximum block size. If the last op is branch delay, block may be max+1
     pub block_size: usize,
 
     /// Cache of decoded block of ops
     block: Vec<decoder::Operation>,
-}
-
-pub trait Executor {
-    fn run(
-        &mut self,
-        ins_block: &[decoder::Operation],
-        cpu: &mut Cpu,
-        bus: &mut Bus,
-    ) -> ExecutionResult;
 }
 
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
@@ -41,16 +29,12 @@ pub struct ExecutionResult {
     pub exception: Option<Exception>,
 }
 
-impl<E> Default for CpuExecutor<E>
-where
-    E: Default,
-{
+impl Default for CpuExecutor {
     fn default() -> Self {
         const DEFAULT_INS_BLOCK: usize = 1024;
 
         Self {
             cpu: Cpu::default(),
-            executor: E::default(),
 
             block_size: DEFAULT_INS_BLOCK,
             block: Vec::with_capacity(DEFAULT_INS_BLOCK + 1),
@@ -58,16 +42,13 @@ where
     }
 }
 
-impl<E> CpuExecutor<E>
-where
-    E: Executor,
-{
+impl CpuExecutor {
     pub fn run(&mut self, bus: &mut Bus) {
         // Decode batch of instructions, stopping at an error in fetch/decode or Syscall/Break.
-        decoder::fetch_and_decode_block(&mut self.block, &self.cpu, bus, self.block_size);
+        decoder::fetch_and_decode_block(&mut self.block, self.block_size, self.cpu.pc, bus);
 
         // CPU first
-        let execution = self.executor.run(&self.block, &mut self.cpu, bus);
+        let execution = interpreter::run(&self.block, &mut self.cpu, bus);
 
         // Then devices on the bus are updated
         bus.update(execution.cycles_elapsed);
