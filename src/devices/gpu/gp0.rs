@@ -4,10 +4,9 @@ use smallbox::{SmallBox, space::S32};
 use smallvec::SmallVec;
 use strum::FromRepr;
 
-use super::{
-    Gpu, VRAM_HEIGHT, VRAM_WIDTH,
-    types::{Clut, Color, Location, Position, Size, UV},
-};
+use crate::render::types::{Clut, Color, Location, Position, Size, UV};
+
+use super::Gpu;
 
 /// Maximum polygon is quad, but what if greater?
 const POLYGON_STACK_LIMIT: usize = 4;
@@ -28,35 +27,12 @@ enum Gp0OpcodeGroup {
 }
 
 #[derive(Debug)]
-pub struct CmdBuf {
-    packet: SmallBox<dyn Packet, S32>,
-}
-
-#[derive(Debug)]
-pub struct DataBuf {
-    pos: Position,
-    size: Size,
-
-    pixels_read: u32,
-}
+pub struct CmdBuf(SmallBox<dyn PacketBuilder, S32>);
 
 /// [`Default`] state is like after NOP command.
 impl Default for CmdBuf {
     fn default() -> Self {
-        Self {
-            packet: SmallBox::new(()),
-        }
-    }
-}
-
-impl Default for DataBuf {
-    fn default() -> Self {
-        Self {
-            pos: Position { x: 0, y: 0 },
-            size: Size { w: 0, h: 0 },
-
-            pixels_read: 0,
-        }
+        Self(SmallBox::new(()))
     }
 }
 
@@ -70,8 +46,8 @@ impl Default for DataBuf {
 pub fn dispatch(gpu: &mut Gpu, cmd: u32) {
     let mut cmdbuf = mem::take(&mut gpu.cmdbuf);
 
-    if cmdbuf.packet.needs_more() {
-        cmdbuf.packet.push_cmd(cmd, gpu);
+    if cmdbuf.0.needs_more() {
+        cmdbuf.0.push_cmd(cmd, gpu);
     } else {
         let opcode = (cmd >> 24) as u8;
         let group = (cmd >> 29) as u8;
@@ -85,38 +61,38 @@ pub fn dispatch(gpu: &mut Gpu, cmd: u32) {
         match (group, opcode) {
             (_, 0x00 | 0x03..=0x1E) => {
                 // NOP
-                cmdbuf.packet = SmallBox::new(());
+                cmdbuf.0 = SmallBox::new(());
             }
             (_, 0x01) => {
                 // Clear CLUT AFAIK
-                cmdbuf.packet = SmallBox::new(());
+                cmdbuf.0 = SmallBox::new(());
             }
             (_, 0x02) => {
                 // FillVram
             }
             (Some(Gp0OpcodeGroup::Polygon), _) => {
-                cmdbuf.packet = SmallBox::new(PolygonPacket::init(cmd));
+                cmdbuf.0 = SmallBox::new(PolygonPacket::init(cmd));
             }
             (Some(Gp0OpcodeGroup::Line), _) => {
-                cmdbuf.packet = SmallBox::new(LinePacket::init(cmd));
+                cmdbuf.0 = SmallBox::new(LinePacket::init(cmd));
             }
             (Some(Gp0OpcodeGroup::Rect), _) => {
-                cmdbuf.packet = SmallBox::new(RectPacket::init(cmd));
+                cmdbuf.0 = SmallBox::new(RectPacket::init(cmd));
             }
             (Some(Gp0OpcodeGroup::Vram2Vram), _) => {}
             (Some(Gp0OpcodeGroup::Cpu2Vram), _) => {
-                cmdbuf.packet = SmallBox::new(Cpu2VramPacket::init(cmd));
+                cmdbuf.0 = SmallBox::new(Cpu2VramPacket::init(cmd));
             }
             (Some(Gp0OpcodeGroup::Vram2Cpu), _) => {
-                cmdbuf.packet = SmallBox::new(Vram2CpuPacket::init(cmd));
+                cmdbuf.0 = SmallBox::new(Vram2CpuPacket::init(cmd));
             }
             _ => {}
         }
     }
 
-    if !cmdbuf.packet.needs_more() {
-        tracing::debug!(packet=?cmdbuf.packet, "packet gathered");
-        // TODO : commit
+    if !cmdbuf.0.needs_more() {
+        tracing::debug!(packet=?cmdbuf.0, "packet gathered");
+        cmdbuf.0.commit(gpu);
     } else {
         gpu.cmdbuf = cmdbuf;
     }
@@ -124,36 +100,17 @@ pub fn dispatch(gpu: &mut Gpu, cmd: u32) {
 
 #[tracing::instrument(target = "gpu.gp0", "gpuread", level = "DEBUG", skip(gpu))]
 pub fn read(gpu: &mut Gpu) -> u32 {
-    let databuf = &mut gpu.databuf;
-
     let mut data = [0u32; 2];
     for pixel in &mut data {
-        let size = u32::from(databuf.size.w) * u32::from(databuf.size.h);
-        if databuf.pixels_read < size {
-            let (x, y) = (
-                databuf.pixels_read % u32::from(databuf.size.w),
-                databuf.pixels_read / u32::from(databuf.size.w),
-            );
-            let x = (databuf.pos.x as u32 + x) as usize;
-            let y = (databuf.pos.y as u32 + y) as usize;
-
-            if x <= VRAM_WIDTH && y <= VRAM_HEIGHT {
-                *pixel = u32::from(gpu.vram[y][x]);
-            }
-
-            databuf.pixels_read = databuf.pixels_read.saturating_add(1);
-
-            if databuf.pixels_read >= size {
-                gpu.gpustat.set_ready_to_send_vram(false);
-                tracing::debug!("GPUREAD data transfer done");
-            }
+        if let Some(data) = gpu.backend.pop_snapshot_pixel() {
+            *pixel = u32::from(data);
         }
     }
 
     data[1] << 16 | data[0]
 }
 
-trait Packet: fmt::Debug {
+trait PacketBuilder: fmt::Debug {
     fn init(cmd: u32) -> Self
     where
         Self: Sized;
@@ -161,6 +118,8 @@ trait Packet: fmt::Debug {
     fn push_cmd(&mut self, cmd: u32, gpu: &mut Gpu);
 
     fn needs_more(&self) -> bool;
+
+    fn commit(&mut self, gpu: &mut Gpu);
 }
 
 #[derive(Debug)]
@@ -221,7 +180,7 @@ struct VertexBuilder {
     uv: Option<UV>,
 }
 
-impl Packet for () {
+impl PacketBuilder for () {
     fn init(_: u32) -> Self
     where
         Self: Sized,
@@ -233,9 +192,11 @@ impl Packet for () {
     fn needs_more(&self) -> bool {
         false
     }
+
+    fn commit(&mut self, _: &mut Gpu) {}
 }
 
-impl Packet for PolygonPacket {
+impl PacketBuilder for PolygonPacket {
     fn init(cmd: u32) -> Self
     where
         Self: Sized,
@@ -322,9 +283,13 @@ impl Packet for PolygonPacket {
     fn needs_more(&self) -> bool {
         self.words_left > 0
     }
+
+    fn commit(&mut self, gpu: &mut Gpu) {
+        // TODO
+    }
 }
 
-impl Packet for LinePacket {
+impl PacketBuilder for LinePacket {
     fn init(cmd: u32) -> Self
     where
         Self: Sized,
@@ -396,9 +361,13 @@ impl Packet for LinePacket {
     fn needs_more(&self) -> bool {
         self.words_left != Some(0)
     }
+
+    fn commit(&mut self, gpu: &mut Gpu) {
+        // TODO
+    }
 }
 
-impl Packet for RectPacket {
+impl PacketBuilder for RectPacket {
     fn init(cmd: u32) -> Self
     where
         Self: Sized,
@@ -465,9 +434,13 @@ impl Packet for RectPacket {
     fn needs_more(&self) -> bool {
         self.words_left > 0
     }
+
+    fn commit(&mut self, gpu: &mut Gpu) {
+        // TODO
+    }
 }
 
-impl Packet for Cpu2VramPacket {
+impl PacketBuilder for Cpu2VramPacket {
     fn init(_: u32) -> Self
     where
         Self: Sized,
@@ -491,18 +464,13 @@ impl Packet for Cpu2VramPacket {
             Some(size) => {
                 debug_assert!(self.pixels_written <= u32::from(size.w) * u32::from(size.h));
 
+                if self.pixels_written == 0 {
+                    gpu.backend
+                        .take_vram_area_snapshot(self.pos.unwrap(), self.size.unwrap());
+                }
+
                 for pixel in [cmd as u16, (cmd >> 16) as u16] {
-                    let (x, y) = (
-                        self.pixels_written % u32::from(size.w),
-                        self.pixels_written / u32::from(size.w),
-                    );
-                    let x = (self.pos.unwrap().x as u32 + x) as usize;
-                    let y = (self.pos.unwrap().y as u32 + y) as usize;
-
-                    if x <= VRAM_WIDTH && y <= VRAM_HEIGHT {
-                        gpu.vram[y][x] = pixel;
-                    }
-
+                    gpu.backend.push_snapshot_pixel(pixel);
                     self.pixels_written = self.pixels_written.saturating_add(1);
                 }
             }
@@ -517,9 +485,13 @@ impl Packet for Cpu2VramPacket {
 
         self.pixels_written < size
     }
+
+    fn commit(&mut self, gpu: &mut Gpu) {
+        gpu.backend.commit_vram_snapshot();
+    }
 }
 
-impl Packet for Vram2CpuPacket {
+impl PacketBuilder for Vram2CpuPacket {
     fn init(_: u32) -> Self
     where
         Self: Sized,
@@ -530,25 +502,23 @@ impl Packet for Vram2CpuPacket {
         }
     }
 
-    fn push_cmd(&mut self, cmd: u32, gpu: &mut Gpu) {
+    fn push_cmd(&mut self, cmd: u32, _: &mut Gpu) {
         if let pos @ None = &mut self.pos {
             pos.replace(parse_pos(cmd));
             return;
         }
         self.size.replace(parse_size(cmd));
-
-        gpu.databuf = DataBuf {
-            pos: self.pos.unwrap(),
-            size: self.size.unwrap(),
-            pixels_read: 0,
-        };
-
-        gpu.gpustat.set_ready_to_send_vram(true);
-        tracing::debug!("GPUREAD data transfer ready");
     }
 
     fn needs_more(&self) -> bool {
         self.size.is_none()
+    }
+
+    fn commit(&mut self, gpu: &mut Gpu) {
+        gpu.backend
+            .take_vram_area_snapshot(self.pos.unwrap(), self.size.unwrap());
+        gpu.gpustat.set_ready_to_send_vram(true);
+        tracing::debug!("GPUREAD data transfer ready");
     }
 }
 
@@ -583,13 +553,9 @@ fn parse_size(cmd: u32) -> Size {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        super::{
-            Gpu,
-            types::{Color, Location, Size},
-        },
-        LinePacket, Packet, PolygonPacket, RectPacket,
-    };
+    use crate::render::types::{Color, Location, Size};
+
+    use super::{super::Gpu, LinePacket, PacketBuilder, PolygonPacket, RectPacket};
 
     fn loc(x: i16, y: i16) -> u32 {
         u16::from_ne_bytes(x.to_ne_bytes()) as u32

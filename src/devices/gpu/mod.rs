@@ -1,24 +1,17 @@
 use modular_bitfield::prelude::*;
 
+use crate::render::GpuBackend;
+
 use super::{Mmio, MmioExt};
 
 mod gp0;
 mod gp1;
-// TODO : move to renderer module
-mod types;
 
-type Vram = Box<[[u16; VRAM_WIDTH]; VRAM_HEIGHT]>;
-
-const VRAM_WIDTH: usize = 1024;
-const VRAM_HEIGHT: usize = 512;
-
-#[derive(Debug)]
 pub struct Gpu {
     pub gpustat: GpuStat,
-    pub vram: Vram,
+    pub backend: Box<dyn GpuBackend>,
 
     cmdbuf: gp0::CmdBuf,
-    databuf: gp0::DataBuf,
 }
 
 #[bitfield(bits = 32)]
@@ -122,10 +115,9 @@ impl Default for Gpu {
     fn default() -> Self {
         Self {
             gpustat: GpuStat::default(),
-            vram: Box::new([[0; _]; _]),
+            backend: todo!(),
 
             cmdbuf: gp0::CmdBuf::default(),
-            databuf: gp0::DataBuf::default(),
         }
     }
 }
