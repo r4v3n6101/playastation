@@ -1,6 +1,6 @@
 use modular_bitfield::prelude::*;
 
-use crate::render::GpuBackend;
+use crate::render::{Renderer, noop::NoopRenderer};
 
 use super::{Mmio, MmioExt};
 
@@ -9,7 +9,7 @@ mod gp1;
 
 pub struct Gpu {
     pub gpustat: GpuStat,
-    pub backend: Box<dyn GpuBackend>,
+    pub render: Box<dyn Renderer>,
 
     cmdbuf: gp0::CmdBuf,
 }
@@ -115,7 +115,7 @@ impl Default for Gpu {
     fn default() -> Self {
         Self {
             gpustat: GpuStat::default(),
-            backend: todo!(),
+            render: Box::new(NoopRenderer::default()),
 
             cmdbuf: gp0::CmdBuf::default(),
         }

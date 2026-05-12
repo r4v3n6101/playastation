@@ -1,23 +1,32 @@
+pub mod noop;
 pub mod types;
 
-pub trait GpuBackend: 'static {
-    // TODO : issue a command with drawing primitives
+pub trait Renderer: 'static {
+    /// Draw a polygon.
+    fn draw_polygon(&mut self, polygon: types::Polygon);
 
-    /// Blit VRAM area to the local storage. This is done just before VRAM <=> CPU transfer.
-    fn take_vram_area_snapshot(&mut self, pos: types::Position, size: types::Size);
+    /// Draw a polyline - line with N points.
+    fn draw_polyline(&mut self, polyline: types::Polyline);
 
-    /// Commit local VRAM snapshot back to GPU backend.
-    /// Work with area, so the texture won't be overwritten fully, so not cause VRAM incoherensy.
-    fn commit_vram_snapshot(&self);
+    /// Draw a rectangle (actually a polygon, but in another format).
+    fn draw_rect(&mut self, rect: types::Rect);
 
-    /// Push a pixel into the VRAM snapshot taken via [`Self::take_vram_area_snapshot`],
-    /// and increment pointer to the next pixel to be written.
-    fn push_snapshot_pixel(&mut self, pixel: u16);
+    /// Blit VRAM area to the local storage. This is done just before VRAM => CPU transfer.
+    fn download_vram_area_to_local(&mut self, pos: types::Position, size: types::Size);
 
-    /// Read a pixel from VRAM snapshot taken via [`Self::take_vram_area_snapshot`]
+    /// Read a pixel from VRAM snapshot taken via [`Self::download_vram_area_to_local`]
     /// and move pointer forward to the next pixel (if any have left in the area of snapshot).
-    fn pop_snapshot_pixel(&mut self) -> Option<u16>;
+    fn pop_pixel(&mut self) -> Option<u16>;
 
-    /// Reset state like push/pop counters, etc.
+    /// Prepare an inner state to gather pixels for the future commit into the VRAM.
+    fn prepare_local_vram_to_upload(&mut self, pos: types::Position, size: types::Size);
+
+    /// Push a pixel into the VRAM snapshot and increment pointer to the next pixel to be written.
+    fn push_pixel(&mut self, pixel: u16);
+
+    /// Commit gathered pixels into VRAM ending upload started after [`Self::prepare_local_vram_to_upload`].
+    fn upload_local_vram_area(&mut self);
+
+    /// Reset inner state like push/pop pointers, etc.
     fn reset(&mut self);
 }

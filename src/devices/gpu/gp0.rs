@@ -4,14 +4,12 @@ use smallbox::{SmallBox, space::S32};
 use smallvec::SmallVec;
 use strum::FromRepr;
 
-use crate::render::types::{Clut, Color, Location, Position, Size, UV};
+use crate::render::types::{
+    Clut, Color, Location, POLYGON_STACK_LIMIT, POLYLINE_STACK_LIMIT, Polygon, Polyline, Position,
+    Rect, Size, UV, Vertex,
+};
 
 use super::Gpu;
-
-/// Maximum polygon is quad, but what if greater?
-const POLYGON_STACK_LIMIT: usize = 4;
-/// Points for polyline that will be stored on a stack. If more then heap alloc.
-const POLYLINE_STACK_LIMIT: usize = 10;
 
 #[derive(FromRepr, Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -38,8 +36,8 @@ impl Default for CmdBuf {
 
 #[tracing::instrument(
     target = "gpu.gp0",
-    "dispatch",
     level = "DEBUG",
+    "dispatch",
     skip(gpu),
     fields(cmd=%format_args!("{cmd:#X}"))
 )]
@@ -47,6 +45,7 @@ pub fn dispatch(gpu: &mut Gpu, cmd: u32) {
     let mut cmdbuf = mem::take(&mut gpu.cmdbuf);
 
     if cmdbuf.0.needs_more() {
+        tracing::trace!("push cmd as is");
         cmdbuf.0.push_cmd(cmd, gpu);
     } else {
         let opcode = (cmd >> 24) as u8;
@@ -79,7 +78,9 @@ pub fn dispatch(gpu: &mut Gpu, cmd: u32) {
             (Some(Gp0OpcodeGroup::Rect), _) => {
                 cmdbuf.0 = SmallBox::new(RectPacket::init(cmd));
             }
-            (Some(Gp0OpcodeGroup::Vram2Vram), _) => {}
+            (Some(Gp0OpcodeGroup::Vram2Vram), _) => {
+                todo!()
+            }
             (Some(Gp0OpcodeGroup::Cpu2Vram), _) => {
                 cmdbuf.0 = SmallBox::new(Cpu2VramPacket::init(cmd));
             }
@@ -98,11 +99,11 @@ pub fn dispatch(gpu: &mut Gpu, cmd: u32) {
     }
 }
 
-#[tracing::instrument(target = "gpu.gp0", "gpuread", level = "DEBUG", skip(gpu))]
+#[tracing::instrument(target = "gpu.gp0", level = "DEBUG", "gpuread", skip(gpu))]
 pub fn read(gpu: &mut Gpu) -> u32 {
     let mut data = [0u32; 2];
     for pixel in &mut data {
-        if let Some(data) = gpu.backend.pop_snapshot_pixel() {
+        if let Some(data) = gpu.render.pop_pixel() {
             *pixel = u32::from(data);
         }
     }
@@ -173,7 +174,7 @@ struct Vram2CpuPacket {
     size: Option<Size>,
 }
 
-#[derive(Debug, Default, Copy, Clone)]
+#[derive(Debug, Default)]
 struct VertexBuilder {
     loc: Option<Location>,
     color: Option<Color>,
@@ -285,7 +286,20 @@ impl PacketBuilder for PolygonPacket {
     }
 
     fn commit(&mut self, gpu: &mut Gpu) {
-        // TODO
+        gpu.render.draw_polygon(Polygon {
+            vertices: self
+                .vertices
+                .iter()
+                .map(|b| Vertex {
+                    location: b.loc.unwrap(),
+                    color: b.color,
+                    texcords: b.uv,
+                })
+                .collect(),
+            flat_color: self.color,
+            clut: self.clut,
+            tpage: self.tpage,
+        });
     }
 }
 
@@ -363,7 +377,18 @@ impl PacketBuilder for LinePacket {
     }
 
     fn commit(&mut self, gpu: &mut Gpu) {
-        // TODO
+        gpu.render.draw_polyline(Polyline {
+            vertices: self
+                .vertices
+                .iter()
+                .map(|b| Vertex {
+                    location: b.loc.unwrap(),
+                    color: b.color,
+                    texcords: b.uv,
+                })
+                .collect(),
+            flat_color: self.color,
+        });
     }
 }
 
@@ -436,7 +461,13 @@ impl PacketBuilder for RectPacket {
     }
 
     fn commit(&mut self, gpu: &mut Gpu) {
-        // TODO
+        gpu.render.draw_rect(Rect {
+            location: self.loc.unwrap(),
+            size: self.size.unwrap(),
+            flat_color: self.color,
+            texcoords: self.uv,
+            clut: self.clut,
+        });
     }
 }
 
@@ -465,12 +496,12 @@ impl PacketBuilder for Cpu2VramPacket {
                 debug_assert!(self.pixels_written <= u32::from(size.w) * u32::from(size.h));
 
                 if self.pixels_written == 0 {
-                    gpu.backend
-                        .take_vram_area_snapshot(self.pos.unwrap(), self.size.unwrap());
+                    gpu.render
+                        .prepare_local_vram_to_upload(self.pos.unwrap(), self.size.unwrap());
                 }
 
                 for pixel in [cmd as u16, (cmd >> 16) as u16] {
-                    gpu.backend.push_snapshot_pixel(pixel);
+                    gpu.render.push_pixel(pixel);
                     self.pixels_written = self.pixels_written.saturating_add(1);
                 }
             }
@@ -487,7 +518,7 @@ impl PacketBuilder for Cpu2VramPacket {
     }
 
     fn commit(&mut self, gpu: &mut Gpu) {
-        gpu.backend.commit_vram_snapshot();
+        gpu.render.upload_local_vram_area();
     }
 }
 
@@ -515,8 +546,9 @@ impl PacketBuilder for Vram2CpuPacket {
     }
 
     fn commit(&mut self, gpu: &mut Gpu) {
-        gpu.backend
-            .take_vram_area_snapshot(self.pos.unwrap(), self.size.unwrap());
+        gpu.render
+            .download_vram_area_to_local(self.pos.unwrap(), self.size.unwrap());
+
         gpu.gpustat.set_ready_to_send_vram(true);
         tracing::debug!("GPUREAD data transfer ready");
     }

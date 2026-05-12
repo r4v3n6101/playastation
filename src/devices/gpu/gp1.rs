@@ -19,8 +19,8 @@ enum Gp1Opcode {
 
 #[tracing::instrument(
     target = "gpu.gp1",
-    "dispatch",
     level = "DEBUG",
+    "dispatch",
     skip(gpu),
     fields(cmd=%format_args!("{cmd:#X}"))
 )]
@@ -35,7 +35,7 @@ pub fn dispatch(gpu: &mut Gpu, cmd: u32) {
         Gp1Opcode::ResetGpu => {
             gpu.gpustat = Default::default();
             gpu.cmdbuf = Default::default();
-            gpu.backend.reset();
+            gpu.render.reset();
         }
         Gp1Opcode::ResetCommandBuffer => {
             gpu.cmdbuf = Default::default();
