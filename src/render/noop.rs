@@ -9,8 +9,8 @@ use super::{
 pub struct NoopRenderer {
     download_area: (Position, Size),
     upload_area: (Position, Size),
-    pop_counter: u32,
-    push_counter: u32,
+    pop_counter: u16,
+    push_counter: u16,
 }
 
 impl Default for NoopRenderer {
@@ -44,7 +44,7 @@ impl Renderer for NoopRenderer {
     }
 
     fn pop_pixel(&mut self) -> Option<u16> {
-        let size = u32::from(self.download_area.1.w) * u32::from(self.download_area.1.h);
+        let size = self.download_area.1.w * self.download_area.1.h;
         if self.pop_counter < size {
             self.pop_counter = self.pop_counter.saturating_add(1);
             tracing::trace!("pop pixel {}/{}", self.pop_counter, size);
@@ -60,7 +60,7 @@ impl Renderer for NoopRenderer {
     }
 
     fn push_pixel(&mut self, pixel: u16) {
-        let size = u32::from(self.upload_area.1.w) * u32::from(self.upload_area.1.h);
+        let size = self.upload_area.1.w * self.upload_area.1.h;
         if self.push_counter < size {
             self.push_counter = self.push_counter.saturating_add(1);
             tracing::trace!(

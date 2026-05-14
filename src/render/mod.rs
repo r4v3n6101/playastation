@@ -1,4 +1,5 @@
 pub mod noop;
+pub mod software;
 pub mod types;
 
 pub trait Renderer: 'static {

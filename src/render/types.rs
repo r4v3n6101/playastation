@@ -9,8 +9,8 @@ pub const POLYLINE_STACK_LIMIT: usize = 10;
 pub struct Polygon {
     pub vertices: SmallVec<[Vertex; POLYGON_STACK_LIMIT]>,
     pub flat_color: Option<Color>,
-    pub clut: Option<Clut>,
-    pub tpage: Option<()>,
+    pub clut: Option<Position>,
+    pub tpage: Option<Position>,
 }
 
 #[derive(Debug, Clone)]
@@ -25,7 +25,7 @@ pub struct Rect {
     pub size: Size,
     pub flat_color: Color,
     pub texcoords: Option<UV>,
-    pub clut: Option<Clut>,
+    pub clut: Option<Position>,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -64,15 +64,9 @@ pub struct Color {
     pub b: u8,
 }
 
+/// Texture coordinates inside of 256x256 texture page.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct UV {
     pub u: u8,
     pub v: u8,
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct Clut {
-    /// X coordinate in VRAM, already multiplied by 16.
-    pub x: u16,
-    pub y: u16,
 }

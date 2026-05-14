@@ -5,8 +5,8 @@ use smallvec::SmallVec;
 use strum::FromRepr;
 
 use crate::render::types::{
-    Clut, Color, Location, POLYGON_STACK_LIMIT, POLYLINE_STACK_LIMIT, Polygon, Polyline, Position,
-    Rect, Size, UV, Vertex,
+    Color, Location, POLYGON_STACK_LIMIT, POLYLINE_STACK_LIMIT, Polygon, Polyline, Position, Rect,
+    Size, UV, Vertex,
 };
 
 use super::Gpu;
@@ -130,8 +130,8 @@ struct PolygonPacket {
 
     color: Option<Color>,
     vertices: SmallVec<[VertexBuilder; POLYGON_STACK_LIMIT]>,
-    clut: Option<Clut>,
-    tpage: Option<()>,
+    clut: Option<Position>,
+    tpage: Option<Position>,
 
     words_left: usize,
 }
@@ -154,7 +154,7 @@ struct RectPacket {
     color: Color,
     loc: Option<Location>,
     uv: Option<UV>,
-    clut: Option<Clut>,
+    clut: Option<Position>,
     size: Option<Size>,
 
     words_left: usize,
@@ -272,8 +272,17 @@ impl PacketBuilder for PolygonPacket {
                 if self.textured
                     && let uv @ None = &mut last.uv
                 {
-                    // TODO
-                    uv.replace(UV { u: 0, v: 0 });
+                    if let clut @ None = &mut self.clut {
+                        let parsed = parse_uv_clut(cmd);
+                        uv.replace(parsed.0);
+                        clut.replace(parsed.1);
+                    } else if let tpage @ None = &mut self.tpage {
+                        let parsed = parse_uv_tpage(cmd);
+                        uv.replace(parsed.0);
+                        tpage.replace(parsed.1);
+                    } else {
+                        uv.replace(parse_uv(cmd));
+                    }
                     return;
                 }
             }
@@ -448,8 +457,9 @@ impl PacketBuilder for RectPacket {
         if self.textured
             && let uv @ None = &mut self.uv
         {
-            // TODO
-            uv.replace(UV { u: 0, v: 0 });
+            let parsed = parse_uv_clut(cmd);
+            uv.replace(parsed.0);
+            self.clut.replace(parsed.1);
             return;
         }
 
@@ -580,6 +590,44 @@ fn parse_size(cmd: u32) -> Size {
     Size {
         w: (cmd as u16),
         h: (cmd >> 16) as u16,
+    }
+}
+
+fn parse_uv_clut(cmd: u32) -> (UV, Position) {
+    let raw = (cmd >> 16) as u16;
+
+    let x = (raw & 0x3f) * 16;
+    let y = (raw >> 6) & 0x1ff;
+
+    (
+        UV {
+            u: (cmd & 0xff) as u8,
+            v: ((cmd >> 8) & 0xff) as u8,
+        },
+        Position { x, y },
+    )
+}
+
+fn parse_uv_tpage(cmd: u32) -> (UV, Position) {
+    let raw = (cmd >> 16) as u16;
+
+    // tpage
+    let x = (raw & 0x0f) * 64;
+    let y = ((raw >> 4) & 0x01) * 256;
+
+    (
+        UV {
+            u: (cmd & 0xff) as u8,
+            v: ((cmd >> 8) & 0xff) as u8,
+        },
+        Position { x, y },
+    )
+}
+
+fn parse_uv(cmd: u32) -> UV {
+    UV {
+        u: (cmd & 0xff) as u8,
+        v: ((cmd >> 8) & 0xff) as u8,
     }
 }
 

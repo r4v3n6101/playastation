@@ -1,4 +1,4 @@
-use playastation::Console;
+use playastation::{Console, render::software::SoftwareRenderer};
 use tracing::Level;
 
 fn main() {
@@ -9,10 +9,8 @@ fn main() {
         .compact()
         .init();
 
-    let mut console = Console::default();
-    console.load_bios(include_bytes!(env!("PSX_BIOS")));
-
-    loop {
-        console.run();
-    }
+    Console::default()
+        .load_bios(include_bytes!(env!("PSX_BIOS")))
+        .set_render(SoftwareRenderer::default())
+        .run();
 }
