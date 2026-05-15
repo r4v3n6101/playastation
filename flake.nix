@@ -54,8 +54,12 @@
               allowBuiltinFetchGit = true;
             };
           };
-          cpu-tests = pkgs.callPackage ./rom-tests/cpu.nix {
-            inherit psx-tests;
+          cpu-tests = pkgs.callPackage ./rom-tests {
+            test-dir = "${psx-tests}/CPUTest/CPU/";
+            runner = self.packages.${system}.test-rom-runner;
+          };
+          gpu-tests = pkgs.callPackage ./rom-tests {
+            test-dir = "${psx-tests}/GPU/";
             runner = self.packages.${system}.test-rom-runner;
           };
         };
