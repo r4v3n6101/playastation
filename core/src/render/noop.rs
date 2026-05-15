@@ -2,7 +2,7 @@ use std::mem;
 
 use super::{
     Renderer,
-    types::{Location, Polygon, Polyline, Position, Rect, RenderState, Size},
+    types::{Color, Location, Polygon, Polyline, Position, Rect, RenderState, Size},
 };
 
 #[derive(Debug)]
@@ -54,6 +54,10 @@ impl Renderer for NoopRenderer {
 
     fn draw_rect(&mut self, rect: Rect) {
         tracing::debug!(?rect, "draw rect");
+    }
+
+    fn fill_vram_area(&mut self, pos: Position, size: Size, color: Color) {
+        tracing::debug!(?pos, ?size, ?color, "fill vram area");
     }
 
     fn download_vram_area_to_local(&mut self, pos: Position, size: Size) {

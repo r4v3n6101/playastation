@@ -622,13 +622,11 @@ version = "0.1.0"
 dependencies = [
  "bitflags",
  "crossbeam-utils",
- "image",
  "modular-bitfield",
  "smallbox",
  "smallvec",
  "strum",
  "tracing",
- "tracing-subscriber",
  "triple_buffer",
 ]
 
@@ -913,6 +911,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "test-rom-runner"
+version = "0.1.0"
+dependencies = [
+ "image",
+ "playastation",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

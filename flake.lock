@@ -34,10 +34,27 @@
         "type": "github"
       }
     },
+    "psx-tests": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1768939783,
+        "narHash": "sha256-ZZEONU0Qzh1LO0UOVugPdjyGNXT03zfgMKSj4VnKa4k=",
+        "owner": "PeterLemon",
+        "repo": "PSX",
+        "rev": "6d20c132aba02cf387ed2224993ce9ee9a48e620",
+        "type": "github"
+      },
+      "original": {
+        "owner": "PeterLemon",
+        "repo": "PSX",
+        "type": "github"
+      }
+    },
     "root": {
       "inputs": {
         "flake-utils": "flake-utils",
         "nixpkgs": "nixpkgs",
+        "psx-tests": "psx-tests",
         "rust-overlay": "rust-overlay"
       }
     },

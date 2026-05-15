@@ -25,6 +25,9 @@ pub trait Renderer: 'static {
     /// Draw a rectangle (actually a polygon, but in another format).
     fn draw_rect(&mut self, rect: types::Rect);
 
+    /// Fill VRAM area with color.
+    fn fill_vram_area(&mut self, pos: types::Position, size: types::Size, color: types::Color);
+
     /// Blit VRAM area to the local storage. This is done just before VRAM => CPU transfer.
     fn download_vram_area_to_local(&mut self, pos: types::Position, size: types::Size);
 

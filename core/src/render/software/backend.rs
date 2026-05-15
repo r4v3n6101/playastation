@@ -28,7 +28,16 @@ pub enum Command {
     DrawPolygon(Polygon),
     DrawPolyline(Polyline),
     DrawRect(Rect),
-    SyncUploadBufToVram { pos: Position, size: Size },
+    SyncUploadBufToVram {
+        pos: Position,
+        size: Size,
+        data: UploadBuf,
+    },
+    FillVramArea {
+        pos: Position,
+        size: Size,
+        color: Color,
+    },
 }
 
 pub struct Worker {
@@ -36,24 +45,16 @@ pub struct Worker {
 
     vram: Vram,
     vram_view: Input<Vram>,
-    upload_buf: Output<UploadBuf>,
 
     state: Arc<SharedState>,
 }
 
 impl Worker {
-    pub fn new() -> (
-        Sender<Command>,
-        Output<Vram>,
-        Input<UploadBuf>,
-        Arc<SharedState>,
-        Self,
-    ) {
+    pub fn new() -> (Sender<Command>, Output<Vram>, Arc<SharedState>, Self) {
         let (cmd_tx, cmd_rx) = mpsc::channel();
 
         let vram = vec![0; VRAM_WIDTH * VRAM_HEIGHT].into_boxed_slice();
         let (vram_view, vram_out) = triple_buffer(&vram);
-        let (upload_buf_in, upload_buf) = triple_buffer(&VecDeque::new());
 
         let state = Arc::new(SharedState {
             draw_area: (
@@ -70,14 +71,12 @@ impl Worker {
         (
             cmd_tx,
             vram_out,
-            upload_buf_in,
             state.clone(),
             Self {
                 cmd_rx,
                 vram,
 
                 vram_view,
-                upload_buf,
 
                 state,
             },
@@ -123,9 +122,11 @@ impl Worker {
                         tracing::debug!(%len, "polygons larger than a quad aren't supported")
                     }
                 },
-                Command::SyncUploadBufToVram { pos, size } => {
-                    self.upload_buf.update();
-                    self.copy_vram_from_upload_buf(pos, size);
+                Command::SyncUploadBufToVram { pos, size, data } => {
+                    self.copy_vram_from_upload_buf(pos, size, data);
+                }
+                Command::FillVramArea { pos, size, color } => {
+                    self.fill_vram_area(pos, size, color);
                 }
                 _ => {}
             }
@@ -148,15 +149,41 @@ impl Worker {
         "copy_vram_from_upload_buf",
         skip(self)
     )]
-    fn copy_vram_from_upload_buf(&mut self, Position { x, y }: Position, Size { w, h }: Size) {
-        let data = self.upload_buf.output_buffer_mut();
+    fn copy_vram_from_upload_buf(
+        &mut self,
+        Position { x, y }: Position,
+        Size { w, h }: Size,
+        mut data: UploadBuf,
+    ) {
         for j in 0..h {
             for i in 0..w {
                 let (x, y) = (x + i, y + j);
-                let idx = y as usize * VRAM_WIDTH + x as usize;
-                if let Some(src) = self.vram.get_mut(idx) {
-                    // Set black pixels if buf somehow smaller
-                    *src = data.pop_front().unwrap_or_default();
+                if x < VRAM_WIDTH as _ && y < VRAM_HEIGHT as _ {
+                    let idx = y as usize * VRAM_WIDTH + x as usize;
+                    self.vram[idx] = data.pop_front().unwrap();
+                }
+            }
+        }
+    }
+
+    #[tracing::instrument(
+        target = "render.software",
+        level = "DEBUG",
+        "fill_vram_area",
+        skip(self)
+    )]
+    fn fill_vram_area(
+        &mut self,
+        Position { x, y }: Position,
+        Size { w, h }: Size,
+        Color { r, g, b }: Color,
+    ) {
+        for j in 0..h {
+            for i in 0..w {
+                let (x, y) = (x + i, y + j);
+                if x < VRAM_WIDTH as _ && y < VRAM_HEIGHT as _ {
+                    let idx = y as usize * VRAM_WIDTH + x as usize;
+                    self.vram[idx] = rgb888_to_bgr555(r, g, b);
                 }
             }
         }
