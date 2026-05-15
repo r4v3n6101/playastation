@@ -35,7 +35,7 @@ pub fn dispatch(gpu: &mut Gpu, cmd: u32) {
         Gp1Opcode::ResetGpu => {
             gpu.gpustat = Default::default();
             gpu.cmdbuf = Default::default();
-            gpu.render.reset();
+            gpu.renderer.reset();
         }
         Gp1Opcode::ResetCommandBuffer => {
             gpu.cmdbuf = Default::default();

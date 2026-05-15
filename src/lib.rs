@@ -22,7 +22,7 @@ impl Console {
     }
 
     pub fn set_render(&mut self, renderer: impl render::Renderer) -> &mut Self {
-        self.bus.gpu.render = Box::new(renderer);
+        self.bus.gpu.renderer = Box::new(renderer);
 
         self
     }

@@ -2,7 +2,7 @@ use std::mem;
 
 use super::{
     Renderer,
-    types::{Polygon, Polyline, Position, Rect, Size},
+    types::{Location, Polygon, Polyline, Position, Rect, RenderState, Size},
 };
 
 #[derive(Debug)]
@@ -25,6 +25,25 @@ impl Default for NoopRenderer {
 }
 
 impl Renderer for NoopRenderer {
+    fn state(&self) -> RenderState {
+        RenderState {
+            draw_area: (Position { x: 0, y: 0 }, Position { x: 0, y: 0 }),
+            draw_offset: Location { x: 0, y: 0 },
+        }
+    }
+
+    fn set_draw_area_top_left(&mut self, pos: Position) {
+        tracing::debug!(?pos, "draw area top left");
+    }
+
+    fn set_draw_area_bottom_right(&mut self, pos: Position) {
+        tracing::debug!(?pos, "draw area bottom right");
+    }
+
+    fn set_draw_offset(&mut self, loc: Location) {
+        tracing::debug!(?loc, "draw offset");
+    }
+
     fn draw_polygon(&mut self, polygon: Polygon) {
         tracing::debug!(?polygon, "draw polygon");
     }

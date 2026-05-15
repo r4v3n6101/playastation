@@ -5,6 +5,14 @@ pub const POLYGON_STACK_LIMIT: usize = 4;
 /// Points for polyline that will be stored on a stack. If more then heap alloc.
 pub const POLYLINE_STACK_LIMIT: usize = 10;
 
+#[derive(Debug, Copy, Clone)]
+pub struct RenderState {
+    /// Top-left and bottom-right points.
+    pub draw_area: (Position, Position),
+    /// Origin for primitives.
+    pub draw_offset: Location,
+}
+
 #[derive(Debug, Clone)]
 pub struct Polygon {
     pub vertices: SmallVec<[Vertex; POLYGON_STACK_LIMIT]>,
@@ -35,14 +43,14 @@ pub struct Vertex {
     pub texcords: Option<UV>,
 }
 
-/// Relative position in draw space (i.e. space in VRAM with offset).
+/// Position somewhere at space.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct Location {
     pub x: i16,
     pub y: i16,
 }
 
-/// Absolute position in VRAM space.
+/// Position in VRAM space. Must not exceed VRAM size.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct Position {
     pub x: u16,

@@ -9,7 +9,7 @@ mod gp1;
 
 pub struct Gpu {
     pub gpustat: GpuStat,
-    pub render: Box<dyn Renderer>,
+    pub renderer: Box<dyn Renderer>,
 
     cmdbuf: gp0::CmdBuf,
 }
@@ -115,7 +115,7 @@ impl Default for Gpu {
     fn default() -> Self {
         Self {
             gpustat: GpuStat::default(),
-            render: Box::new(NoopRenderer::default()),
+            renderer: Box::new(NoopRenderer::default()),
 
             cmdbuf: gp0::CmdBuf::default(),
         }

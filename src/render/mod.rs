@@ -3,6 +3,19 @@ pub mod software;
 pub mod types;
 
 pub trait Renderer: 'static {
+    /// Gather inner fields into [`types::RenderState`].
+    fn state(&self) -> types::RenderState;
+
+    /// Clip point (top-left) of bounding box of draw window.
+    fn set_draw_area_top_left(&mut self, pos: types::Position);
+
+    /// Clip point (bottom-right) of bounding box of draw window.
+    fn set_draw_area_bottom_right(&mut self, pos: types::Position);
+
+    /// Draw offset for converting primitives space into screen space.
+    /// Though, it is not VRAM and should be clipped.
+    fn set_draw_offset(&mut self, loc: types::Location);
+
     /// Draw a polygon.
     fn draw_polygon(&mut self, polygon: types::Polygon);
 

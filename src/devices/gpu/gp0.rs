@@ -68,6 +68,7 @@ pub fn dispatch(gpu: &mut Gpu, cmd: u32) {
             }
             (_, 0x02) => {
                 // FillVram
+                todo!()
             }
             (Some(Gp0OpcodeGroup::Polygon), _) => {
                 cmdbuf.0 = SmallBox::new(PolygonPacket::init(cmd));
@@ -87,6 +88,18 @@ pub fn dispatch(gpu: &mut Gpu, cmd: u32) {
             (Some(Gp0OpcodeGroup::Vram2Cpu), _) => {
                 cmdbuf.0 = SmallBox::new(Vram2CpuPacket::init(cmd));
             }
+            (Some(Gp0OpcodeGroup::Env), op) => {
+                cmdbuf.0 = SmallBox::new(());
+                match op {
+                    // 0xE1 => set_draw_mode(gpu, cmd),
+                    // 0xE2 => set_texture_window(gpu, cmd),
+                    0xE3 => set_draw_area_top_left(gpu, cmd),
+                    0xE4 => set_draw_area_bottom_right(gpu, cmd),
+                    0xE5 => set_draw_offset(gpu, cmd),
+                    // 0xE6 => set_mask_bit_setting(gpu, cmd),
+                    _ => {}
+                }
+            }
             _ => {}
         }
     }
@@ -103,7 +116,7 @@ pub fn dispatch(gpu: &mut Gpu, cmd: u32) {
 pub fn read(gpu: &mut Gpu) -> u32 {
     let mut data = [0u32; 2];
     for pixel in &mut data {
-        if let Some(data) = gpu.render.pop_pixel() {
+        if let Some(data) = gpu.renderer.pop_pixel() {
             *pixel = u32::from(data);
         }
     }
@@ -295,7 +308,7 @@ impl PacketBuilder for PolygonPacket {
     }
 
     fn commit(&mut self, gpu: &mut Gpu) {
-        gpu.render.draw_polygon(Polygon {
+        gpu.renderer.draw_polygon(Polygon {
             vertices: self
                 .vertices
                 .iter()
@@ -386,7 +399,7 @@ impl PacketBuilder for LinePacket {
     }
 
     fn commit(&mut self, gpu: &mut Gpu) {
-        gpu.render.draw_polyline(Polyline {
+        gpu.renderer.draw_polyline(Polyline {
             vertices: self
                 .vertices
                 .iter()
@@ -471,7 +484,7 @@ impl PacketBuilder for RectPacket {
     }
 
     fn commit(&mut self, gpu: &mut Gpu) {
-        gpu.render.draw_rect(Rect {
+        gpu.renderer.draw_rect(Rect {
             location: self.loc.unwrap(),
             size: self.size.unwrap(),
             flat_color: self.color,
@@ -506,12 +519,12 @@ impl PacketBuilder for Cpu2VramPacket {
                 debug_assert!(self.pixels_written <= u32::from(size.w) * u32::from(size.h));
 
                 if self.pixels_written == 0 {
-                    gpu.render
+                    gpu.renderer
                         .prepare_local_vram_to_upload(self.pos.unwrap(), self.size.unwrap());
                 }
 
                 for pixel in [cmd as u16, (cmd >> 16) as u16] {
-                    gpu.render.push_pixel(pixel);
+                    gpu.renderer.push_pixel(pixel);
                     self.pixels_written = self.pixels_written.saturating_add(1);
                 }
             }
@@ -528,7 +541,7 @@ impl PacketBuilder for Cpu2VramPacket {
     }
 
     fn commit(&mut self, gpu: &mut Gpu) {
-        gpu.render.upload_local_vram_area();
+        gpu.renderer.upload_local_vram_area();
     }
 }
 
@@ -556,12 +569,37 @@ impl PacketBuilder for Vram2CpuPacket {
     }
 
     fn commit(&mut self, gpu: &mut Gpu) {
-        gpu.render
+        gpu.renderer
             .download_vram_area_to_local(self.pos.unwrap(), self.size.unwrap());
 
         gpu.gpustat.set_ready_to_send_vram(true);
         tracing::debug!("GPUREAD data transfer ready");
     }
+}
+
+fn set_draw_area_top_left(gpu: &mut Gpu, cmd: u32) {
+    gpu.renderer.set_draw_area_top_left(Position {
+        x: (cmd & 0x03ff) as u16,
+        y: ((cmd >> 10) & 0x01ff) as u16,
+    });
+}
+
+fn set_draw_area_bottom_right(gpu: &mut Gpu, cmd: u32) {
+    gpu.renderer.set_draw_area_bottom_right(Position {
+        x: (cmd & 0x03ff) as u16,
+        y: ((cmd >> 10) & 0x01ff) as u16,
+    });
+}
+
+fn set_draw_offset(gpu: &mut Gpu, cmd: u32) {
+    fn sign_extend_11(v: u32) -> i16 {
+        ((v << 21) as i32 >> 21) as i16
+    }
+
+    gpu.renderer.set_draw_offset(Location {
+        x: sign_extend_11(cmd & 0x07ff),
+        y: sign_extend_11((cmd >> 11) & 0x07ff),
+    });
 }
 
 fn parse_color(cmd: u32) -> Color {
