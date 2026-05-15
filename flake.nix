@@ -38,6 +38,11 @@
             url = "https://github.com/Abdess/retrobios/raw/refs/heads/main/bios/Sony/PlayStation/scph1001.bin";
             hash = "sha256-ca+U0eR6aMEej9ufg2gEBgFRSkKlo5nNpIx9O/8emdM=";
           };
+
+          env = {
+            CFLAGS = "-mmacosx-version-min=14.0";
+            MACOSX_DEPLOYMENT_TARGET = "14.0";
+          };
         };
       }
     );

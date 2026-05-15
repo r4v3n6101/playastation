@@ -612,8 +612,8 @@ fn parse_color(cmd: u32) -> Color {
 
 fn parse_loc(cmd: u32) -> Location {
     Location {
-        x: (cmd as u16).cast_signed(),
-        y: ((cmd >> 16) as u16).cast_signed(),
+        x: cmd as i16,
+        y: (cmd >> 16) as i16,
     }
 }
 
@@ -676,8 +676,7 @@ mod tests {
     use super::{super::Gpu, LinePacket, PacketBuilder, PolygonPacket, RectPacket};
 
     fn loc(x: i16, y: i16) -> u32 {
-        u16::from_ne_bytes(x.to_ne_bytes()) as u32
-            | ((u16::from_ne_bytes(y.to_ne_bytes()) as u32) << 16)
+        u32::from(x.cast_unsigned()) | (u32::from(y.cast_unsigned()) << 16)
     }
 
     fn rgb(r: u8, g: u8, b: u8) -> u32 {

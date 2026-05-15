@@ -1,7 +1,7 @@
 use std::{
     collections::VecDeque,
     sync::{
-        Arc,
+        Arc, Mutex,
         mpsc::{self, Receiver, Sender},
     },
 };
@@ -9,17 +9,19 @@ use std::{
 use crossbeam_utils::atomic::AtomicCell;
 use triple_buffer::{Input, Output, triple_buffer};
 
-use super::super::types::{Location, Polygon, Polyline, Position, Rect, Size, Vertex};
+use super::super::types::{Color, Location, Polygon, Polyline, Position, Rect, Size, Vertex};
 
 pub const VRAM_WIDTH: usize = 1024;
 pub const VRAM_HEIGHT: usize = 512;
 
 pub type Vram = Box<[u16]>;
 pub type UploadBuf = VecDeque<u16>;
+pub type ScreenFillCallback = Box<dyn Fn(&[u16], usize, usize) + Send>;
 
 pub struct SharedState {
     pub draw_area: (AtomicCell<Position>, AtomicCell<Position>),
     pub draw_offset: AtomicCell<Location>,
+    pub screen_fill: Mutex<ScreenFillCallback>,
 }
 
 pub enum Command {
@@ -57,11 +59,12 @@ impl Worker {
             draw_area: (
                 AtomicCell::new(Position { x: 0, y: 0 }),
                 AtomicCell::new(Position {
-                    x: VRAM_WIDTH as _,
-                    y: VRAM_HEIGHT as _,
+                    x: (VRAM_WIDTH - 1) as _,
+                    y: (VRAM_HEIGHT - 1) as _,
                 }),
             ),
             draw_offset: AtomicCell::new(Location { x: 0, y: 0 }),
+            screen_fill: Mutex::new(Box::new(|_, _, _| {})),
         });
 
         (
@@ -87,25 +90,34 @@ impl Worker {
             match cmd {
                 Command::DrawRect(_) => {}
                 Command::DrawPolygon(polygon) => match polygon.vertices.len() {
-                    ..3 => tracing::warn!("degenerate polygon"),
+                    len @ ..3 => tracing::debug!(%len, "degenerate polygon"),
                     3 => {
-                        self.draw_triangle([
-                            polygon.vertices[0],
-                            polygon.vertices[1],
-                            polygon.vertices[2],
-                        ]);
+                        self.draw_triangle(
+                            polygon.flat_color,
+                            [
+                                polygon.vertices[0],
+                                polygon.vertices[1],
+                                polygon.vertices[2],
+                            ],
+                        );
                     }
                     4 => {
-                        self.draw_triangle([
-                            polygon.vertices[0],
-                            polygon.vertices[1],
-                            polygon.vertices[2],
-                        ]);
-                        self.draw_triangle([
-                            polygon.vertices[1],
-                            polygon.vertices[2],
-                            polygon.vertices[3],
-                        ]);
+                        self.draw_triangle(
+                            polygon.flat_color,
+                            [
+                                polygon.vertices[0],
+                                polygon.vertices[1],
+                                polygon.vertices[2],
+                            ],
+                        );
+                        self.draw_triangle(
+                            polygon.flat_color,
+                            [
+                                polygon.vertices[3],
+                                polygon.vertices[2],
+                                polygon.vertices[1],
+                            ],
+                        );
                     }
                     len => {
                         tracing::debug!(%len, "polygons larger than a quad aren't supported")
@@ -122,6 +134,9 @@ impl Worker {
                 .input_buffer_mut()
                 .copy_from_slice(&self.vram);
             self.vram_view.publish();
+
+            // FIXME: experimental, interface may be changed with high probability in the future
+            (self.state.screen_fill.lock().unwrap())(&self.vram, VRAM_WIDTH, VRAM_HEIGHT);
         }
 
         tracing::debug!("backend worker done");
@@ -155,6 +170,7 @@ impl Worker {
     )]
     fn draw_triangle(
         &mut self,
+        flat_color: Option<Color>,
         [
             Vertex {
                 location: v0,
@@ -190,22 +206,10 @@ impl Worker {
         };
 
         // bounding box
-        let min_x =
-            v0.x.min(v1.x)
-                .min(v2.x)
-                .clamp(draw_area.0.x as _, draw_area.1.x as _);
-        let max_x =
-            v0.x.max(v1.x)
-                .max(v2.x)
-                .clamp(draw_area.0.x as _, draw_area.1.x as _);
-        let min_y =
-            v0.y.min(v1.y)
-                .min(v2.y)
-                .clamp(draw_area.0.y as _, draw_area.1.y as _);
-        let max_y =
-            v0.y.max(v1.y)
-                .max(v2.y)
-                .clamp(draw_area.0.y as _, draw_area.1.y as _);
+        let min_x = v0.x.min(v1.x).min(v2.x);
+        let max_x = v0.x.max(v1.x).max(v2.x);
+        let min_y = v0.y.min(v1.y).min(v2.y);
+        let max_y = v0.y.max(v1.y).max(v2.y);
 
         // total signed area
         let area = cross2(v0, v1, v2);
@@ -214,7 +218,21 @@ impl Worker {
         }
 
         for y in min_y..=max_y {
+            if y < 0 || y < draw_area.0.y as _ {
+                continue;
+            }
+            if y >= VRAM_HEIGHT as _ || y > draw_area.1.y as _ {
+                continue;
+            }
+
             for x in min_x..=max_x {
+                if x < 0 || x < draw_area.0.x as _ {
+                    continue;
+                }
+                if x >= VRAM_WIDTH as _ || x > draw_area.1.x as _ {
+                    continue;
+                }
+
                 let p = Location { x, y };
 
                 // barycentric weights
@@ -223,33 +241,61 @@ impl Worker {
                 let w2 = cross2(v0, v1, p);
 
                 // inside test, both counter and clockwise (no backface culling)
-                let inside = (w0 >= 0 && w1 >= 0 && w2 >= 0) || (w0 <= 0 && w1 <= 0 && w2 <= 0);
+                let inside = if area > 0 {
+                    w0 >= 0 && w1 >= 0 && w2 >= 0
+                } else {
+                    w0 <= 0 && w1 <= 0 && w2 <= 0
+                };
                 if !inside {
                     continue;
                 }
 
-                // interpolate color
-                // let r = (w0 * c0.color.r as i32 + w1 * v1.color.r as i32 + w2 * v2.color.r as i32)
-                //     / area;
-                // let g = (w0 * v0.color.g as i32 + w1 * v1.color.g as i32 + w2 * v2.color.g as i32)
-                //     / area;
-                // let b = (w0 * v0.color.b as i32 + w1 * v1.color.b as i32 + w2 * v2.color.b as i32)
-                //     / area;
-                //
-                // let color = rgb888_to_bgr555(
-                //     r.clamp(0, 255) as u8,
-                //     g.clamp(0, 255) as u8,
-                //     b.clamp(0, 255) as u8,
-                // );
-                //
-                let idx = y as usize * VRAM_WIDTH + x as usize;
+                debug_assert_eq!(w0 + w1 + w2, area);
 
-                self.vram[idx] = 0xFFFF;
+                let c0 = c0.or(flat_color).unwrap_or(Color { r: 0, g: 0, b: 0 });
+                let c1 = c1.or(flat_color).unwrap_or(Color { r: 0, g: 0, b: 0 });
+                let c2 = c2.or(flat_color).unwrap_or(Color { r: 0, g: 0, b: 0 });
+
+                // interpolate color
+                let r = (w0 * c0.r as i32 + w1 * c1.r as i32 + w2 * c2.r as i32) / area;
+                let g = (w0 * c0.g as i32 + w1 * c1.g as i32 + w2 * c2.g as i32) / area;
+                let b = (w0 * c0.b as i32 + w1 * c1.b as i32 + w2 * c2.b as i32) / area;
+
+                // interpolate texcoords
+                let uv = if let Some(uv0) = uv0
+                    && let Some(uv1) = uv1
+                    && let Some(uv2) = uv2
+                {
+                    Some((
+                        (w0 * uv0.u as i32 + w1 * uv1.u as i32 + w2 * uv2.u as i32) / area,
+                        (w0 * uv0.v as i32 + w1 * uv1.v as i32 + w2 * uv2.v as i32) / area,
+                    ))
+                } else {
+                    None
+                };
+
+                let color = rgb888_to_bgr555(
+                    r.clamp(0, 255) as u8,
+                    g.clamp(0, 255) as u8,
+                    b.clamp(0, 255) as u8,
+                );
+
+                let idx = y as usize * VRAM_WIDTH + x as usize;
+                self.vram[idx] = color;
             }
         }
     }
 }
 
-fn cross2(a: Location, b: Location, p: Location) -> i16 {
-    (p.x - a.x) * (b.y - a.y) - (p.y - a.y) * (b.x - a.x)
+fn cross2(a: Location, b: Location, p: Location) -> i32 {
+    (p.x as i32 - a.x as i32) * (b.y as i32 - a.y as i32)
+        - (p.y as i32 - a.y as i32) * (b.x as i32 - a.x as i32)
+}
+
+fn rgb888_to_bgr555(r: u8, g: u8, b: u8) -> u16 {
+    let r5 = (r >> 3) as u16;
+    let g5 = (g >> 3) as u16;
+    let b5 = (b >> 3) as u16;
+
+    r5 | (g5 << 5) | (b5 << 10)
 }

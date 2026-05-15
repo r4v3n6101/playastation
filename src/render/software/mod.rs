@@ -1,5 +1,4 @@
 use std::{
-    mem,
     sync::{Arc, mpsc::Sender},
     thread::{self, JoinHandle},
 };
@@ -48,6 +47,12 @@ impl Default for SoftwareRenderer {
                 .spawn(|| worker.run())
                 .expect("backend thread start"),
         }
+    }
+}
+
+impl SoftwareRenderer {
+    pub fn set_screen_output(&mut self, callback: backend::ScreenFillCallback) {
+        *self.state.screen_fill.lock().unwrap() = callback;
     }
 }
 
@@ -137,6 +142,7 @@ impl Renderer for SoftwareRenderer {
     }
 
     fn reset(&mut self) {
-        mem::take(self);
+        // TODO : restart thread
+        // mem::take(self);
     }
 }
