@@ -215,8 +215,8 @@ fn execute(
                 value: bus
                     .load(cpu.gpr[rs].wrapping_add_signed(imm_sext))
                     .map(i16::from_le_bytes)
-                    .map(i16::cast_unsigned)
-                    .map(u32::from)
+                    .map(i32::from)
+                    .map(i32::cast_unsigned)
                     .map_err(|BusError { bad_vaddr, kind }| match kind {
                         BusErrorKind::UnalignedAddr => Exception::UnalignedLoad { bad_vaddr },
                         _ => Exception::DataBus { bad_vaddr },
@@ -242,8 +242,8 @@ fn execute(
                 value: bus
                     .load(cpu.gpr[rs].wrapping_add_signed(imm_sext))
                     .map(i8::from_le_bytes)
-                    .map(i8::cast_unsigned)
-                    .map(u32::from)
+                    .map(i32::from)
+                    .map(i32::cast_unsigned)
                     .map_err(|BusError { bad_vaddr, kind }| match kind {
                         BusErrorKind::UnalignedAddr => Exception::UnalignedLoad { bad_vaddr },
                         _ => Exception::DataBus { bad_vaddr },
