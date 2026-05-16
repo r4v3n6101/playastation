@@ -17,6 +17,8 @@ pub struct CpuExecutor {
 
     /// Cache of decoded block of ops
     block: Vec<decoder::Operation>,
+    /// TTY line.
+    tty_line: String,
 }
 
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
@@ -38,6 +40,7 @@ impl Default for CpuExecutor {
 
             block_size: DEFAULT_INS_BLOCK,
             block: Vec::with_capacity(DEFAULT_INS_BLOCK + 1),
+            tty_line: String::new(),
         }
     }
 }
@@ -84,8 +87,27 @@ impl CpuExecutor {
             let _ = mem::take(&mut self.cpu.pending_load);
         } else if execution.jump {
             self.cpu.pc = execution.jump_target;
+
+            self.handle_tty();
         } else {
             self.cpu.pc = execution.last_pc.wrapping_add(4);
+        }
+    }
+
+    fn handle_tty(&mut self) {
+        if (self.cpu.pc == 0xA0 && self.cpu.gpr[9] == 0x3C)
+            || (self.cpu.pc == 0xB0 && self.cpu.gpr[9] == 0x3D)
+        {
+            match self.cpu.gpr[4] as u8 as char {
+                '\n' => {
+                    tracing::info!(target: "tty", "{}", self.tty_line);
+                    self.tty_line.clear();
+                }
+                '\r' => {}
+                ch => {
+                    self.tty_line.push(ch);
+                }
+            }
         }
     }
 }
