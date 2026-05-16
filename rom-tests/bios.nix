@@ -9,11 +9,7 @@ pkgs.writeShellApplication {
   text = ''
     mkdir -p output
 
-    trap 'kill 0' INT
-
-    timeout 30s ${test-rom-runner}/bin/test-rom-runner \
-      bios "${bios}" &
-
-    wait
+     ${test-rom-runner}/bin/test-rom-runner \
+      bios "${bios}"
   '';
 }

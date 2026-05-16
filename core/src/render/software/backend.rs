@@ -267,22 +267,20 @@ impl Worker {
         ]: [Vertex; 3],
     ) {
         let draw_area = (self.state.draw_area.0, self.state.draw_area.1);
+        let draw_offset = self.state.draw_offset;
 
-        //let draw_offset = self.state.draw_offset;
-        //
-        // TODO : Broke BIOS work
-        // let v0 = Location {
-        //     x: v0.x + draw_offset.x,
-        //     y: v0.y + draw_offset.y,
-        // };
-        // let v1 = Location {
-        //     x: v1.x + draw_offset.x,
-        //     y: v1.y + draw_offset.y,
-        // };
-        // let v2 = Location {
-        //     x: v2.x + draw_offset.x,
-        //     y: v2.y + draw_offset.y,
-        // };
+        let v0 = Location {
+            x: v0.x + draw_offset.x,
+            y: v0.y + draw_offset.y,
+        };
+        let v1 = Location {
+            x: v1.x + draw_offset.x,
+            y: v1.y + draw_offset.y,
+        };
+        let v2 = Location {
+            x: v2.x + draw_offset.x,
+            y: v2.y + draw_offset.y,
+        };
 
         // bounding box (clipped to reduce cycle loops)
         let min_x =

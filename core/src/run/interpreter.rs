@@ -1,5 +1,3 @@
-use std::mem;
-
 use crate::{
     cpu::{Cpu, Exception, Opcode, PendingLoad},
     interconnect::{Bus, BusError, BusErrorKind},
@@ -14,7 +12,6 @@ const DIV_HI_LO_LOAD_LATENCY: u64 = 35;
 
 struct Context {
     result: ExecutionResult,
-    load_delay_slot: PendingLoad,
     hi_lo_latency: u64,
 }
 
@@ -29,14 +26,10 @@ pub fn run(ins_block: &[Operation], cpu: &mut Cpu, bus: &mut Bus) -> ExecutionRe
             cycles_elapsed: 0,
             exception: None,
         },
-        load_delay_slot: PendingLoad::default(),
         hi_lo_latency: 0,
     };
 
     for ins in ins_block {
-        // Save delay slot for commit after execution of operation or for Lwl/Lwr ops
-        ctx.load_delay_slot = mem::take(&mut cpu.pending_load);
-
         match *ins {
             Operation::Instruction {
                 pc,
@@ -50,10 +43,6 @@ pub fn run(ins_block: &[Operation], cpu: &mut Cpu, bus: &mut Bus) -> ExecutionRe
                 let res = execute(&mut ctx, ins, op, cpu, bus);
                 ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(1);
                 ctx.hi_lo_latency = ctx.hi_lo_latency.saturating_sub(1);
-
-                // Store pending load even if execution fails
-                cpu.gpr[ctx.load_delay_slot.dest] = ctx.load_delay_slot.value;
-                cpu.gpr[0] = 0;
 
                 if let Err(exception) = res {
                     ctx.result.exception.replace(exception);
@@ -74,8 +63,7 @@ pub fn run(ins_block: &[Operation], cpu: &mut Cpu, bus: &mut Bus) -> ExecutionRe
                 ctx.hi_lo_latency = ctx.hi_lo_latency.saturating_sub(1);
 
                 // Exception behaves like an instruction, so commit the pending load
-                cpu.gpr[ctx.load_delay_slot.dest] = ctx.load_delay_slot.value;
-                cpu.gpr[0] = 0;
+                cpu.write_delayed(PendingLoad::default());
 
                 break;
             }
@@ -103,102 +91,121 @@ fn execute(
     let imm_sext = i32::from((imm as u16).cast_signed());
     let target = ins & 0x03FF_FFFF;
 
+    let mut pending_load = PendingLoad::default();
     match op {
         // ALU ops
         Opcode::Add => {
-            cpu.gpr[rd] = cpu.gpr[rs]
-                .cast_signed()
-                .checked_add(cpu.gpr[rt].cast_signed())
-                .map(i32::cast_unsigned)
-                .ok_or(Exception::Overflow)?;
+            cpu.write_gpr(
+                rd,
+                cpu.gpr[rs]
+                    .cast_signed()
+                    .checked_add(cpu.gpr[rt].cast_signed())
+                    .map(i32::cast_unsigned)
+                    .ok_or(Exception::Overflow)?,
+            );
         }
         Opcode::Addu => {
-            cpu.gpr[rd] = cpu.gpr[rs].wrapping_add(cpu.gpr[rt]);
+            cpu.write_gpr(rd, cpu.gpr[rs].wrapping_add(cpu.gpr[rt]));
         }
         Opcode::Addi => {
-            cpu.gpr[rt] = cpu.gpr[rs]
-                .cast_signed()
-                .checked_add(imm_sext)
-                .map(i32::cast_unsigned)
-                .ok_or(Exception::Overflow)?;
+            cpu.write_gpr(
+                rt,
+                cpu.gpr[rs]
+                    .cast_signed()
+                    .checked_add(imm_sext)
+                    .map(i32::cast_unsigned)
+                    .ok_or(Exception::Overflow)?,
+            );
         }
         Opcode::Addiu => {
-            cpu.gpr[rt] = cpu.gpr[rs].wrapping_add_signed(imm_sext);
+            cpu.write_gpr(rt, cpu.gpr[rs].wrapping_add_signed(imm_sext));
         }
         Opcode::Sub => {
-            cpu.gpr[rd] = cpu.gpr[rs]
-                .cast_signed()
-                .checked_sub(cpu.gpr[rt].cast_signed())
-                .map(i32::cast_unsigned)
-                .ok_or(Exception::Overflow)?;
+            cpu.write_gpr(
+                rd,
+                cpu.gpr[rs]
+                    .cast_signed()
+                    .checked_sub(cpu.gpr[rt].cast_signed())
+                    .map(i32::cast_unsigned)
+                    .ok_or(Exception::Overflow)?,
+            );
         }
         Opcode::Subu => {
-            cpu.gpr[rd] = cpu.gpr[rs].wrapping_sub(cpu.gpr[rt]);
+            cpu.write_gpr(rd, cpu.gpr[rs].wrapping_sub(cpu.gpr[rt]));
         }
         Opcode::And => {
-            cpu.gpr[rd] = cpu.gpr[rs] & cpu.gpr[rt];
+            cpu.write_gpr(rd, cpu.gpr[rs] & cpu.gpr[rt]);
         }
         Opcode::Or => {
-            cpu.gpr[rd] = cpu.gpr[rs] | cpu.gpr[rt];
+            cpu.write_gpr(rd, cpu.gpr[rs] | cpu.gpr[rt]);
         }
         Opcode::Xor => {
-            cpu.gpr[rd] = cpu.gpr[rs] ^ cpu.gpr[rt];
+            cpu.write_gpr(rd, cpu.gpr[rs] ^ cpu.gpr[rt]);
         }
         Opcode::Nor => {
-            cpu.gpr[rd] = !(cpu.gpr[rs] | cpu.gpr[rt]);
+            cpu.write_gpr(rd, !(cpu.gpr[rs] | cpu.gpr[rt]));
         }
         Opcode::Slt => {
-            cpu.gpr[rd] = u32::from(cpu.gpr[rs].cast_signed() < cpu.gpr[rt].cast_signed());
+            cpu.write_gpr(
+                rd,
+                u32::from(cpu.gpr[rs].cast_signed() < cpu.gpr[rt].cast_signed()),
+            );
         }
         Opcode::Sltu => {
-            cpu.gpr[rd] = u32::from(cpu.gpr[rs] < cpu.gpr[rt]);
+            cpu.write_gpr(rd, u32::from(cpu.gpr[rs] < cpu.gpr[rt]));
         }
         Opcode::Sll => {
-            cpu.gpr[rd] = cpu.gpr[rt].wrapping_shl(shamt);
+            cpu.write_gpr(rd, cpu.gpr[rt].wrapping_shl(shamt));
         }
         Opcode::Srl => {
-            cpu.gpr[rd] = cpu.gpr[rt].wrapping_shr(shamt);
+            cpu.write_gpr(rd, cpu.gpr[rt].wrapping_shr(shamt));
         }
         Opcode::Sra => {
-            cpu.gpr[rd] = cpu.gpr[rt]
-                .cast_signed()
-                .wrapping_shr(shamt)
-                .cast_unsigned();
+            cpu.write_gpr(
+                rd,
+                cpu.gpr[rt]
+                    .cast_signed()
+                    .wrapping_shr(shamt)
+                    .cast_unsigned(),
+            );
         }
         Opcode::Sllv => {
-            cpu.gpr[rd] = cpu.gpr[rt].wrapping_shl(cpu.gpr[rs] & 0x1F);
+            cpu.write_gpr(rd, cpu.gpr[rt].wrapping_shl(cpu.gpr[rs] & 0x1F));
         }
         Opcode::Srlv => {
-            cpu.gpr[rd] = cpu.gpr[rt].wrapping_shr(cpu.gpr[rs] & 0x1F);
+            cpu.write_gpr(rd, cpu.gpr[rt].wrapping_shr(cpu.gpr[rs] & 0x1F));
         }
         Opcode::Srav => {
-            cpu.gpr[rd] = cpu.gpr[rt]
-                .cast_signed()
-                .wrapping_shr(cpu.gpr[rs] & 0x1F)
-                .cast_unsigned();
+            cpu.write_gpr(
+                rd,
+                cpu.gpr[rt]
+                    .cast_signed()
+                    .wrapping_shr(cpu.gpr[rs] & 0x1F)
+                    .cast_unsigned(),
+            );
         }
         Opcode::Slti => {
-            cpu.gpr[rt] = u32::from(cpu.gpr[rs].cast_signed() < imm_sext);
+            cpu.write_gpr(rt, u32::from(cpu.gpr[rs].cast_signed() < imm_sext));
         }
         Opcode::Sltiu => {
-            cpu.gpr[rt] = u32::from(cpu.gpr[rs] < imm_sext.cast_unsigned());
+            cpu.write_gpr(rt, u32::from(cpu.gpr[rs] < imm_sext.cast_unsigned()));
         }
         Opcode::Andi => {
-            cpu.gpr[rt] = cpu.gpr[rs] & imm;
+            cpu.write_gpr(rt, cpu.gpr[rs] & imm);
         }
         Opcode::Ori => {
-            cpu.gpr[rt] = cpu.gpr[rs] | imm;
+            cpu.write_gpr(rt, cpu.gpr[rs] | imm);
         }
         Opcode::Xori => {
-            cpu.gpr[rt] = cpu.gpr[rs] ^ imm;
+            cpu.write_gpr(rt, cpu.gpr[rs] ^ imm);
         }
         Opcode::Lui => {
-            cpu.gpr[rt] = imm << 16;
+            cpu.write_gpr(rt, imm << 16);
         }
 
         // Loads
         Opcode::Lw => {
-            cpu.pending_load = PendingLoad {
+            pending_load = PendingLoad {
                 dest: rt,
                 value: bus
                     .load(cpu.gpr[rs].wrapping_add_signed(imm_sext))
@@ -210,7 +217,7 @@ fn execute(
             };
         }
         Opcode::Lh => {
-            cpu.pending_load = PendingLoad {
+            pending_load = PendingLoad {
                 dest: rt,
                 value: bus
                     .load(cpu.gpr[rs].wrapping_add_signed(imm_sext))
@@ -224,7 +231,7 @@ fn execute(
             };
         }
         Opcode::Lhu => {
-            cpu.pending_load = PendingLoad {
+            pending_load = PendingLoad {
                 dest: rt,
                 value: bus
                     .load(cpu.gpr[rs].wrapping_add_signed(imm_sext))
@@ -237,7 +244,7 @@ fn execute(
             };
         }
         Opcode::Lb => {
-            cpu.pending_load = PendingLoad {
+            pending_load = PendingLoad {
                 dest: rt,
                 value: bus
                     .load(cpu.gpr[rs].wrapping_add_signed(imm_sext))
@@ -251,7 +258,7 @@ fn execute(
             };
         }
         Opcode::Lbu => {
-            cpu.pending_load = PendingLoad {
+            pending_load = PendingLoad {
                 dest: rt,
                 value: bus
                     .load(cpu.gpr[rs].wrapping_add_signed(imm_sext))
@@ -269,8 +276,8 @@ fn execute(
                 .load(addr & !3)
                 .map(u32::from_le_bytes)
                 .map_err(|BusError { bad_vaddr, .. }| Exception::DataBus { bad_vaddr })?;
-            let old = if rt == ctx.load_delay_slot.dest {
-                ctx.load_delay_slot.value
+            let old = if rt == cpu.pending_load.dest {
+                cpu.pending_load.value
             } else {
                 cpu.gpr[rt]
             };
@@ -292,8 +299,8 @@ fn execute(
                 .load(addr & !3)
                 .map(u32::from_le_bytes)
                 .map_err(|BusError { bad_vaddr, .. }| Exception::DataBus { bad_vaddr })?;
-            let old = if rt == ctx.load_delay_slot.dest {
-                ctx.load_delay_slot.value
+            let old = if rt == cpu.pending_load.dest {
+                cpu.pending_load.value
             } else {
                 cpu.gpr[rt]
             };
@@ -432,7 +439,7 @@ fn execute(
                 .wrapping_add_signed(imm_sext << 2);
         }
         Opcode::Bgezal => {
-            cpu.gpr[Cpu::DEFAULT_LINK_REG] = ctx.result.last_pc.wrapping_add(8);
+            cpu.write_gpr(Cpu::DEFAULT_LINK_REG, ctx.result.last_pc.wrapping_add(8));
 
             ctx.result.jump = cpu.gpr[rs].cast_signed() >= 0;
             ctx.result.jump_target = ctx
@@ -442,7 +449,7 @@ fn execute(
                 .wrapping_add_signed(imm_sext << 2);
         }
         Opcode::Bltzal => {
-            cpu.gpr[Cpu::DEFAULT_LINK_REG] = ctx.result.last_pc.wrapping_add(8);
+            cpu.write_gpr(Cpu::DEFAULT_LINK_REG, ctx.result.last_pc.wrapping_add(8));
 
             ctx.result.jump = cpu.gpr[rs].cast_signed() < 0;
             ctx.result.jump_target = ctx
@@ -459,7 +466,7 @@ fn execute(
                 (ctx.result.last_pc.wrapping_add(4) & 0xF000_0000) | (target << 2);
         }
         Opcode::Jal => {
-            cpu.gpr[Cpu::DEFAULT_LINK_REG] = ctx.result.last_pc.wrapping_add(8);
+            cpu.write_gpr(Cpu::DEFAULT_LINK_REG, ctx.result.last_pc.wrapping_add(8));
 
             ctx.result.jump = true;
             ctx.result.jump_target =
@@ -470,7 +477,8 @@ fn execute(
             ctx.result.jump_target = cpu.gpr[rs];
         }
         Opcode::Jalr => {
-            cpu.gpr[rd] = ctx.result.last_pc.wrapping_add(8);
+            cpu.write_gpr(rd, ctx.result.last_pc.wrapping_add(8));
+
             ctx.result.jump = true;
             ctx.result.jump_target = cpu.gpr[rs];
         }
@@ -525,13 +533,13 @@ fn execute(
 
         // From/to copies
         Opcode::Mfhi => {
-            cpu.gpr[rd] = cpu.hi;
+            cpu.write_gpr(rd, cpu.hi);
 
             ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(ctx.hi_lo_latency);
             ctx.hi_lo_latency = 0;
         }
         Opcode::Mflo => {
-            cpu.gpr[rd] = cpu.lo;
+            cpu.write_gpr(rd, cpu.lo);
 
             ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(ctx.hi_lo_latency);
             ctx.hi_lo_latency = 0;
@@ -543,7 +551,7 @@ fn execute(
             cpu.hi = cpu.gpr[rs];
         }
         Opcode::Mfc0 => {
-            cpu.pending_load = PendingLoad {
+            pending_load = PendingLoad {
                 dest: rt,
                 value: cpu.cop0.regs[rd],
             };
@@ -563,6 +571,8 @@ fn execute(
         Opcode::Break => return Err(Exception::Break),
         Opcode::Syscall => return Err(Exception::Syscall),
     }
+
+    cpu.write_delayed(pending_load);
 
     Ok(())
 }

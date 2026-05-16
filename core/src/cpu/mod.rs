@@ -1,3 +1,5 @@
+use std::mem;
+
 pub use cop0::{Cop0, Exception};
 pub use ins::Opcode;
 
@@ -48,4 +50,17 @@ impl Default for Cpu {
 
 impl Cpu {
     pub const DEFAULT_LINK_REG: usize = 31;
+
+    pub fn write_gpr(&mut self, dest: usize, value: u32) {
+        let pending_load = mem::take(&mut self.pending_load);
+        self.gpr[pending_load.dest] = pending_load.value;
+        self.gpr[dest] = value;
+        self.gpr[0] = 0;
+    }
+
+    pub fn write_delayed(&mut self, pending_load: PendingLoad) {
+        let pending_load = mem::replace(&mut self.pending_load, pending_load);
+        self.gpr[pending_load.dest] = pending_load.value;
+        self.gpr[0] = 0;
+    }
 }
