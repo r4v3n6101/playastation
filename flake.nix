@@ -8,6 +8,7 @@
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    crane.url = "github:ipetkov/crane";
 
     psx-tests = {
       url = "github:PeterLemon/PSX";
@@ -21,6 +22,7 @@
       nixpkgs,
       flake-utils,
       rust-overlay,
+      crane,
       psx-tests,
     }:
     flake-utils.lib.eachDefaultSystem (
@@ -32,22 +34,28 @@
           overlays = [ rust-overlay.overlays.default ];
         };
 
-        rustToolchain = pkgs.rust-bin.nightly.latest.default;
-        rustPlatform = pkgs.makeRustPlatform {
-          cargo = rustToolchain;
-          rustc = rustToolchain;
-        };
+        craneLib = (crane.mkLib pkgs).overrideToolchain (p: p.rust-bin.nightly.latest.default);
 
-        test-rom-runner = rustPlatform.buildRustPackage {
-          name = "test-rom-runner";
-          version = "6.6.6";
+        test-rom-runner = craneLib.buildPackage rec {
+          inherit (craneLib.crateNameFromCargoToml { cargoToml = ./rom-tests/Cargo.toml; }) pname;
+          inherit (craneLib.crateNameFromCargoToml { cargoToml = ./Cargo.toml; }) version;
 
-          src = ./.;
-          buildAndTestSubdir = "rom-tests";
+          src = pkgs.lib.fileset.toSource {
+            root = ./.;
+            fileset = pkgs.lib.fileset.unions [
+              ./Cargo.toml
+              ./Cargo.lock
+              (craneLib.fileset.commonCargoSources ./core)
+              (craneLib.fileset.commonCargoSources ./rom-tests)
+            ];
+          };
+          strictDeps = true;
 
-          cargoLock = {
-            lockFile = ./Cargo.lock;
-            allowBuiltinFetchGit = true;
+          cargoArtifacts = craneLib.buildDepsOnly {
+            inherit (craneLib.crateNameFromCargoToml { cargoToml = ./core/Cargo.toml; }) pname;
+            inherit (craneLib.crateNameFromCargoToml { cargoToml = ./Cargo.toml; }) version;
+
+            inherit src strictDeps;
           };
         };
 
@@ -74,7 +82,7 @@
         };
 
         devShells.default = pkgs.mkShell {
-          buildInputs = [ rustToolchain ];
+          buildInputs = [ pkgs.rust-bin.nightly.latest.default ];
         };
       }
     );
