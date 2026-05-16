@@ -14,7 +14,7 @@ pub const VRAM_HEIGHT: usize = 512;
 
 pub type Vram = Box<[u16]>;
 pub type TextureBuf = VecDeque<u16>;
-pub type ScreenFillCallback = Box<dyn Fn(&[u16], usize, usize) + Send>;
+pub type ScreenFillCallback = Box<dyn FnMut(&[u16], usize, usize) + Send>;
 
 pub enum Command {
     DrawPolygon(Polygon),
@@ -118,7 +118,7 @@ impl Worker {
                         );
                     }
                     len => {
-                        tracing::debug!(%len, "polygons larger than a quad aren't supported")
+                        tracing::debug!(%len, "polygons larger than a quad aren't supported");
                     }
                 },
                 Command::FillVramArea { pos, size, color } => {
@@ -267,20 +267,22 @@ impl Worker {
         ]: [Vertex; 3],
     ) {
         let draw_area = (self.state.draw_area.0, self.state.draw_area.1);
-        let draw_offset = self.state.draw_offset;
 
-        let v0 = Location {
-            x: v0.x + draw_offset.x,
-            y: v0.y + draw_offset.y,
-        };
-        let v1 = Location {
-            x: v1.x + draw_offset.x,
-            y: v1.y + draw_offset.y,
-        };
-        let v2 = Location {
-            x: v2.x + draw_offset.x,
-            y: v2.y + draw_offset.y,
-        };
+        //let draw_offset = self.state.draw_offset;
+        //
+        // TODO : Broke BIOS work
+        // let v0 = Location {
+        //     x: v0.x + draw_offset.x,
+        //     y: v0.y + draw_offset.y,
+        // };
+        // let v1 = Location {
+        //     x: v1.x + draw_offset.x,
+        //     y: v1.y + draw_offset.y,
+        // };
+        // let v2 = Location {
+        //     x: v2.x + draw_offset.x,
+        //     y: v2.y + draw_offset.y,
+        // };
 
         // bounding box (clipped to reduce cycle loops)
         let min_x =
@@ -311,21 +313,7 @@ impl Worker {
         }
 
         for y in min_y..=max_y {
-            if y < 0 || y < draw_area.0.y as _ {
-                continue;
-            }
-            if y >= VRAM_HEIGHT as _ || y > draw_area.1.y as _ {
-                continue;
-            }
-
             for x in min_x..=max_x {
-                if x < 0 || x < draw_area.0.x as _ {
-                    continue;
-                }
-                if x >= VRAM_WIDTH as _ || x > draw_area.1.x as _ {
-                    continue;
-                }
-
                 let p = Location { x, y };
 
                 // barycentric weights

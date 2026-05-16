@@ -11,23 +11,19 @@ pub struct Console {
 }
 
 impl Console {
-    pub fn load_bios(&mut self, bios: &[u8]) -> &mut Self {
+    pub fn load_bios(&mut self, bios: &[u8]) {
         // 512KiB
         const BIOS_SIZE: usize = 512 * 1024;
 
         assert_eq!(bios.len(), BIOS_SIZE, "invalid bios size");
         self.bus.bios.copy_from_slice(bios);
-
-        self
     }
 
-    pub fn set_render(&mut self, renderer: impl render::Renderer) -> &mut Self {
+    pub fn set_render(&mut self, renderer: impl render::Renderer) {
         self.bus.gpu.renderer = Box::new(renderer);
-
-        self
     }
 
-    pub fn run(&mut self) {
+    pub fn run(mut self) {
         loop {
             self.executor.run(&mut self.bus);
         }

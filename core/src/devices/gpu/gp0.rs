@@ -528,15 +528,16 @@ impl PacketBuilder for Cpu2VramPacket {
         }
         match &mut self.size {
             size @ None => {
-                size.replace(parse_size(cmd));
+                let sz = parse_size(cmd);
+                size.replace(sz);
+
+                if sz.w > 0 && sz.h > 0 {
+                    gpu.renderer
+                        .prepare_local_vram_to_upload(self.pos.unwrap(), sz);
+                }
             }
             Some(size) => {
                 debug_assert!(self.pixels_written < u32::from(size.w) * u32::from(size.h));
-
-                if self.pixels_written == 0 {
-                    gpu.renderer
-                        .prepare_local_vram_to_upload(self.pos.unwrap(), self.size.unwrap());
-                }
 
                 for pixel in [cmd as u16, (cmd >> 16) as u16] {
                     gpu.renderer.push_pixel(pixel);

@@ -64,7 +64,7 @@ fn main() {
             buf,
             width as u32,
             height as u32,
-            format!("output/{:?}.png", rom_filename),
+            format!("output/{}.png", rom_filename.display()),
         );
     }));
 
