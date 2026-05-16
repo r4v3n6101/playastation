@@ -1,5 +1,5 @@
 use std::{
-    sync::{Arc, mpsc::Sender},
+    sync::mpsc::Sender,
     thread::{self, JoinHandle},
 };
 
@@ -18,9 +18,10 @@ pub struct SoftwareRenderer {
     /// Receiver of VRAM view.
     vram_view: Output<backend::Vram>,
     /// Buffer for pending upload of VRAM area.
-    upload_buf: backend::UploadBuf,
+    upload_buf: backend::TextureBuf,
 
-    state: Arc<backend::SharedState>,
+    /// Copy of state of [`backend::Worker`]
+    local_state: RenderState,
     download_area: (Position, Size),
     upload_area: (Position, Size),
     pop_counter: u16,
@@ -30,16 +31,16 @@ pub struct SoftwareRenderer {
 
 impl Default for SoftwareRenderer {
     fn default() -> Self {
-        let (cmd_tx, vram_view, state, worker) = backend::Worker::new();
+        let (cmd_tx, vram_view, worker) = backend::Worker::new();
 
         Self {
             cmd_tx,
             vram_view,
-            upload_buf: backend::UploadBuf::with_capacity(
+            upload_buf: backend::TextureBuf::with_capacity(
                 backend::VRAM_WIDTH * backend::VRAM_HEIGHT,
             ),
 
-            state,
+            local_state: worker.state,
             download_area: (Position { x: 0, y: 0 }, Size { w: 0, h: 0 }),
             upload_area: (Position { x: 0, y: 0 }, Size { w: 0, h: 0 }),
             pop_counter: 0,
@@ -54,40 +55,32 @@ impl Default for SoftwareRenderer {
 
 impl SoftwareRenderer {
     pub fn set_screen_output(&mut self, callback: backend::ScreenFillCallback) {
-        *self.state.screen_fill.lock().unwrap() = callback;
+        let _ = self
+            .cmd_tx
+            .send(backend::Command::UpdateDisplayOutput(callback));
     }
 }
 
 impl Renderer for SoftwareRenderer {
     fn state(&self) -> RenderState {
-        RenderState {
-            draw_area: (
-                Position {
-                    x: self.state.draw_area.0.load().x,
-                    y: self.state.draw_area.0.load().y,
-                },
-                Position {
-                    x: self.state.draw_area.1.load().x,
-                    y: self.state.draw_area.1.load().y,
-                },
-            ),
-            draw_offset: Location {
-                x: self.state.draw_offset.load().x,
-                y: self.state.draw_offset.load().y,
-            },
-        }
+        self.local_state
     }
 
     fn set_draw_area_top_left(&mut self, pos: Position) {
-        self.state.draw_area.0.store(pos);
+        self.local_state.draw_area.0 = pos;
+        let _ = self.cmd_tx.send(backend::Command::SetDrawAreaTopLeft(pos));
     }
 
     fn set_draw_area_bottom_right(&mut self, pos: Position) {
-        self.state.draw_area.1.store(pos);
+        self.local_state.draw_area.1 = pos;
+        let _ = self
+            .cmd_tx
+            .send(backend::Command::SetDrawAreaBottomRight(pos));
     }
 
     fn set_draw_offset(&mut self, loc: Location) {
-        self.state.draw_offset.store(loc);
+        self.local_state.draw_offset = loc;
+        let _ = self.cmd_tx.send(backend::Command::SetDrawOffset(loc));
     }
 
     fn draw_polygon(&mut self, polygon: Polygon) {

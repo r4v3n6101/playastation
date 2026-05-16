@@ -621,7 +621,6 @@ name = "playastation"
 version = "0.1.0"
 dependencies = [
  "bitflags",
- "crossbeam-utils",
  "modular-bitfield",
  "smallbox",
  "smallvec",

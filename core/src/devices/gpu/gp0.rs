@@ -587,6 +587,7 @@ impl PacketBuilder for Vram2CpuPacket {
         gpu.renderer
             .download_vram_area_to_local(self.pos.unwrap(), self.size.unwrap());
 
+        // TODO : remove
         gpu.gpustat.set_ready_to_send_vram(true);
         tracing::debug!("GPUREAD data transfer ready");
     }
@@ -668,14 +669,14 @@ fn parse_loc(cmd: u32) -> Location {
 
 fn parse_pos(cmd: u32) -> Position {
     Position {
-        x: (cmd as u16),
+        x: cmd as u16,
         y: (cmd >> 16) as u16,
     }
 }
 
 fn parse_size(cmd: u32) -> Size {
     Size {
-        w: (cmd as u16),
+        w: cmd as u16,
         h: (cmd >> 16) as u16,
     }
 }
@@ -688,8 +689,8 @@ fn parse_uv_clut(cmd: u32) -> (UV, Position) {
 
     (
         UV {
-            u: (cmd & 0xff) as u8,
-            v: ((cmd >> 8) & 0xff) as u8,
+            u: cmd as u8,
+            v: (cmd >> 8) as u8,
         },
         Position { x, y },
     )
@@ -704,8 +705,8 @@ fn parse_uv_tpage(cmd: u32) -> (UV, Position) {
 
     (
         UV {
-            u: (cmd & 0xff) as u8,
-            v: ((cmd >> 8) & 0xff) as u8,
+            u: cmd as u8,
+            v: (cmd >> 8) as u8,
         },
         Position { x, y },
     )
@@ -713,8 +714,8 @@ fn parse_uv_tpage(cmd: u32) -> (UV, Position) {
 
 fn parse_uv(cmd: u32) -> UV {
     UV {
-        u: (cmd & 0xff) as u8,
-        v: ((cmd >> 8) & 0xff) as u8,
+        u: cmd as u8,
+        v: (cmd >> 8) as u8,
     }
 }
 

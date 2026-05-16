@@ -1,28 +1,20 @@
 use std::{
     collections::VecDeque,
-    sync::{
-        Arc, Mutex,
-        mpsc::{self, Receiver, Sender},
-    },
+    sync::mpsc::{self, Receiver, Sender},
 };
 
-use crossbeam_utils::atomic::AtomicCell;
 use triple_buffer::{Input, Output, triple_buffer};
 
-use super::super::types::{Color, Location, Polygon, Polyline, Position, Rect, Size, Vertex};
+use super::super::types::{
+    Color, Location, Polygon, Polyline, Position, Rect, RenderState, Size, Vertex,
+};
 
 pub const VRAM_WIDTH: usize = 1024;
 pub const VRAM_HEIGHT: usize = 512;
 
 pub type Vram = Box<[u16]>;
-pub type UploadBuf = VecDeque<u16>;
+pub type TextureBuf = VecDeque<u16>;
 pub type ScreenFillCallback = Box<dyn Fn(&[u16], usize, usize) + Send>;
-
-pub struct SharedState {
-    pub draw_area: (AtomicCell<Position>, AtomicCell<Position>),
-    pub draw_offset: AtomicCell<Location>,
-    pub screen_fill: Mutex<ScreenFillCallback>,
-}
 
 pub enum Command {
     DrawPolygon(Polygon),
@@ -36,13 +28,17 @@ pub enum Command {
     SyncUploadBufToVram {
         pos: Position,
         size: Size,
-        data: UploadBuf,
+        data: TextureBuf,
     },
     MirrorVramArea {
         src: Position,
         dest: Position,
         size: Size,
     },
+    SetDrawAreaTopLeft(Position),
+    SetDrawAreaBottomRight(Position),
+    SetDrawOffset(Location),
+    UpdateDisplayOutput(ScreenFillCallback),
 }
 
 pub struct Worker {
@@ -50,40 +46,38 @@ pub struct Worker {
 
     vram: Vram,
     vram_view: Input<Vram>,
+    screen_fill: ScreenFillCallback,
 
-    state: Arc<SharedState>,
+    pub state: RenderState,
 }
 
 impl Worker {
-    pub fn new() -> (Sender<Command>, Output<Vram>, Arc<SharedState>, Self) {
+    pub fn new() -> (Sender<Command>, Output<Vram>, Self) {
         let (cmd_tx, cmd_rx) = mpsc::channel();
 
         let vram = vec![0; VRAM_WIDTH * VRAM_HEIGHT].into_boxed_slice();
         let (vram_view, vram_out) = triple_buffer(&vram);
 
-        let state = Arc::new(SharedState {
-            draw_area: (
-                AtomicCell::new(Position { x: 0, y: 0 }),
-                AtomicCell::new(Position {
-                    x: (VRAM_WIDTH - 1) as _,
-                    y: (VRAM_HEIGHT - 1) as _,
-                }),
-            ),
-            draw_offset: AtomicCell::new(Location { x: 0, y: 0 }),
-            screen_fill: Mutex::new(Box::new(|_, _, _| {})),
-        });
-
         (
             cmd_tx,
             vram_out,
-            state.clone(),
             Self {
                 cmd_rx,
+
                 vram,
-
                 vram_view,
+                screen_fill: Box::new(|_, _, _| {}),
 
-                state,
+                state: RenderState {
+                    draw_area: (
+                        Position { x: 0, y: 0 },
+                        Position {
+                            x: (VRAM_WIDTH - 1) as _,
+                            y: (VRAM_HEIGHT - 1) as _,
+                        },
+                    ),
+                    draw_offset: Location { x: 0, y: 0 },
+                },
             },
         )
     }
@@ -117,9 +111,9 @@ impl Worker {
                         self.draw_triangle(
                             polygon.flat_color,
                             [
-                                polygon.vertices[3],
-                                polygon.vertices[2],
                                 polygon.vertices[1],
+                                polygon.vertices[2],
+                                polygon.vertices[3],
                             ],
                         );
                     }
@@ -136,6 +130,18 @@ impl Worker {
                 Command::MirrorVramArea { src, dest, size } => {
                     self.mirror_vram_area(src, dest, size);
                 }
+                Command::SetDrawAreaTopLeft(pos) => {
+                    self.state.draw_area.0 = pos;
+                }
+                Command::SetDrawAreaBottomRight(pos) => {
+                    self.state.draw_area.1 = pos;
+                }
+                Command::SetDrawOffset(loc) => {
+                    self.state.draw_offset = loc;
+                }
+                Command::UpdateDisplayOutput(callback) => {
+                    self.screen_fill = callback;
+                }
                 _ => {}
             }
 
@@ -145,7 +151,7 @@ impl Worker {
             self.vram_view.publish();
 
             // FIXME: experimental, interface may be changed with high probability in the future
-            (self.state.screen_fill.lock().unwrap())(&self.vram, VRAM_WIDTH, VRAM_HEIGHT);
+            (self.screen_fill)(&self.vram, VRAM_WIDTH, VRAM_HEIGHT);
         }
 
         tracing::debug!("backend worker done");
@@ -166,11 +172,10 @@ impl Worker {
         for j in 0..h {
             for i in 0..w {
                 let (x, y) = (x + i, y + j);
-                let (x, y) = (
-                    (x as usize).clamp(0, VRAM_WIDTH - 1),
-                    (y as usize).clamp(0, VRAM_HEIGHT - 1),
-                );
-                self.vram[y * VRAM_WIDTH + x] = rgb888_to_bgr555(r, g, b);
+                let (x, y) = (x as usize, y as usize);
+                if (0..VRAM_WIDTH).contains(&x) && (0..VRAM_HEIGHT).contains(&y) {
+                    self.vram[y * VRAM_WIDTH + x] = rgb888_to_bgr555(r, g, b);
+                }
             }
         }
     }
@@ -185,16 +190,15 @@ impl Worker {
         &mut self,
         Position { x, y }: Position,
         Size { w, h }: Size,
-        mut data: UploadBuf,
+        mut data: TextureBuf,
     ) {
         for j in 0..h {
             for i in 0..w {
                 let (x, y) = (x + i, y + j);
-                let (x, y) = (
-                    (x as usize).clamp(0, VRAM_WIDTH - 1),
-                    (y as usize).clamp(0, VRAM_HEIGHT - 1),
-                );
-                self.vram[y * VRAM_WIDTH + x] = data.pop_front().unwrap();
+                let (x, y) = (x as usize, y as usize);
+                if (0..VRAM_WIDTH).contains(&x) && (0..VRAM_HEIGHT).contains(&y) {
+                    self.vram[y * VRAM_WIDTH + x] = data.pop_front().unwrap();
+                }
             }
         }
     }
@@ -212,27 +216,25 @@ impl Worker {
         Size { w, h }: Size,
     ) {
         // areas may overlap
-        let mut tmp = VecDeque::with_capacity(w as usize * h as usize);
+        let mut tmp = TextureBuf::with_capacity(w as usize * h as usize);
 
         for y in 0..h {
             for x in 0..w {
                 let (x, y) = (sx + x, sy + y);
-                let (x, y) = (
-                    (x as usize).clamp(0, VRAM_WIDTH - 1),
-                    (y as usize).clamp(0, VRAM_HEIGHT - 1),
-                );
-                tmp.push_front(self.vram[y * VRAM_WIDTH + x]);
+                let (x, y) = (x as usize, y as usize);
+                if (0..VRAM_WIDTH).contains(&x) && (0..VRAM_HEIGHT).contains(&y) {
+                    tmp.push_front(self.vram[y * VRAM_WIDTH + x]);
+                }
             }
         }
 
         for y in 0..h {
             for x in 0..w {
                 let (x, y) = (dx + x, dy + y);
-                let (x, y) = (
-                    (x as usize).clamp(0, VRAM_WIDTH - 1),
-                    (y as usize).clamp(0, VRAM_HEIGHT - 1),
-                );
-                self.vram[y * VRAM_WIDTH + x] = tmp.pop_back().unwrap();
+                let (x, y) = (x as usize, y as usize);
+                if (0..VRAM_WIDTH).contains(&x) && (0..VRAM_HEIGHT).contains(&y) {
+                    self.vram[y * VRAM_WIDTH + x] = tmp.pop_back().unwrap();
+                }
             }
         }
     }
@@ -264,8 +266,8 @@ impl Worker {
             },
         ]: [Vertex; 3],
     ) {
-        let draw_area = (self.state.draw_area.0.load(), self.state.draw_area.1.load());
-        let draw_offset = self.state.draw_offset.load();
+        let draw_area = (self.state.draw_area.0, self.state.draw_area.1);
+        let draw_offset = self.state.draw_offset;
 
         let v0 = Location {
             x: v0.x + draw_offset.x,
@@ -280,11 +282,27 @@ impl Worker {
             y: v2.y + draw_offset.y,
         };
 
-        // bounding box
-        let min_x = v0.x.min(v1.x).min(v2.x);
-        let max_x = v0.x.max(v1.x).max(v2.x);
-        let min_y = v0.y.min(v1.y).min(v2.y);
-        let max_y = v0.y.max(v1.y).max(v2.y);
+        // bounding box (clipped to reduce cycle loops)
+        let min_x =
+            v0.x.min(v1.x)
+                .min(v2.x)
+                .clamp(draw_area.0.x as _, draw_area.1.x as _)
+                .clamp(0, (VRAM_WIDTH - 1) as _);
+        let max_x =
+            v0.x.max(v1.x)
+                .max(v2.x)
+                .clamp(draw_area.0.x as _, draw_area.1.x as _)
+                .clamp(0, (VRAM_WIDTH - 1) as _);
+        let min_y =
+            v0.y.min(v1.y)
+                .min(v2.y)
+                .clamp(draw_area.0.y as _, draw_area.1.y as _)
+                .clamp(0, (VRAM_HEIGHT - 1) as _);
+        let max_y =
+            v0.y.max(v1.y)
+                .max(v2.y)
+                .clamp(draw_area.0.y as _, draw_area.1.y as _)
+                .clamp(0, (VRAM_HEIGHT - 1) as _);
 
         // total signed area
         let area = cross2(v0, v1, v2);
@@ -337,17 +355,17 @@ impl Worker {
                 let b = (w0 * c0.b as i32 + w1 * c1.b as i32 + w2 * c2.b as i32) / area;
 
                 // interpolate texcoords
-                let uv = if let Some(uv0) = uv0
-                    && let Some(uv1) = uv1
-                    && let Some(uv2) = uv2
-                {
-                    Some((
-                        (w0 * uv0.u as i32 + w1 * uv1.u as i32 + w2 * uv2.u as i32) / area,
-                        (w0 * uv0.v as i32 + w1 * uv1.v as i32 + w2 * uv2.v as i32) / area,
-                    ))
-                } else {
-                    None
-                };
+                // let uv = if let Some(uv0) = uv0
+                //     && let Some(uv1) = uv1
+                //     && let Some(uv2) = uv2
+                // {
+                //     Some((
+                //         (w0 * uv0.u as i32 + w1 * uv1.u as i32 + w2 * uv2.u as i32) / area,
+                //         (w0 * uv0.v as i32 + w1 * uv1.v as i32 + w2 * uv2.v as i32) / area,
+                //     ))
+                // } else {
+                //     None
+                // };
 
                 let color = rgb888_to_bgr555(
                     r.clamp(0, 255) as u8,

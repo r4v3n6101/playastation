@@ -13,4 +13,3 @@ modular-bitfield = "0.13.1"
 smallvec = "1.15.1"
 smallbox = { version = "0.8.8", features = ["coerce"] }
 triple_buffer = "9.0.0"
-crossbeam-utils = "0.8.21"
