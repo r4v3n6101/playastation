@@ -1,6 +1,6 @@
 {
   pkgs,
-  runner,
+  test-rom-runner,
   test-dir,
 }:
 pkgs.writeShellApplication {
@@ -17,8 +17,8 @@ pkgs.writeShellApplication {
 
     find ${test-dir} -type f -name '*.asm' -print0 |
     while IFS= read -r -d "" asm; do
-        timeout 30s ${runner}/bin/test-rom-runner \
-          "$(dirname "$asm")/$(basename "$asm" .asm).bin" &
+        timeout 30s ${test-rom-runner}/bin/test-rom-runner \
+          test-rom "$(dirname "$asm")/$(basename "$asm" .asm).bin" &
     done
 
     wait

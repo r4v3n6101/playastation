@@ -37,40 +37,44 @@
           cargo = rustToolchain;
           rustc = rustToolchain;
         };
+
+        test-rom-runner = rustPlatform.buildRustPackage {
+          name = "test-rom-runner";
+          version = "6.6.6";
+
+          src = ./.;
+          buildAndTestSubdir = "rom-tests";
+
+          cargoLock = {
+            lockFile = ./Cargo.lock;
+            allowBuiltinFetchGit = true;
+          };
+        };
+
+        bios = pkgs.fetchurl {
+          url = "https://github.com/Abdess/retrobios/raw/refs/heads/main/bios/Sony/PlayStation/scph1001.bin";
+          hash = "sha256-ca+U0eR6aMEej9ufg2gEBgFRSkKlo5nNpIx9O/8emdM=";
+        };
       in
       {
         formatter = pkgs.nixpkgs-fmt;
 
         packages = {
-          test-rom-runner = rustPlatform.buildRustPackage {
-            name = "test-rom-runner";
-            version = "6.6.6";
-
-            src = ./.;
-            buildAndTestSubdir = "rom-tests";
-
-            cargoLock = {
-              lockFile = ./Cargo.lock;
-              allowBuiltinFetchGit = true;
-            };
+          bios = pkgs.callPackage ./rom-tests/bios.nix {
+            inherit bios test-rom-runner;
           };
-          cpu-tests = pkgs.callPackage ./rom-tests {
+          cpu-tests = pkgs.callPackage ./rom-tests/test-rom.nix {
+            inherit test-rom-runner;
             test-dir = "${psx-tests}/CPUTest/CPU/";
-            runner = self.packages.${system}.test-rom-runner;
           };
-          gpu-tests = pkgs.callPackage ./rom-tests {
+          gpu-tests = pkgs.callPackage ./rom-tests/test-rom.nix {
+            inherit test-rom-runner;
             test-dir = "${psx-tests}/GPU/";
-            runner = self.packages.${system}.test-rom-runner;
           };
         };
 
         devShells.default = pkgs.mkShell {
           buildInputs = [ rustToolchain ];
-
-          PSX_BIOS = pkgs.fetchurl {
-            url = "https://github.com/Abdess/retrobios/raw/refs/heads/main/bios/Sony/PlayStation/scph1001.bin";
-            hash = "sha256-ca+U0eR6aMEej9ufg2gEBgFRSkKlo5nNpIx9O/8emdM=";
-          };
         };
       }
     );

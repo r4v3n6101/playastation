@@ -1,14 +1,29 @@
-use std::{env, fs, path::Path};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
+use clap::{Parser, Subcommand};
 use image::{ImageBuffer, Rgb};
 use playastation::{Console, render::software::SoftwareRenderer};
 use tracing::Level;
 
-const ROM_OFFSET: u32 = 0x80010000;
+#[derive(Parser)]
+struct Args {
+    #[command(subcommand)]
+    command: Command,
+}
 
-enum Rom {
-    Bios,
-    Custom(String),
+#[derive(Subcommand)]
+enum Command {
+    Bios {
+        path: PathBuf,
+    },
+    TestRom {
+        path: PathBuf,
+        #[arg(default_value_t = 0x8001_0000)]
+        start_pc: u32,
+    },
 }
 
 fn main() {
@@ -19,38 +34,29 @@ fn main() {
         .compact()
         .init();
 
-    let mut args = env::args();
-    args.next();
-    let (filename, rom) = match args.next() {
-        Some(path) => (
-            Path::new(&path)
-                .file_name()
-                .unwrap()
-                .to_string_lossy()
-                .to_string(),
-            Rom::Custom(path),
-        ),
-        None => ("bios".to_string(), Rom::Bios),
-    };
+    let args = Args::parse();
 
     let mut console = Console::default();
-
-    match rom {
-        Rom::Bios => {
-            let bios = fs::read(env::var("PSX_BIOS").unwrap()).unwrap();
-            console.load_bios(&bios);
-        }
-        Rom::Custom(path) => {
-            let prg = fs::read(path).unwrap();
+    let rom_filename = match args.command {
+        Command::TestRom { path, start_pc } => {
+            let prg = fs::read(&path).unwrap();
             for (i, byte) in prg.into_iter().enumerate() {
                 console
                     .bus
-                    .store(ROM_OFFSET + i as u32, byte.to_le_bytes())
+                    .store(start_pc + i as u32, byte.to_le_bytes())
                     .unwrap();
             }
-            console.executor.cpu.pc = ROM_OFFSET;
+            console.executor.cpu.pc = start_pc;
+
+            path.file_name().unwrap().to_os_string()
         }
-    }
+        Command::Bios { path } => {
+            let bios = fs::read(&path).unwrap();
+            console.load_bios(&bios);
+
+            path.file_name().unwrap().to_os_string()
+        }
+    };
 
     let mut renderer = SoftwareRenderer::default();
     renderer.set_screen_output(Box::new(move |buf, width, height| {
@@ -58,7 +64,7 @@ fn main() {
             buf,
             width as u32,
             height as u32,
-            format!("output/{filename}.png"),
+            format!("output/{:?}.png", rom_filename),
         );
     }));
 
