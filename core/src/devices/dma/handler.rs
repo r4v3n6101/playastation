@@ -41,6 +41,7 @@ pub fn do_manual(bus: &mut Bus, ch: usize, chan: &mut Channel) -> u64 {
                     // Silently stores, ignoring errors
                     if let Err(err) = bus.store::<4>(addr, word.to_le_bytes()) {
                         tracing::warn!(
+                            target: "do_manual",
                             ?err,
                             addr=%format_args!("{addr:#X}"),
                             %word,
@@ -81,6 +82,7 @@ pub fn do_block(bus: &mut Bus, ch: usize, chan: &mut Channel) -> u64 {
                             Ok(res) => res,
                             Err(err) => {
                                 tracing::warn!(
+                                    target: "do_block",
                                     ?err,
                                     addr=%format_args!("{addr:#X}"),
                                     "RAM->GPU DMA block load error"
@@ -119,6 +121,7 @@ pub fn do_linked_list(bus: &mut Bus, ch: usize, chan: &mut Channel) -> u64 {
             Ok(res) => res,
             Err(err) => {
                 tracing::warn!(
+                    target: "do_linked_list",
                     ?err,
                     addr=%format_args!("{addr:#X}"),
                     "DMA LinkedList load header error"
@@ -138,6 +141,7 @@ pub fn do_linked_list(bus: &mut Bus, ch: usize, chan: &mut Channel) -> u64 {
                 Ok(res) => res,
                 Err(err) => {
                     tracing::warn!(
+                        target: "do_linked_list",
                         ?err,
                         addr=%format_args!("{addr:#X}"),
                         "DMA LinkedList load command error"

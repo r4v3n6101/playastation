@@ -52,18 +52,15 @@ pub fn run(ins_block: &[Operation], cpu: &mut Cpu, bus: &mut Bus) -> ExecutionRe
             Operation::Break {
                 pc,
                 in_delay_slot,
-                cause: exception,
+                cause,
             } => {
                 ctx.result.last_pc = pc;
                 ctx.result.last_in_delay_slot = in_delay_slot;
-                ctx.result.exception.replace(exception);
+                ctx.result.exception.replace(cause);
 
                 // Cycles
                 ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(1);
                 ctx.hi_lo_latency = ctx.hi_lo_latency.saturating_sub(1);
-
-                // Exception behaves like an instruction, so commit the pending load
-                cpu.write_delayed(PendingLoad::default());
 
                 break;
             }

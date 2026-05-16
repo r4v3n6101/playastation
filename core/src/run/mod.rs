@@ -1,7 +1,7 @@
 use std::mem;
 
 use crate::{
-    cpu::{Cpu, Exception},
+    cpu::{Cpu, Exception, PendingLoad},
     interconnect::Bus,
 };
 
@@ -76,15 +76,14 @@ impl CpuExecutor {
                 "entering exception handler"
             );
 
+            self.cpu.write_delayed(PendingLoad::default());
+
             self.cpu.cop0.exception_enter(
                 exception,
                 execution.last_pc,
                 execution.last_in_delay_slot,
             );
             self.cpu.pc = self.cpu.cop0.exception_handler();
-
-            // Clear out pending load, will load it later again
-            let _ = mem::take(&mut self.cpu.pending_load);
         } else if execution.jump {
             self.cpu.pc = execution.jump_target;
 

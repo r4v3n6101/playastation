@@ -124,44 +124,38 @@ impl Bus {
                 bytes.copy_from_slice(&self.bios[(x - BIOS.start) as usize..][..N]);
             }
             x if INT_CTRL.contains(&x) => {
+                let _guard = mmio_span.enter();
                 let mmio_addr = x - INT_CTRL.start;
-                mmio_span.in_scope(|| {
-                    tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "int ctrl read");
-                    self.int_ctrl.read(&mut bytes, mmio_addr);
-                });
+                tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "int ctrl read");
+                self.int_ctrl.read(&mut bytes, mmio_addr);
             }
             x if DMA_CTRL.contains(&x) => {
+                let _guard = mmio_span.enter();
                 let mmio_addr = x - DMA_CTRL.start;
-                mmio_span.in_scope(|| {
-                    tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "dma ctrl read");
-                    self.dma_ctrl.read(&mut bytes, mmio_addr);
-                });
+                tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "dma ctrl read");
+                self.dma_ctrl.read(&mut bytes, mmio_addr);
             }
             x if TIMER_CTRL.contains(&x) => {
+                let _guard = mmio_span.enter();
                 let mmio_addr = x - TIMER_CTRL.start;
-                mmio_span.in_scope(|| {
-                    tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "timer ctrl read");
-                    self.timer_ctrl.read(&mut bytes, mmio_addr);
-                });
+                tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "timer ctrl read");
+                self.timer_ctrl.read(&mut bytes, mmio_addr);
             }
             x if CDROM.contains(&x) => {
+                let _guard = mmio_span.enter();
                 let mmio_addr = x - CDROM.start;
-                mmio_span.in_scope(|| {
-                    tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "cdrom read");
-                });
+                tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "cdrom read");
             }
             x if GPU.contains(&x) => {
+                let _guard = mmio_span.enter();
                 let mmio_addr = x - GPU.start;
-                mmio_span.in_scope(|| {
-                    tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "gpu read");
-                    self.gpu.read(&mut bytes, mmio_addr);
-                });
+                tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "gpu read");
+                self.gpu.read(&mut bytes, mmio_addr);
             }
             x if SPU.contains(&x) => {
+                let _guard = mmio_span.enter();
                 let mmio_addr = x - SPU.start;
-                mmio_span.in_scope(|| {
-                    tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "spu read");
-                });
+                tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "spu read");
             }
             x if HW_REGS.contains(&x) => {
                 let _guard = mmio_span.enter();
@@ -212,44 +206,38 @@ impl Bus {
                 self.bios[(x - BIOS.start) as usize..][..N].copy_from_slice(&value);
             }
             x if INT_CTRL.contains(&x) => {
+                let _guard = mmio_span.enter();
                 let mmio_addr = x - INT_CTRL.start;
-                mmio_span.in_scope(|| {
-                    tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "int ctrl write");
-                    self.int_ctrl.write(mmio_addr, &value);
-                });
+                tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "int ctrl write");
+                self.int_ctrl.write(mmio_addr, &value);
             }
             x if DMA_CTRL.contains(&x) => {
+                let _guard = mmio_span.enter();
                 let mmio_addr = x - DMA_CTRL.start;
-                mmio_span.in_scope(|| {
-                    tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "dma ctrl write");
-                    self.dma_ctrl.write(mmio_addr, &value);
-                });
+                tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "dma ctrl write");
+                self.dma_ctrl.write(mmio_addr, &value);
             }
             x if TIMER_CTRL.contains(&x) => {
+                let _guard = mmio_span.enter();
                 let mmio_addr = x - TIMER_CTRL.start;
-                mmio_span.in_scope(|| {
-                    tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "timer ctrl write");
-                    self.timer_ctrl.write(mmio_addr, &value);
-                });
+                tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "timer ctrl write");
+                self.timer_ctrl.write(mmio_addr, &value);
             }
             x if CDROM.contains(&x) => {
+                let _guard = mmio_span.enter();
                 let mmio_addr = x - CDROM.start;
-                mmio_span.in_scope(|| {
-                    tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "cdrom write");
-                });
+                tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "cdrom write");
             }
             x if GPU.contains(&x) => {
+                let _guard = mmio_span.enter();
                 let mmio_addr = x - GPU.start;
-                mmio_span.in_scope(|| {
-                    tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "gpu write");
-                    self.gpu.write(mmio_addr, &value);
-                });
+                tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "gpu write");
+                self.gpu.write(mmio_addr, &value);
             }
             x if SPU.contains(&x) => {
+                let _guard = mmio_span.enter();
                 let mmio_addr = x - SPU.start;
-                mmio_span.in_scope(|| {
-                    tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "spu write");
-                });
+                tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "spu write");
             }
             x if HW_REGS.contains(&x) => {
                 let _guard = mmio_span.enter();
