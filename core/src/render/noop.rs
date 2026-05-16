@@ -99,6 +99,10 @@ impl Renderer for NoopRenderer {
         tracing::debug!(upload_area=?self.upload_area, "upload filled vram area");
     }
 
+    fn mirror_vram_area(&mut self, src: Position, dest: Position, size: Size) {
+        tracing::debug!(?src, ?dest, ?size, "mirror vram area");
+    }
+
     fn reset(&mut self) {
         mem::take(self);
     }

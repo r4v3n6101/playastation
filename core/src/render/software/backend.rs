@@ -28,15 +28,20 @@ pub enum Command {
     DrawPolygon(Polygon),
     DrawPolyline(Polyline),
     DrawRect(Rect),
+    FillVramArea {
+        pos: Position,
+        size: Size,
+        color: Color,
+    },
     SyncUploadBufToVram {
         pos: Position,
         size: Size,
         data: UploadBuf,
     },
-    FillVramArea {
-        pos: Position,
+    MirrorVramArea {
+        src: Position,
+        dest: Position,
         size: Size,
-        color: Color,
     },
 }
 
@@ -122,11 +127,14 @@ impl Worker {
                         tracing::debug!(%len, "polygons larger than a quad aren't supported")
                     }
                 },
+                Command::FillVramArea { pos, size, color } => {
+                    self.fill_vram_area(pos, size, color);
+                }
                 Command::SyncUploadBufToVram { pos, size, data } => {
                     self.copy_vram_from_upload_buf(pos, size, data);
                 }
-                Command::FillVramArea { pos, size, color } => {
-                    self.fill_vram_area(pos, size, color);
+                Command::MirrorVramArea { src, dest, size } => {
+                    self.mirror_vram_area(src, dest, size);
                 }
                 _ => {}
             }
@@ -146,29 +154,6 @@ impl Worker {
     #[tracing::instrument(
         target = "render.software",
         level = "DEBUG",
-        "copy_vram_from_upload_buf",
-        skip(self)
-    )]
-    fn copy_vram_from_upload_buf(
-        &mut self,
-        Position { x, y }: Position,
-        Size { w, h }: Size,
-        mut data: UploadBuf,
-    ) {
-        for j in 0..h {
-            for i in 0..w {
-                let (x, y) = (x + i, y + j);
-                if x < VRAM_WIDTH as _ && y < VRAM_HEIGHT as _ {
-                    let idx = y as usize * VRAM_WIDTH + x as usize;
-                    self.vram[idx] = data.pop_front().unwrap();
-                }
-            }
-        }
-    }
-
-    #[tracing::instrument(
-        target = "render.software",
-        level = "DEBUG",
         "fill_vram_area",
         skip(self)
     )]
@@ -181,10 +166,73 @@ impl Worker {
         for j in 0..h {
             for i in 0..w {
                 let (x, y) = (x + i, y + j);
-                if x < VRAM_WIDTH as _ && y < VRAM_HEIGHT as _ {
-                    let idx = y as usize * VRAM_WIDTH + x as usize;
-                    self.vram[idx] = rgb888_to_bgr555(r, g, b);
-                }
+                let (x, y) = (
+                    (x as usize).clamp(0, VRAM_WIDTH - 1),
+                    (y as usize).clamp(0, VRAM_HEIGHT - 1),
+                );
+                self.vram[y * VRAM_WIDTH + x] = rgb888_to_bgr555(r, g, b);
+            }
+        }
+    }
+
+    #[tracing::instrument(
+        target = "render.software",
+        level = "DEBUG",
+        "copy_vram_from_upload_buf",
+        skip(self)
+    )]
+    fn copy_vram_from_upload_buf(
+        &mut self,
+        Position { x, y }: Position,
+        Size { w, h }: Size,
+        mut data: UploadBuf,
+    ) {
+        for j in 0..h {
+            for i in 0..w {
+                let (x, y) = (x + i, y + j);
+                let (x, y) = (
+                    (x as usize).clamp(0, VRAM_WIDTH - 1),
+                    (y as usize).clamp(0, VRAM_HEIGHT - 1),
+                );
+                self.vram[y * VRAM_WIDTH + x] = data.pop_front().unwrap();
+            }
+        }
+    }
+
+    #[tracing::instrument(
+        target = "render.software",
+        level = "DEBUG",
+        "mirror_vram_area",
+        skip(self)
+    )]
+    fn mirror_vram_area(
+        &mut self,
+        Position { x: sx, y: sy }: Position,
+        Position { x: dx, y: dy }: Position,
+        Size { w, h }: Size,
+    ) {
+        // areas may overlap
+        let mut tmp = VecDeque::with_capacity(w as usize * h as usize);
+
+        for y in 0..h {
+            for x in 0..w {
+                let (x, y) = (sx + x, sy + y);
+                let (x, y) = (
+                    (x as usize).clamp(0, VRAM_WIDTH - 1),
+                    (y as usize).clamp(0, VRAM_HEIGHT - 1),
+                );
+                tmp.push_front(self.vram[y * VRAM_WIDTH + x]);
+            }
+        }
+
+        for y in 0..h {
+            for x in 0..w {
+                let (x, y) = (dx + x, dy + y);
+                let (x, y) = (
+                    (x as usize).clamp(0, VRAM_WIDTH - 1),
+                    (y as usize).clamp(0, VRAM_HEIGHT - 1),
+                );
+                self.vram[y * VRAM_WIDTH + x] = tmp.pop_back().unwrap();
             }
         }
     }

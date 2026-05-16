@@ -44,6 +44,9 @@ pub trait Renderer: 'static {
     /// Commit gathered pixels into VRAM ending upload started after [`Self::prepare_local_vram_to_upload`].
     fn upload_local_vram_area(&mut self);
 
+    /// Copy VRAM area into VRAM.
+    fn mirror_vram_area(&mut self, src: types::Position, dest: types::Position, size: types::Size);
+
     /// Reset inner state like push/pop pointers, etc.
     fn reset(&mut self);
 }

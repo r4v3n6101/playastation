@@ -57,8 +57,7 @@ pub fn dispatch(gpu: &mut Gpu, cmd: u32) {
                 cmdbuf.0 = SmallBox::new(RectPacket::init(cmd));
             }
             0x80 => {
-                // Vram2Vram
-                // todo!()
+                cmdbuf.0 = SmallBox::new(Vram2VramPacket::init(cmd));
             }
             0xA0 => {
                 cmdbuf.0 = SmallBox::new(Cpu2VramPacket::init(cmd));
@@ -163,6 +162,13 @@ struct Cpu2VramPacket {
 #[derive(Debug)]
 struct Vram2CpuPacket {
     pos: Option<Position>,
+    size: Option<Size>,
+}
+
+#[derive(Debug)]
+struct Vram2VramPacket {
+    src: Option<Position>,
+    dest: Option<Position>,
     size: Option<Size>,
 }
 
@@ -583,6 +589,40 @@ impl PacketBuilder for Vram2CpuPacket {
 
         gpu.gpustat.set_ready_to_send_vram(true);
         tracing::debug!("GPUREAD data transfer ready");
+    }
+}
+
+impl PacketBuilder for Vram2VramPacket {
+    fn init(_: u32) -> Self
+    where
+        Self: Sized,
+    {
+        Self {
+            src: None,
+            dest: None,
+            size: None,
+        }
+    }
+
+    fn push_cmd(&mut self, cmd: u32, _: &mut Gpu) {
+        if let src @ None = &mut self.src {
+            src.replace(parse_pos(cmd));
+            return;
+        }
+        if let dest @ None = &mut self.dest {
+            dest.replace(parse_pos(cmd));
+            return;
+        }
+        self.size.replace(parse_size(cmd));
+    }
+
+    fn needs_more(&self) -> bool {
+        self.size.is_none()
+    }
+
+    fn commit(&mut self, gpu: &mut Gpu) {
+        gpu.renderer
+            .mirror_vram_area(self.src.unwrap(), self.dest.unwrap(), self.size.unwrap());
     }
 }
 

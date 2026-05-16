@@ -148,6 +148,12 @@ impl Renderer for SoftwareRenderer {
         });
     }
 
+    fn mirror_vram_area(&mut self, src: Position, dest: Position, size: Size) {
+        let _ = self
+            .cmd_tx
+            .send(backend::Command::MirrorVramArea { src, dest, size });
+    }
+
     fn reset(&mut self) {
         // TODO : restart thread
         // mem::take(self);

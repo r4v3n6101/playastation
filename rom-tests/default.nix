@@ -20,5 +20,7 @@ pkgs.writeShellApplication {
         timeout 30s ${runner}/bin/test-rom-runner \
           "$(dirname "$asm")/$(basename "$asm" .asm).bin" &
     done
+
+    wait
   '';
 }
