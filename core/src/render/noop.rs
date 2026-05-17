@@ -29,6 +29,7 @@ impl Renderer for NoopRenderer {
         RenderState {
             draw_area: (Position { x: 0, y: 0 }, Position { x: 0, y: 0 }),
             draw_offset: Location { x: 0, y: 0 },
+            vblank_int: false,
         }
     }
 
@@ -101,6 +102,10 @@ impl Renderer for NoopRenderer {
 
     fn mirror_vram_area(&mut self, src: Position, dest: Position, size: Size) {
         tracing::debug!(?src, ?dest, ?size, "mirror vram area");
+    }
+
+    fn clear_int(&mut self) {
+        tracing::debug!("clear interruptions");
     }
 
     fn reset(&mut self) {

@@ -1,5 +1,3 @@
-use std::mem;
-
 use crate::{
     cpu::{Cpu, Exception, PendingLoad},
     interconnect::Bus,

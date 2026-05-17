@@ -47,6 +47,9 @@ pub trait Renderer: 'static {
     /// Copy VRAM area into VRAM.
     fn mirror_vram_area(&mut self, src: types::Position, dest: types::Position, size: types::Size);
 
+    /// Clear any pending interruptions.
+    fn clear_int(&mut self);
+
     /// Reset inner state like push/pop pointers, etc.
     fn reset(&mut self);
 }

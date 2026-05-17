@@ -11,6 +11,8 @@ pub struct RenderState {
     pub draw_area: (Position, Position),
     /// Origin for primitives.
     pub draw_offset: Location,
+    /// Whether the frame is drawn.
+    pub vblank_int: bool,
 }
 
 #[derive(Debug, Clone)]

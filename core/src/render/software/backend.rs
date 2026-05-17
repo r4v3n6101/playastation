@@ -1,13 +1,18 @@
 use std::{
     collections::VecDeque,
-    sync::mpsc::{self, Receiver, Sender},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc::{self, Receiver, Sender},
+    },
+    thread,
+    time::Duration,
 };
 
+use crossbeam_utils::atomic::AtomicCell;
 use triple_buffer::{Input, Output, triple_buffer};
 
-use super::super::types::{
-    Color, Location, Polygon, Polyline, Position, Rect, RenderState, Size, Vertex,
-};
+use super::super::types::{Color, Location, Polygon, Polyline, Position, Rect, Size, Vertex};
 
 pub const VRAM_WIDTH: usize = 1024;
 pub const VRAM_HEIGHT: usize = 512;
@@ -15,6 +20,13 @@ pub const VRAM_HEIGHT: usize = 512;
 pub type Vram = Box<[u16]>;
 pub type TextureBuf = VecDeque<u16>;
 pub type ScreenFillCallback = Box<dyn FnMut(&[u16], usize, usize) + Send>;
+
+pub struct SharedState {
+    pub draw_area: (AtomicCell<Position>, AtomicCell<Position>),
+    pub draw_offset: AtomicCell<Location>,
+    pub vblank_int: AtomicBool,
+    pub screen_fill: Mutex<ScreenFillCallback>,
+}
 
 pub enum Command {
     DrawPolygon(Polygon),
@@ -38,7 +50,6 @@ pub enum Command {
     SetDrawAreaTopLeft(Position),
     SetDrawAreaBottomRight(Position),
     SetDrawOffset(Location),
-    UpdateDisplayOutput(ScreenFillCallback),
 }
 
 pub struct Worker {
@@ -46,9 +57,7 @@ pub struct Worker {
 
     vram: Vram,
     vram_view: Input<Vram>,
-    screen_fill: ScreenFillCallback,
-
-    pub state: RenderState,
+    pub state: Arc<SharedState>,
 }
 
 impl Worker {
@@ -66,18 +75,20 @@ impl Worker {
 
                 vram,
                 vram_view,
-                screen_fill: Box::new(|_, _, _| {}),
-
-                state: RenderState {
+                state: Arc::new(SharedState {
                     draw_area: (
-                        Position { x: 0, y: 0 },
-                        Position {
+                        AtomicCell::new(Position { x: 0, y: 0 }),
+                        AtomicCell::new(Position {
                             x: (VRAM_WIDTH - 1) as _,
                             y: (VRAM_HEIGHT - 1) as _,
-                        },
+                        }),
                     ),
-                    draw_offset: Location { x: 0, y: 0 },
-                },
+                    draw_offset: AtomicCell::new(Location { x: 0, y: 0 }),
+                    vblank_int: AtomicBool::new(true),
+
+                    // FIXME : experimental
+                    screen_fill: Mutex::new(Box::new(|_, _, _| {})),
+                }),
             },
         )
     }
@@ -131,16 +142,13 @@ impl Worker {
                     self.mirror_vram_area(src, dest, size);
                 }
                 Command::SetDrawAreaTopLeft(pos) => {
-                    self.state.draw_area.0 = pos;
+                    self.state.draw_area.0.store(pos);
                 }
                 Command::SetDrawAreaBottomRight(pos) => {
-                    self.state.draw_area.1 = pos;
+                    self.state.draw_area.1.store(pos);
                 }
                 Command::SetDrawOffset(loc) => {
-                    self.state.draw_offset = loc;
-                }
-                Command::UpdateDisplayOutput(callback) => {
-                    self.screen_fill = callback;
+                    self.state.draw_offset.store(loc);
                 }
                 _ => {}
             }
@@ -150,8 +158,12 @@ impl Worker {
                 .copy_from_slice(&self.vram);
             self.vram_view.publish();
 
+            self.state.vblank_int.store(true, Ordering::Release);
+
             // FIXME: experimental, interface may be changed with high probability in the future
-            (self.screen_fill)(&self.vram, VRAM_WIDTH, VRAM_HEIGHT);
+            (self.state.screen_fill.lock().unwrap())(&self.vram, VRAM_WIDTH, VRAM_HEIGHT);
+
+            thread::sleep(Duration::from_secs(1) / 60);
         }
 
         tracing::debug!("backend worker done");
@@ -266,8 +278,8 @@ impl Worker {
             },
         ]: [Vertex; 3],
     ) {
-        let draw_area = (self.state.draw_area.0, self.state.draw_area.1);
-        let draw_offset = self.state.draw_offset;
+        let draw_area = (self.state.draw_area.0.load(), self.state.draw_area.1.load());
+        let draw_offset = self.state.draw_offset.load();
 
         let v0 = Location {
             x: v0.x + draw_offset.x,

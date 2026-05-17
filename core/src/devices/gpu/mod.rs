@@ -1,6 +1,9 @@
 use modular_bitfield::prelude::*;
 
-use crate::render::{Renderer, noop::NoopRenderer};
+use crate::{
+    interconnect::Bus,
+    render::{Renderer, noop::NoopRenderer},
+};
 
 use super::{Mmio, MmioExt};
 
@@ -129,6 +132,14 @@ impl Gpu {
 
     pub fn dispatch_gp1(&mut self, cmd: u32) {
         gp1::dispatch(self, cmd);
+    }
+
+    pub fn run(bus: &mut Bus) {
+        // TODO : ints
+        // if bus.gpu.renderer.state().vblank_int {
+        //     bus.int_ctrl.raise(InterruptFlags::VBLANK);
+        //     bus.gpu.renderer.clear_int();
+        // }
     }
 }
 

@@ -28,7 +28,7 @@ enum Command {
 
 fn main() {
     tracing_subscriber::fmt()
-        .with_max_level(Level::DEBUG)
+        .with_max_level(Level::TRACE)
         .with_target(true)
         .with_level(true)
         .compact()
