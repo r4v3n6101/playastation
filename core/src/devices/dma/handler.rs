@@ -127,12 +127,12 @@ pub fn do_linked_list(bus: &mut Bus, ch: usize, chan: &mut Channel) -> u64 {
                     "DMA LinkedList load header error"
                 );
 
-                chan.madr = 0xFFFFFF;
                 return cycles;
             }
         };
 
         let header = u32::from_le_bytes(header);
+        let next = header & 0xFFFFFF;
         let size = header >> 24;
         for _ in 0..size {
             addr = addr.wrapping_add(4);
@@ -147,7 +147,6 @@ pub fn do_linked_list(bus: &mut Bus, ch: usize, chan: &mut Channel) -> u64 {
                         "DMA LinkedList load command error"
                     );
 
-                    chan.madr = 0xFFFFFF;
                     return cycles;
                 }
             };
@@ -157,11 +156,10 @@ pub fn do_linked_list(bus: &mut Bus, ch: usize, chan: &mut Channel) -> u64 {
             cycles = cycles.saturating_add(TIMINGS[GPU]);
         }
 
-        if header & 0x800000 != 0 {
-            chan.madr = 0xFFFFFF;
+        if next == 0xFFFFFF {
             return cycles;
         }
 
-        chan.madr = header & 0x1FFFFC;
+        chan.madr = next;
     }
 }

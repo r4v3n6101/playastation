@@ -1,6 +1,7 @@
 use modular_bitfield::prelude::*;
 
 use crate::{
+    devices::int::InterruptFlags,
     interconnect::Bus,
     render::{Renderer, noop::NoopRenderer},
 };
@@ -135,11 +136,10 @@ impl Gpu {
     }
 
     pub fn run(bus: &mut Bus) {
-        // TODO : ints
-        // if bus.gpu.renderer.state().vblank_int {
-        //     bus.int_ctrl.raise(InterruptFlags::VBLANK);
-        //     bus.gpu.renderer.clear_int();
-        // }
+        if bus.gpu.renderer.state().vblank_int {
+            bus.int_ctrl.raise(InterruptFlags::VBLANK);
+            bus.gpu.renderer.clear_int();
+        }
     }
 }
 

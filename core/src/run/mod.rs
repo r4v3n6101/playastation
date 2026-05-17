@@ -50,6 +50,11 @@ impl CpuExecutor {
 
         // CPU first
         let execution = interpreter::run(&self.block, &mut self.cpu, bus);
+        let next_pc = if execution.jump {
+            execution.jump_target
+        } else {
+            execution.last_pc.wrapping_add(4)
+        };
 
         // Then devices on the bus are updated
         bus.update(execution.cycles_elapsed);
@@ -61,7 +66,12 @@ impl CpuExecutor {
             .interrupt_pending()
             .then_some(ExecutionResult {
                 exception: Some(Exception::Interrupt),
-                ..execution
+                // EPC must be set to the next instruction, so it either pc+4 or jump target
+                last_pc: next_pc,
+                // The last called instruction may be in delay slot, but the next must not be
+                // I.e. the last op must not be branch
+                last_in_delay_slot: false,
+                ..Default::default()
             });
 
         // Interrupt changes flow like it's an error occurred in the last op
@@ -82,12 +92,9 @@ impl CpuExecutor {
                 execution.last_in_delay_slot,
             );
             self.cpu.pc = self.cpu.cop0.exception_handler();
-        } else if execution.jump {
-            self.cpu.pc = execution.jump_target;
-
-            self.handle_tty();
         } else {
-            self.cpu.pc = execution.last_pc.wrapping_add(4);
+            self.cpu.pc = next_pc;
+            self.handle_tty();
         }
     }
 

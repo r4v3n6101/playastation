@@ -2,7 +2,7 @@ use std::array;
 
 use modular_bitfield::prelude::*;
 
-use crate::interconnect::Bus;
+use crate::{devices::int::InterruptFlags, interconnect::Bus};
 
 use super::{Mmio, MmioExt};
 
@@ -226,13 +226,15 @@ impl DmaController {
                 continue;
             }
 
-            let transfer_span = tracing::debug_span!(
-                target: "dma",
-                "transfer",
-                index=%ch,
-                ?chan
-            );
-            transfer_span.in_scope(|| {
+            {
+                let transfer_span = tracing::debug_span!(
+                    target: "dma",
+                    "transfer",
+                    index=%ch,
+                    ?chan
+                );
+                let _guard = transfer_span.enter();
+
                 let elapsed_cycles = match chan.chcr.sync_mode() {
                     SyncMode::Manual => handler::do_manual(bus, ch, &mut chan),
                     SyncMode::Request => handler::do_block(bus, ch, &mut chan),
@@ -241,16 +243,15 @@ impl DmaController {
                 };
                 tracing::trace!(%elapsed_cycles, "dma cycles spent");
                 cycles = cycles.saturating_add(elapsed_cycles);
-            });
+            };
 
             chan.chcr.set_active(false);
             chan.chcr.set_trigger(false);
 
-            // TODO
-            // bus.dma_ctrl.dicr.set_irq_lane(ch);
-            // if bus.dma_ctrl.dicr.irq_signal() {
-            //     bus.int_ctrl.raise(InterruptFlags::DMA);
-            // }
+            bus.dma_ctrl.dicr.set_irq_lane(ch);
+            if bus.dma_ctrl.dicr.irq_signal() {
+                bus.int_ctrl.raise(InterruptFlags::DMA);
+            }
 
             bus.dma_ctrl.channels[ch] = chan;
         }
