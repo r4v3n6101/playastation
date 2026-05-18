@@ -1,8 +1,8 @@
 use alloc::vec::Vec;
 
 use crate::{
-    cpu::{Exception, Opcode},
-    interconnect::{Bus, BusError, BusErrorKind},
+    cpu::{Cpu, Exception, Opcode},
+    interconnect::Bus,
 };
 
 #[derive(Debug)]
@@ -25,9 +25,10 @@ pub enum Operation {
 pub fn fetch_and_decode_block(
     output: &mut Vec<Operation>,
     mut limit: usize,
-    mut pc: u32,
+    cpu: &mut Cpu,
     bus: &mut Bus,
 ) {
+    let mut pc = cpu.pc;
     let mut pending_delay_slot = false;
 
     output.clear();
@@ -36,26 +37,23 @@ pub fn fetch_and_decode_block(
             break;
         }
 
-        let ins = match bus.load(pc) {
-            Ok(ins) => u32::from_le_bytes(ins),
-            Err(
-                ref err @ BusError {
-                    ref kind,
-                    bad_vaddr,
-                },
-            ) => {
+        let ins = match cpu.read_bus(bus, pc) {
+            Ok(word) => u32::from_le_bytes(word),
+            Err(exception) => {
+                let exception = match exception {
+                    Exception::DataBus { bad_vaddr } => Exception::InstructionBus { bad_vaddr },
+                    other => other,
+                };
+
                 tracing::warn!(
-                    ?err,
+                    ?exception,
                     pc=%format_args!("{pc:#X}"),
                     "ins fetch failed"
                 );
                 output.push(Operation::Break {
                     pc,
                     in_delay_slot: pending_delay_slot,
-                    cause: match kind {
-                        BusErrorKind::UnalignedAddr => Exception::UnalignedLoad { bad_vaddr },
-                        _ => Exception::InstructionBus { bad_vaddr },
-                    },
+                    cause: exception,
                 });
                 break;
             }
@@ -124,7 +122,7 @@ mod tests {
         let mut bus = Bus::default();
 
         words.iter().for_each(|&(addr, val)| {
-            let _ = bus.store(addr, val.to_le_bytes());
+            bus.store(addr, val.to_le_bytes());
         });
 
         bus
@@ -135,7 +133,7 @@ mod tests {
         // beq $zero, $zero, +1
         // nop
         // nop   <- must NOT be included
-        let cpu = Cpu {
+        let mut cpu = Cpu {
             pc: 0,
             ..Default::default()
         };
@@ -146,7 +144,7 @@ mod tests {
         ]);
 
         let mut out = Vec::new();
-        fetch_and_decode_block(&mut out, 1024, cpu.pc, &mut bus);
+        fetch_and_decode_block(&mut out, 1024, &mut cpu, &mut bus);
 
         assert_eq!(out.len(), 2);
 
@@ -176,7 +174,7 @@ mod tests {
         // jr $ra
         // nop
         // nop   <- must NOT be included
-        let cpu = Cpu {
+        let mut cpu = Cpu {
             pc: 0,
             ..Default::default()
         };
@@ -187,7 +185,7 @@ mod tests {
         ]);
 
         let mut out = Vec::new();
-        fetch_and_decode_block(&mut out, 1024, cpu.pc, &mut bus);
+        fetch_and_decode_block(&mut out, 1024, &mut cpu, &mut bus);
 
         assert_eq!(out.len(), 2);
 
@@ -210,14 +208,14 @@ mod tests {
     fn stops_immediately_on_syscall() {
         // syscall
         // nop   <- must NOT be included
-        let cpu = Cpu {
+        let mut cpu = Cpu {
             pc: 0,
             ..Default::default()
         };
         let mut bus = make_bus(&[(0x0000_0000, 0x0000_000C), (0x0000_0004, 0x0000_0000)]);
 
         let mut out = Vec::new();
-        fetch_and_decode_block(&mut out, 1024, cpu.pc, &mut bus);
+        fetch_and_decode_block(&mut out, 1024, &mut cpu, &mut bus);
 
         assert_eq!(out.len(), 1);
 
@@ -235,14 +233,14 @@ mod tests {
     fn stops_immediately_on_break() {
         // break
         // nop   <- must NOT be included
-        let cpu = Cpu {
+        let mut cpu = Cpu {
             pc: 0,
             ..Default::default()
         };
         let mut bus = make_bus(&[(0x0000_0000, 0x0000_000D), (0x0000_0004, 0x0000_0000)]);
 
         let mut out = Vec::new();
-        fetch_and_decode_block(&mut out, 1024, cpu.pc, &mut bus);
+        fetch_and_decode_block(&mut out, 1024, &mut cpu, &mut bus);
 
         assert_eq!(out.len(), 1);
 
@@ -259,14 +257,14 @@ mod tests {
     #[test]
     fn returns_reserved_instruction_exception_and_stops() {
         // 0xFFFF_FFFF should not decode on MIPS
-        let cpu = Cpu {
+        let mut cpu = Cpu {
             pc: 0,
             ..Default::default()
         };
         let mut bus = make_bus(&[(0x0000_0000, 0xFFFF_FFFF), (0x0000_0004, 0x0000_0000)]);
 
         let mut out = Vec::new();
-        fetch_and_decode_block(&mut out, 1024, cpu.pc, &mut bus);
+        fetch_and_decode_block(&mut out, 1024, &mut cpu, &mut bus);
 
         assert_eq!(out.len(), 1);
         assert!(matches!(

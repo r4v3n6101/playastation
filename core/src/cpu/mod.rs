@@ -2,9 +2,13 @@ use core::mem;
 
 pub use cop0::{Cop0, Exception};
 pub use ins::Opcode;
+pub use mmu::{Mmu, TranslationResult};
+
+use crate::interconnect::Bus;
 
 mod cop0;
 mod ins;
+mod mmu;
 
 #[derive(Debug, Copy, Clone)]
 pub struct Cpu {
@@ -19,6 +23,9 @@ pub struct Cpu {
 
     /// Pending load from RAM (aka load-delay slot).
     pub pending_load: PendingLoad,
+
+    /// MMU for address translating.
+    pub mmu: Mmu,
 
     // Coprocessors
     pub cop0: Cop0,
@@ -43,6 +50,8 @@ impl Default for Cpu {
 
             pending_load: PendingLoad { dest: 0, value: 0 },
 
+            mmu: Mmu,
+
             cop0: Cop0::default(),
         }
     }
@@ -62,5 +71,44 @@ impl Cpu {
         let pending_load = mem::replace(&mut self.pending_load, pending_load);
         self.gpr[pending_load.dest] = pending_load.value;
         self.gpr[0] = 0;
+    }
+
+    pub fn read_bus<const N: usize>(
+        &mut self,
+        bus: &mut Bus,
+        vaddr: u32,
+    ) -> Result<[u8; N], Exception> {
+        if !vaddr.is_multiple_of(N as u32) {
+            return Err(Exception::UnalignedLoad { bad_vaddr: vaddr });
+        }
+
+        let paddr = match self.mmu.translate_addr(vaddr) {
+            TranslationResult::PhysAddr(res) => res,
+            TranslationResult::CacheControl => return Ok([0; _]),
+            TranslationResult::Unmapped => return Err(Exception::DataBus { bad_vaddr: vaddr }),
+        };
+
+        Ok(bus.load(paddr))
+    }
+
+    pub fn write_bus<const N: usize>(
+        &mut self,
+        bus: &mut Bus,
+        vaddr: u32,
+        val: [u8; N],
+    ) -> Result<(), Exception> {
+        if !vaddr.is_multiple_of(N as u32) {
+            return Err(Exception::UnalignedStore { bad_vaddr: vaddr });
+        }
+
+        let paddr = match self.mmu.translate_addr(vaddr) {
+            TranslationResult::PhysAddr(res) => res,
+            TranslationResult::CacheControl => return Ok(()),
+            TranslationResult::Unmapped => return Err(Exception::DataBus { bad_vaddr: vaddr }),
+        };
+
+        bus.store(paddr, val);
+
+        Ok(())
     }
 }

@@ -33,7 +33,8 @@ pub struct ExecutionResult {
 
 impl Default for CpuExecutor {
     fn default() -> Self {
-        const DEFAULT_INS_BLOCK: usize = 1024;
+        // TODO : block may be invalidated by stores from the inside
+        const DEFAULT_INS_BLOCK: usize = 1;
 
         Self {
             cpu: Cpu::default(),
@@ -48,7 +49,7 @@ impl Default for CpuExecutor {
 impl CpuExecutor {
     pub fn run(&mut self, bus: &mut Bus) {
         // Decode batch of instructions, stopping at an error in fetch/decode or Syscall/Break.
-        decoder::fetch_and_decode_block(&mut self.block, self.block_size, self.cpu.pc, bus);
+        decoder::fetch_and_decode_block(&mut self.block, self.block_size, &mut self.cpu, bus);
 
         // CPU first
         let execution = interpreter::run(&self.block, &mut self.cpu, bus);

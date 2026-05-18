@@ -1,6 +1,6 @@
 use crate::{
     cpu::{Cpu, Exception, Opcode, PendingLoad},
-    interconnect::{Bus, BusError, BusErrorKind},
+    interconnect::Bus,
 };
 
 use super::{ExecutionResult, decoder::Operation};
@@ -204,82 +204,59 @@ fn execute(
         Opcode::Lw => {
             pending_load = PendingLoad {
                 dest: rt,
-                value: bus
-                    .load(cpu.gpr[rs].wrapping_add_signed(imm_sext))
-                    .map(u32::from_le_bytes)
-                    .map_err(|BusError { bad_vaddr, kind }| match kind {
-                        BusErrorKind::UnalignedAddr => Exception::UnalignedLoad { bad_vaddr },
-                        _ => Exception::DataBus { bad_vaddr },
-                    })?,
+                value: cpu
+                    .read_bus(bus, cpu.gpr[rs].wrapping_add_signed(imm_sext))
+                    .map(u32::from_le_bytes)?,
             };
         }
         Opcode::Lh => {
             pending_load = PendingLoad {
                 dest: rt,
-                value: bus
-                    .load(cpu.gpr[rs].wrapping_add_signed(imm_sext))
+                value: cpu
+                    .read_bus(bus, cpu.gpr[rs].wrapping_add_signed(imm_sext))
                     .map(i16::from_le_bytes)
                     .map(i32::from)
-                    .map(i32::cast_unsigned)
-                    .map_err(|BusError { bad_vaddr, kind }| match kind {
-                        BusErrorKind::UnalignedAddr => Exception::UnalignedLoad { bad_vaddr },
-                        _ => Exception::DataBus { bad_vaddr },
-                    })?,
+                    .map(i32::cast_unsigned)?,
             };
         }
         Opcode::Lhu => {
             pending_load = PendingLoad {
                 dest: rt,
-                value: bus
-                    .load(cpu.gpr[rs].wrapping_add_signed(imm_sext))
+                value: cpu
+                    .read_bus(bus, cpu.gpr[rs].wrapping_add_signed(imm_sext))
                     .map(u16::from_le_bytes)
-                    .map(u32::from)
-                    .map_err(|BusError { bad_vaddr, kind }| match kind {
-                        BusErrorKind::UnalignedAddr => Exception::UnalignedLoad { bad_vaddr },
-                        _ => Exception::DataBus { bad_vaddr },
-                    })?,
+                    .map(u32::from)?,
             };
         }
         Opcode::Lb => {
             pending_load = PendingLoad {
                 dest: rt,
-                value: bus
-                    .load(cpu.gpr[rs].wrapping_add_signed(imm_sext))
+                value: cpu
+                    .read_bus(bus, cpu.gpr[rs].wrapping_add_signed(imm_sext))
                     .map(i8::from_le_bytes)
                     .map(i32::from)
-                    .map(i32::cast_unsigned)
-                    .map_err(|BusError { bad_vaddr, kind }| match kind {
-                        BusErrorKind::UnalignedAddr => Exception::UnalignedLoad { bad_vaddr },
-                        _ => Exception::DataBus { bad_vaddr },
-                    })?,
+                    .map(i32::cast_unsigned)?,
             };
         }
         Opcode::Lbu => {
             pending_load = PendingLoad {
                 dest: rt,
-                value: bus
-                    .load(cpu.gpr[rs].wrapping_add_signed(imm_sext))
+                value: cpu
+                    .read_bus(bus, cpu.gpr[rs].wrapping_add_signed(imm_sext))
                     .map(u8::from_le_bytes)
-                    .map(u32::from)
-                    .map_err(|BusError { bad_vaddr, kind }| match kind {
-                        BusErrorKind::UnalignedAddr => Exception::UnalignedLoad { bad_vaddr },
-                        _ => Exception::DataBus { bad_vaddr },
-                    })?,
+                    .map(u32::from)?,
             };
         }
         Opcode::Lwl => {
             let addr = cpu.gpr[rs].wrapping_add_signed(imm_sext);
-            let word = bus
-                .load(addr & !3)
-                .map(u32::from_le_bytes)
-                .map_err(|BusError { bad_vaddr, .. }| Exception::DataBus { bad_vaddr })?;
+            let word = cpu.read_bus(bus, addr & !3).map(u32::from_le_bytes)?;
             let old = if rt == cpu.pending_load.dest {
                 cpu.pending_load.value
             } else {
                 cpu.gpr[rt]
             };
 
-            cpu.pending_load = PendingLoad {
+            pending_load = PendingLoad {
                 dest: rt,
                 value: match addr & 3 {
                     0 => (old & 0x00FF_FFFF) | (word << 24),
@@ -292,17 +269,14 @@ fn execute(
         }
         Opcode::Lwr => {
             let addr = cpu.gpr[rs].wrapping_add_signed(imm_sext);
-            let word = bus
-                .load(addr & !3)
-                .map(u32::from_le_bytes)
-                .map_err(|BusError { bad_vaddr, .. }| Exception::DataBus { bad_vaddr })?;
+            let word = cpu.read_bus(bus, addr & !3).map(u32::from_le_bytes)?;
             let old = if rt == cpu.pending_load.dest {
                 cpu.pending_load.value
             } else {
                 cpu.gpr[rt]
             };
 
-            cpu.pending_load = PendingLoad {
+            pending_load = PendingLoad {
                 dest: rt,
                 value: match addr & 3 {
                     0 => word,
@@ -320,41 +294,29 @@ fn execute(
 
         // Stores
         Opcode::Sw => {
-            bus.store(
+            cpu.write_bus(
+                bus,
                 cpu.gpr[rs].wrapping_add_signed(imm_sext),
                 cpu.gpr[rt].to_le_bytes(),
-            )
-            .map_err(|BusError { bad_vaddr, kind }| match kind {
-                BusErrorKind::UnalignedAddr => Exception::UnalignedStore { bad_vaddr },
-                _ => Exception::DataBus { bad_vaddr },
-            })?;
+            )?;
         }
         Opcode::Sh => {
-            bus.store(
+            cpu.write_bus(
+                bus,
                 cpu.gpr[rs].wrapping_add_signed(imm_sext),
                 (cpu.gpr[rt] as u16).to_le_bytes(),
-            )
-            .map_err(|BusError { bad_vaddr, kind }| match kind {
-                BusErrorKind::UnalignedAddr => Exception::UnalignedStore { bad_vaddr },
-                _ => Exception::DataBus { bad_vaddr },
-            })?;
+            )?;
         }
         Opcode::Sb => {
-            bus.store(
+            cpu.write_bus(
+                bus,
                 cpu.gpr[rs].wrapping_add_signed(imm_sext),
                 (cpu.gpr[rt] as u8).to_le_bytes(),
-            )
-            .map_err(|BusError { bad_vaddr, kind }| match kind {
-                BusErrorKind::UnalignedAddr => Exception::UnalignedStore { bad_vaddr },
-                _ => Exception::DataBus { bad_vaddr },
-            })?;
+            )?;
         }
         Opcode::Swl => {
             let addr = cpu.gpr[rs].wrapping_add_signed(imm_sext);
-            let word = bus
-                .load(addr & !3)
-                .map(u32::from_le_bytes)
-                .map_err(|BusError { bad_vaddr, .. }| Exception::DataBus { bad_vaddr })?;
+            let word = cpu.read_bus(bus, addr & !3).map(u32::from_le_bytes)?;
 
             let val = match addr & 3 {
                 0 => (word & 0xFFFF_FF00) | (cpu.gpr[rt] >> 24),
@@ -364,15 +326,11 @@ fn execute(
                 _ => unreachable!(),
             };
 
-            bus.store(addr & !3, val.to_le_bytes())
-                .map_err(|BusError { bad_vaddr, .. }| Exception::DataBus { bad_vaddr })?;
+            cpu.write_bus(bus, addr & !3, val.to_le_bytes())?;
         }
         Opcode::Swr => {
             let addr = cpu.gpr[rs].wrapping_add_signed(imm_sext);
-            let word = bus
-                .load(addr & !3)
-                .map(u32::from_le_bytes)
-                .map_err(|BusError { bad_vaddr, .. }| Exception::DataBus { bad_vaddr })?;
+            let word = cpu.read_bus(bus, addr & !3).map(u32::from_le_bytes)?;
 
             let val = match addr & 3 {
                 0 => cpu.gpr[rt],
@@ -382,8 +340,7 @@ fn execute(
                 _ => unreachable!(),
             };
 
-            bus.store(addr & !3, val.to_le_bytes())
-                .map_err(|BusError { bad_vaddr, .. }| Exception::DataBus { bad_vaddr })?;
+            cpu.write_bus(bus, addr & !3, val.to_le_bytes())?;
         }
 
         // Branches

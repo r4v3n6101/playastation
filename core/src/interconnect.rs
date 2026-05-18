@@ -5,12 +5,6 @@ use crate::devices::{
     Mmio, dma::DmaController, gpu::Gpu, int::InterruptController, timer::TimerController,
 };
 
-// MIPS uses segmented memory, but PSX ignore them and treat all segments as mirror to each other
-const KUSEG: Range<u32> = 0x0000_0000..0x7FFF_FFFF;
-const KSEG0: Range<u32> = 0x8000_0000..0x9FFF_FFFF;
-const KSEG1: Range<u32> = 0xA000_0000..0xBFFF_FFFF;
-const CACHE_CONTROL: u32 = 0xFFFE_0130;
-
 // Mapped memory
 const RAM: Range<u32> = 0x0000_0000..0x001F_FFFF;
 const EXPANSION1: Range<u32> = 0x1F00_0000..0x1F7F_FFFF;
@@ -29,18 +23,6 @@ const SPU: Range<u32> = 0x1F80_1C00..0x1F80_1FFF;
 const MISC: Range<u32> = 0x1F80_2000..0x1F80_2FFF;
 const EXPANSION2: Range<u32> = 0x1FA0_0000..0x1FA1_FFFF;
 const BIOS: Range<u32> = 0x1FC0_0000..0x1FC7_FFFF;
-
-#[derive(Debug)]
-pub struct BusError {
-    pub bad_vaddr: u32,
-    pub kind: BusErrorKind,
-}
-
-#[derive(Debug)]
-pub enum BusErrorKind {
-    UnalignedAddr,
-    Unmapped,
-}
 
 pub struct Bus {
     pub bios: Vec<u8>,
@@ -92,14 +74,12 @@ impl Bus {
         TimerController::update(self, sys_cycles);
     }
 
-    pub fn load<const N: usize>(&mut self, addr: u32) -> Result<[u8; N], BusError> {
-        if !addr.is_multiple_of(N as u32) {
-            return Err(BusError {
-                bad_vaddr: addr,
-                kind: BusErrorKind::UnalignedAddr,
-            });
-        }
+    /// Return PSX RAM as host RAM
+    pub fn direct_ram(&mut self) -> &mut [u8] {
+        &mut self.ram
+    }
 
+    pub fn load<const N: usize>(&mut self, addr: u32) -> [u8; N] {
         let mut bytes = [0; N];
 
         let mmio_span = tracing::trace_span!(
@@ -107,7 +87,7 @@ impl Bus {
             "load",
             addr=%format_args!("{addr:#X}")
         );
-        match translate_addr(addr)? {
+        match addr {
             x if RAM.contains(&x) => {
                 bytes.copy_from_slice(&self.ram[(x - RAM.start) as usize..][..N]);
             }
@@ -164,32 +144,20 @@ impl Bus {
                 let _guard = mmio_span.enter();
                 tracing::trace!(translated_addr=%format_args!("{x:#X}"), "HW regs touched");
             }
-            _ => {
-                return Err(BusError {
-                    bad_vaddr: addr,
-                    kind: BusErrorKind::Unmapped,
-                });
-            }
+            _ => {}
         }
 
-        Ok(bytes)
+        bytes
     }
 
-    pub fn store<const N: usize>(&mut self, addr: u32, value: [u8; N]) -> Result<(), BusError> {
-        if !addr.is_multiple_of(N as u32) {
-            return Err(BusError {
-                bad_vaddr: addr,
-                kind: BusErrorKind::UnalignedAddr,
-            });
-        }
-
+    pub fn store<const N: usize>(&mut self, addr: u32, value: [u8; N]) {
         let mmio_span = tracing::trace_span!(
             target: "bus.mmio",
             "store",
             addr=%format_args!("{addr:#X}"),
             ?value
         );
-        match translate_addr(addr)? {
+        match addr {
             x if RAM.contains(&x) => {
                 self.ram[(x - RAM.start) as usize..][..N].copy_from_slice(&value);
             }
@@ -246,31 +214,7 @@ impl Bus {
                 let _guard = mmio_span.enter();
                 tracing::trace!(translated_addr=%format_args!("{x:#X}"), "HW regs touched");
             }
-            _ => {
-                return Err(BusError {
-                    bad_vaddr: addr,
-                    kind: BusErrorKind::Unmapped,
-                });
-            }
+            _ => {}
         }
-
-        Ok(())
-    }
-}
-
-// Translate virtual address from segments into physical one.
-fn translate_addr(addr: u32) -> Result<u32, BusError> {
-    match addr {
-        x if KUSEG.contains(&x) || KSEG0.contains(&x) || KSEG1.contains(&x) => {
-            Ok(addr & 0x1FFF_FFFF)
-        }
-        CACHE_CONTROL => {
-            // TODO
-            Ok(0)
-        }
-        _ => Err(BusError {
-            bad_vaddr: addr,
-            kind: BusErrorKind::Unmapped,
-        }),
     }
 }

@@ -21,7 +21,7 @@ enum Command {
     },
     TestRom {
         path: PathBuf,
-        #[arg(default_value_t = 0x8001_0000)]
+        #[arg(default_value_t = 0x10000)]
         start_pc: u32,
     },
 }
@@ -40,12 +40,7 @@ fn main() {
     let rom_filename = match args.command {
         Command::TestRom { path, start_pc } => {
             let prg = fs::read(&path).unwrap();
-            for (i, byte) in prg.into_iter().enumerate() {
-                console
-                    .bus
-                    .store(start_pc + i as u32, byte.to_le_bytes())
-                    .unwrap();
-            }
+            console.bus.direct_ram()[start_pc as usize..][..prg.len()].copy_from_slice(&prg);
             console.executor.cpu.pc = start_pc;
 
             path.file_name().unwrap().to_os_string()

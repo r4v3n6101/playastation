@@ -26,6 +26,7 @@ pub fn do_manual(bus: &mut Bus, ch: usize, chan: &mut Channel) -> u64 {
     };
 
     for words_left in (0..chan.bcr.word_count()).rev() {
+        // DMA has its own addr translation
         let addr = chan.madr & 0x1FFFFC;
         match chan.chcr.direction() {
             Direction::FromRam => todo!(),
@@ -37,17 +38,7 @@ pub fn do_manual(bus: &mut Bus, ch: usize, chan: &mut Channel) -> u64 {
                     } else {
                         addr.wrapping_sub(4)
                     };
-
-                    // Silently stores, ignoring errors
-                    if let Err(err) = bus.store::<4>(addr, word.to_le_bytes()) {
-                        tracing::warn!(
-                            target: "do_manual",
-                            ?err,
-                            addr=%format_args!("{addr:#X}"),
-                            %word,
-                            "OTC DMA store error"
-                        );
-                    }
+                    store_direct_ram(bus, addr, word);
 
                     cycles = cycles.saturating_add(TIMINGS[OTC]);
                 }
@@ -64,7 +55,7 @@ pub fn do_manual(bus: &mut Bus, ch: usize, chan: &mut Channel) -> u64 {
 }
 
 pub fn do_block(bus: &mut Bus, ch: usize, chan: &mut Channel) -> u64 {
-    let mut cycles = 0;
+    let mut cycles = 0u64;
 
     let step = match chan.chcr.step() {
         Step::Increment => 4,
@@ -78,21 +69,9 @@ pub fn do_block(bus: &mut Bus, ch: usize, chan: &mut Channel) -> u64 {
             match chan.chcr.direction() {
                 Direction::FromRam => match ch {
                     GPU => {
-                        let word = match bus.load::<4>(addr) {
-                            Ok(res) => res,
-                            Err(err) => {
-                                tracing::warn!(
-                                    target: "do_block",
-                                    ?err,
-                                    addr=%format_args!("{addr:#X}"),
-                                    "RAM->GPU DMA block load error"
-                                );
-                                return cycles;
-                            }
-                        };
-                        let word = u32::from_le_bytes(word);
-
+                        let word = load_direct_ram(bus, addr);
                         bus.gpu.dispatch_gp0(word);
+
                         cycles = cycles.saturating_add(TIMINGS[GPU]);
                     }
                     _ => todo!(),
@@ -113,46 +92,19 @@ pub fn do_block(bus: &mut Bus, ch: usize, chan: &mut Channel) -> u64 {
 pub fn do_linked_list(bus: &mut Bus, ch: usize, chan: &mut Channel) -> u64 {
     debug_assert_eq!(ch, GPU);
 
-    let mut cycles = 0;
+    let mut cycles = 0u64;
     loop {
         let mut addr = chan.madr & 0x1FFFFC;
 
-        let header = match bus.load(addr) {
-            Ok(res) => res,
-            Err(err) => {
-                tracing::warn!(
-                    target: "do_linked_list",
-                    ?err,
-                    addr=%format_args!("{addr:#X}"),
-                    "DMA LinkedList load header error"
-                );
-
-                return cycles;
-            }
-        };
-
-        let header = u32::from_le_bytes(header);
+        let header = load_direct_ram(bus, addr);
         let next = header & 0xFFFFFF;
         let size = header >> 24;
         for _ in 0..size {
-            addr = addr.wrapping_add(4);
+            addr = addr.wrapping_add(4) & 0x1FFFFC;
 
-            let command = match bus.load(addr) {
-                Ok(res) => res,
-                Err(err) => {
-                    tracing::warn!(
-                        target: "do_linked_list",
-                        ?err,
-                        addr=%format_args!("{addr:#X}"),
-                        "DMA LinkedList load command error"
-                    );
-
-                    return cycles;
-                }
-            };
-            let command = u32::from_le_bytes(command);
-
+            let command = load_direct_ram(bus, addr);
             bus.gpu.dispatch_gp0(command);
+
             cycles = cycles.saturating_add(TIMINGS[GPU]);
         }
 
@@ -162,4 +114,14 @@ pub fn do_linked_list(bus: &mut Bus, ch: usize, chan: &mut Channel) -> u64 {
 
         chan.madr = next;
     }
+}
+
+fn load_direct_ram(bus: &mut Bus, addr: u32) -> u32 {
+    let mut buf = [0; 4];
+    buf.copy_from_slice(&bus.direct_ram()[addr as usize..][..4]);
+    u32::from_le_bytes(buf)
+}
+
+fn store_direct_ram(bus: &mut Bus, addr: u32, value: u32) {
+    bus.direct_ram()[addr as usize..][..4].copy_from_slice(&value.to_le_bytes());
 }
