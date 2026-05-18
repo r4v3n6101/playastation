@@ -1,3 +1,5 @@
+use alloc::{string::String, vec::Vec};
+
 use crate::{
     cpu::{Cpu, Exception, PendingLoad},
     interconnect::Bus,

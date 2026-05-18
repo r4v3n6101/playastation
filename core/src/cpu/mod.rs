@@ -1,4 +1,4 @@
-use std::mem;
+use core::mem;
 
 pub use cop0::{Cop0, Exception};
 pub use ins::Opcode;

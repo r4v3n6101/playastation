@@ -1,4 +1,4 @@
-use std::{fmt, mem};
+use core::{fmt, mem};
 
 use smallbox::{SmallBox, space::S32};
 use smallvec::SmallVec;

@@ -1,4 +1,5 @@
-use std::ops::Range;
+use alloc::vec::Vec;
+use core::ops::Range;
 
 use crate::devices::{
     Mmio, dma::DmaController, gpu::Gpu, int::InterruptController, timer::TimerController,
@@ -58,12 +59,12 @@ pub struct Bus {
 
 impl Default for Bus {
     fn default() -> Self {
-        let bios = vec![0; BIOS.len() + 1];
-        let ram = vec![0; RAM.len() + 1];
-        let misc = vec![0; MISC.len() + 1];
-        let scratchpad = vec![0; SCRATCHPAD.len() + 1];
-        let expansion1 = vec![0; EXPANSION1.len() + 1];
-        let expansion2 = vec![0; EXPANSION2.len() + 1];
+        let bios = alloc::vec![0; BIOS.len() + 1];
+        let ram = alloc::vec![0; RAM.len() + 1];
+        let misc = alloc::vec![0; MISC.len() + 1];
+        let scratchpad = alloc::vec![0; SCRATCHPAD.len() + 1];
+        let expansion1 = alloc::vec![0; EXPANSION1.len() + 1];
+        let expansion2 = alloc::vec![0; EXPANSION2.len() + 1];
 
         Self {
             bios,

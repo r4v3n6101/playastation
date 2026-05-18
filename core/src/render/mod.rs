@@ -1,4 +1,5 @@
 pub mod noop;
+#[cfg(feature = "software-renderer")]
 pub mod software;
 pub mod types;
 

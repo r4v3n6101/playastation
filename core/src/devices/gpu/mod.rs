@@ -1,3 +1,5 @@
+use alloc::boxed::Box;
+
 use modular_bitfield::prelude::*;
 
 use crate::{

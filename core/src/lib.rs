@@ -1,3 +1,8 @@
+// Used for software renderer multi-threading
+#![cfg_attr(not(feature = "software-renderer"), no_std)]
+
+extern crate alloc;
+
 pub mod cpu;
 pub mod devices;
 pub mod interconnect;
@@ -20,7 +25,7 @@ impl Console {
     }
 
     pub fn set_render(&mut self, renderer: impl render::Renderer) {
-        self.bus.gpu.renderer = Box::new(renderer);
+        self.bus.gpu.renderer = alloc::boxed::Box::new(renderer);
     }
 
     pub fn run(mut self) {

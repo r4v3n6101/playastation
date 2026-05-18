@@ -1,3 +1,5 @@
+use alloc::vec::Vec;
+
 use crate::{
     cpu::{Exception, Opcode},
     interconnect::{Bus, BusError, BusErrorKind},

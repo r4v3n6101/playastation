@@ -3,14 +3,20 @@ name = "playastation"
 version.workspace = true
 edition.workspace = true
 
-[dependencies]
-tracing = "0.1.44"
+[features]
+default = []
+software-renderer = ["dep:triple_buffer", "dep:crossbeam-utils"]
 
-strum = { version = "0.28.0", features = ["derive"] }
-bitflags = "2.11.0"
+[dependencies]
+tracing = { version = "0.1.44", default-features = false, features = ["attributes"] }
+
+strum = { version = "0.28.0", default-features = false, features = ["derive"] }
+bitflags = { version = "2.11.0", default-features = false }
 modular-bitfield = "0.13.1"
 
-smallvec = "1.15.1"
-smallbox = { version = "0.8.8", features = ["coerce"] }
-triple_buffer = "9.0.0"
-crossbeam-utils = "0.8.21"
+smallvec = { version = "1.15.1", default-features = false }
+smallbox = { version = "0.8.8", default-features = false, features = ["coerce"] }
+
+# Software renderer
+triple_buffer = { version = "9.0.0", optional = true }
+crossbeam-utils = { version = "0.8.21", optional = true }
