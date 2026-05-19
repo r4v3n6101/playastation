@@ -261,8 +261,8 @@ impl DmaController {
 }
 
 impl Mmio for DmaController {
-    fn read(&mut self, dest: &mut [u8], addr: u32) {
-        self.read_unaligned(dest, addr, |this, addr| match addr {
+    fn read(&mut self, dest: &mut [u8], maddr: u32) {
+        self.read_unaligned(dest, maddr, |this, addr| match addr {
             ..0x70 => {
                 let reg = addr % 0x10;
                 let chan = (addr / 0x10) as usize;
@@ -279,8 +279,8 @@ impl Mmio for DmaController {
         });
     }
 
-    fn write(&mut self, addr: u32, value: &[u8]) {
-        let (addr, val) = self.write_value(addr, value);
+    fn write(&mut self, maddr: u32, value: &[u8]) {
+        let (addr, val) = self.write_value(maddr, value);
         match addr {
             ..0x70 => {
                 let reg = addr % 0x10;
@@ -316,8 +316,8 @@ impl Mmio for DmaController {
 mod tests {
     use super::{super::Mmio, Bcr, Chcr, Direction, DmaController, Dpcr, Step, SyncMode};
 
-    fn write(ctrl: &mut DmaController, addr: u32, val: u32) {
-        ctrl.write(addr, val.to_le_bytes().as_slice());
+    fn write(ctrl: &mut DmaController, maddr: u32, val: u32) {
+        ctrl.write(maddr, val.to_le_bytes().as_slice());
     }
 
     #[test]

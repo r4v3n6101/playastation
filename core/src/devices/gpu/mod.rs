@@ -146,16 +146,16 @@ impl Gpu {
 }
 
 impl Mmio for Gpu {
-    fn read(&mut self, dest: &mut [u8], addr: u32) {
-        self.read_unaligned(dest, addr, |this, addr| match addr {
+    fn read(&mut self, dest: &mut [u8], maddr: u32) {
+        self.read_unaligned(dest, maddr, |this, addr| match addr {
             0x0 => gp0::read(this),
             0x4 => u32::from_le_bytes(this.gpustat.into_bytes()),
             _ => unreachable!(),
         });
     }
 
-    fn write(&mut self, addr: u32, value: &[u8]) {
-        let (addr, value) = self.write_value(addr, value);
+    fn write(&mut self, maddr: u32, value: &[u8]) {
+        let (addr, value) = self.write_value(maddr, value);
         match addr {
             0x0 => self.dispatch_gp0(value),
             0x4 => self.dispatch_gp1(value),

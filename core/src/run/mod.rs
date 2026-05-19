@@ -5,6 +5,7 @@ use crate::{
     interconnect::Bus,
 };
 
+mod block;
 mod decoder;
 mod interpreter;
 

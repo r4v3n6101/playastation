@@ -34,8 +34,8 @@ impl InterruptController {
 }
 
 impl Mmio for InterruptController {
-    fn read(&mut self, dest: &mut [u8], addr: u32) {
-        match (addr, dest.len()) {
+    fn read(&mut self, dest: &mut [u8], maddr: u32) {
+        match (maddr, dest.len()) {
             (0x0, 4) => {
                 dest.copy_from_slice(&u32::from(self.i_stat.bits()).to_le_bytes());
             }
@@ -57,8 +57,8 @@ impl Mmio for InterruptController {
         }
     }
 
-    fn write(&mut self, addr: u32, value: &[u8]) {
-        match (addr, value.len()) {
+    fn write(&mut self, maddr: u32, value: &[u8]) {
+        match (maddr, value.len()) {
             (0x0, 4) => {
                 self.i_stat &=
                     InterruptFlags::from_bits_truncate(u16::from_le_bytes([value[2], value[3]]));

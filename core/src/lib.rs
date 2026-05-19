@@ -5,6 +5,7 @@ extern crate alloc;
 
 pub mod cpu;
 pub mod devices;
+pub mod globals;
 pub mod interconnect;
 pub mod render;
 pub mod run;
@@ -17,10 +18,7 @@ pub struct Console {
 
 impl Console {
     pub fn load_bios(&mut self, bios: &[u8]) {
-        // 512KiB
-        const BIOS_SIZE: usize = 512 * 1024;
-
-        assert_eq!(bios.len(), BIOS_SIZE, "invalid bios size");
+        assert_eq!(bios.len(), globals::BIOS_SIZE, "invalid bios size");
         self.bus.bios.copy_from_slice(bios);
     }
 
