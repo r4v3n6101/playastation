@@ -125,8 +125,8 @@ impl TimerController {
 }
 
 impl Mmio for TimerController {
-    fn read(&mut self, dest: &mut [u8], addr: u32) {
-        self.read_unaligned(dest, addr, |this, addr| {
+    fn read(&mut self, dest: &mut [u8], maddr: u32) {
+        self.read_unaligned(dest, maddr, |this, addr| {
             let timer = (addr / 0x10) as usize;
             let reg = addr % 0x10;
 
@@ -147,8 +147,8 @@ impl Mmio for TimerController {
         });
     }
 
-    fn write(&mut self, addr: u32, value: &[u8]) {
-        let (addr, val) = self.write_value(addr, value);
+    fn write(&mut self, maddr: u32, value: &[u8]) {
+        let (addr, val) = self.write_value(maddr, value);
         let timer = (addr / 0x10) as usize;
         let reg = addr % 0x10;
 
@@ -172,14 +172,14 @@ impl Mmio for TimerController {
 mod tests {
     use super::{super::Mmio, TimerController, TimerMode};
 
-    fn read(ctrl: &mut TimerController, addr: u32) -> u32 {
+    fn read(ctrl: &mut TimerController, maddr: u32) -> u32 {
         let mut buf = [0; 4];
-        ctrl.read(&mut buf, addr);
+        ctrl.read(&mut buf, maddr);
         u32::from_le_bytes(buf)
     }
 
-    fn write(ctrl: &mut TimerController, addr: u32, val: u32) {
-        ctrl.write(addr, val.to_le_bytes().as_slice());
+    fn write(ctrl: &mut TimerController, maddr: u32, val: u32) {
+        ctrl.write(maddr, val.to_le_bytes().as_slice());
     }
 
     #[test]

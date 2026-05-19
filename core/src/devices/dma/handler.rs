@@ -116,12 +116,12 @@ pub fn do_linked_list(bus: &mut Bus, ch: usize, chan: &mut Channel) -> u64 {
     }
 }
 
-fn load_direct_ram(bus: &mut Bus, addr: u32) -> u32 {
+fn load_direct_ram(bus: &mut Bus, paddr: u32) -> u32 {
     let mut buf = [0; 4];
-    buf.copy_from_slice(&bus.direct_ram()[addr as usize..][..4]);
+    buf.copy_from_slice(&bus.direct_ram()[paddr as usize..][..4]);
     u32::from_le_bytes(buf)
 }
 
-fn store_direct_ram(bus: &mut Bus, addr: u32, value: u32) {
-    bus.direct_ram()[addr as usize..][..4].copy_from_slice(&value.to_le_bytes());
+fn store_direct_ram(bus: &mut Bus, paddr: u32, value: u32) {
+    bus.direct_ram()[paddr as usize..][..4].copy_from_slice(&value.to_le_bytes());
 }
