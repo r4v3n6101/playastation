@@ -205,7 +205,7 @@ impl Dicr {
 }
 
 impl DmaController {
-    pub fn run(bus: &mut Bus) -> u64 {
+    pub fn run(bus: &mut Bus, mut ram_touched: impl FnMut(u32)) -> u64 {
         let mut cycles = 0u64;
 
         for (ch, enabled) in bus.dma_ctrl.dpcr.sorted_chans() {
@@ -236,8 +236,8 @@ impl DmaController {
                 let _guard = transfer_span.enter();
 
                 let elapsed_cycles = match chan.chcr.sync_mode() {
-                    SyncMode::Manual => handler::do_manual(bus, ch, &mut chan),
-                    SyncMode::Request => handler::do_block(bus, ch, &mut chan),
+                    SyncMode::Manual => handler::do_manual(bus, ch, &mut chan, &mut ram_touched),
+                    SyncMode::Request => handler::do_block(bus, ch, &mut chan, &mut ram_touched),
                     SyncMode::LinkedList => handler::do_linked_list(bus, ch, &mut chan),
                     SyncMode::Reserved => unreachable!(),
                 };

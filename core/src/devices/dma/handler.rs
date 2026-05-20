@@ -17,7 +17,12 @@ const OTC: usize = 6;
 /// OTC: 0x110 clks per 0x100 words (1 cycle/word).
 const TIMINGS: [u64; CHANNELS] = [1, 1, 1, 30, 4, 20, 1];
 
-pub fn do_manual(bus: &mut Bus, ch: usize, chan: &mut Channel) -> u64 {
+pub fn do_manual(
+    bus: &mut Bus,
+    ch: usize,
+    chan: &mut Channel,
+    ram_touched: &mut impl FnMut(u32),
+) -> u64 {
     let mut cycles = 0u64;
 
     let step = match chan.chcr.step() {
@@ -38,7 +43,7 @@ pub fn do_manual(bus: &mut Bus, ch: usize, chan: &mut Channel) -> u64 {
                     } else {
                         addr.wrapping_sub(4)
                     };
-                    store_direct_ram(bus, addr, word);
+                    store_direct_ram(bus, addr, word, ram_touched);
 
                     cycles = cycles.saturating_add(TIMINGS[OTC]);
                 }
@@ -54,7 +59,12 @@ pub fn do_manual(bus: &mut Bus, ch: usize, chan: &mut Channel) -> u64 {
     cycles
 }
 
-pub fn do_block(bus: &mut Bus, ch: usize, chan: &mut Channel) -> u64 {
+pub fn do_block(
+    bus: &mut Bus,
+    ch: usize,
+    chan: &mut Channel,
+    ram_touched: &mut impl FnMut(u32),
+) -> u64 {
     let mut cycles = 0u64;
 
     let step = match chan.chcr.step() {
@@ -122,6 +132,7 @@ fn load_direct_ram(bus: &mut Bus, paddr: u32) -> u32 {
     u32::from_le_bytes(buf)
 }
 
-fn store_direct_ram(bus: &mut Bus, paddr: u32, value: u32) {
+fn store_direct_ram(bus: &mut Bus, paddr: u32, value: u32, ram_touched: &mut impl FnMut(u32)) {
     bus.direct_ram()[paddr as usize..][..4].copy_from_slice(&value.to_le_bytes());
+    ram_touched(paddr);
 }

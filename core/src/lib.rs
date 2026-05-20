@@ -12,7 +12,7 @@ pub mod run;
 
 #[derive(Default)]
 pub struct Console {
-    pub executor: run::CpuExecutor,
+    pub executor: run::Executor,
     pub bus: interconnect::Bus,
 }
 

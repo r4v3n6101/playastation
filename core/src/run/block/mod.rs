@@ -65,9 +65,8 @@ impl Default for PagedCache {
 
 impl PagedCache {
     pub fn get_or_fetch_decode_block(&mut self, cpu: &mut Cpu, bus: &mut Bus) -> Rc<Block> {
-        let phys_pc = match cpu.mmu.translate_addr(cpu.pc) {
-            PhysAddr(res) => res,
-            _ => unimplemented!(),
+        let PhysAddr(phys_pc) = cpu.mmu.translate_addr(cpu.pc) else {
+            unimplemented!()
         };
 
         self.by_pc
