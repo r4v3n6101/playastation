@@ -17,6 +17,27 @@ const PAGE_SIZE: usize = 1 << PAGE_BITS;
 const PAGES: usize = RAM_SIZE / PAGE_SIZE;
 const OPS_PER_BLOCK: usize = PAGE_SIZE / mem::size_of::<u32>();
 
+new_key_type! {
+    struct BlockKey;
+}
+
+#[derive(Debug)]
+pub struct PagedCache {
+    /// [`Block`]s storage.
+    blocks: SlotMap<BlockKey, Rc<Block>>,
+    /// Page -> array of [`Block`]
+    pages: Box<[Vec<BlockKey>; PAGES]>,
+    /// `phys_pc` -> [`Block`]
+    by_pc: BTreeMap<u32, BlockKey>,
+}
+
+#[derive(Debug)]
+pub struct Block {
+    pub phys_pc: u32,
+    pub ops: Vec<Operation>,
+    pub pages: SmallVec<[usize; 2]>,
+}
+
 #[derive(Debug)]
 pub enum Operation {
     Instruction {
@@ -30,27 +51,6 @@ pub enum Operation {
         in_delay_slot: bool,
         cause: Exception,
     },
-}
-
-#[derive(Debug)]
-pub struct Block {
-    pub phys_pc: u32,
-    pub ops: Vec<Operation>,
-    pub pages: SmallVec<[usize; 2]>,
-}
-
-new_key_type! {
-    struct BlockKey;
-}
-
-#[derive(Debug)]
-pub struct PagedCache {
-    /// [`Block`]s storage.
-    blocks: SlotMap<BlockKey, Rc<Block>>,
-    /// Page -> array of [`Block`]
-    pages: Box<[Vec<BlockKey>; PAGES]>,
-    /// `phys_pc` -> [`Block`]
-    by_pc: BTreeMap<u32, BlockKey>,
 }
 
 impl Default for PagedCache {
