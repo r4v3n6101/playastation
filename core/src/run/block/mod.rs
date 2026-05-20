@@ -1,4 +1,4 @@
-use alloc::{collections::BTreeMap, rc::Rc, vec::Vec};
+use alloc::{boxed::Box, collections::BTreeMap, rc::Rc, vec::Vec};
 use core::mem;
 
 use slotmap::{SlotMap, new_key_type};

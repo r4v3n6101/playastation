@@ -1,9 +1,9 @@
 use core::ops::Range;
 
 // MIPS uses segmented memory, but PSX ignore them and treat all segments as mirror to each other
-const KUSEG: Range<u32> = 0x0000_0000..0x7FFF_FFFF;
-const KSEG0: Range<u32> = 0x8000_0000..0x9FFF_FFFF;
-const KSEG1: Range<u32> = 0xA000_0000..0xBFFF_FFFF;
+const KUSEG: Range<u32> = 0x0000_0000..0x8000_0000;
+const KSEG0: Range<u32> = 0x8000_0000..0xA000_0000;
+const KSEG1: Range<u32> = 0xA000_0000..0xC000_0000;
 
 /// Special KSEG2 address that bypasses the bus and works with the cpu directly
 const CACHE_CONTROL: u32 = 0xFFFE_0130;
