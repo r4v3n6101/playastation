@@ -39,10 +39,7 @@ pub fn run(
             last_pc: cpu.pc,
             // Branch delay is cancelled (exception) or handled in other block
             last_in_delay_slot: false,
-            jump: false,
-            jump_target: 0,
-            cycles_elapsed: 0,
-            exception: None,
+            ..Default::default()
         },
         hi_lo_latency: 0,
 

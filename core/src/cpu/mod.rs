@@ -48,7 +48,7 @@ impl Default for Cpu {
             hi: 0,
             lo: 0,
 
-            pending_load: PendingLoad { dest: 0, value: 0 },
+            pending_load: PendingLoad::default(),
 
             mmu: Mmu,
 

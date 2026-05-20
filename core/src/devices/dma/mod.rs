@@ -269,7 +269,7 @@ impl Mmio for DmaController {
                 match reg {
                     0x0 => this.channels[chan].madr,
                     0x4 => u32::from_le_bytes(this.channels[chan].bcr.into_bytes()),
-                    0x8 => u32::from_le_bytes(this.channels[chan].chcr.into_bytes()),
+                    0x8 | 0xC => u32::from_le_bytes(this.channels[chan].chcr.into_bytes()),
                     _ => unreachable!(),
                 }
             }
@@ -288,7 +288,7 @@ impl Mmio for DmaController {
                 match reg {
                     0x0 => self.channels[chan].madr = val,
                     0x4 => self.channels[chan].bcr = Bcr::from_bytes(val.to_le_bytes()),
-                    0x8 => self.channels[chan].chcr = Chcr::from_bytes(val.to_le_bytes()),
+                    0x8 | 0xC => self.channels[chan].chcr = Chcr::from_bytes(val.to_le_bytes()),
                     _ => unreachable!(),
                 }
             }
