@@ -1,21 +1,39 @@
+use alloc::rc::Rc;
+
 use crate::{
-    cpu::{Cpu, Exception, Opcode, PendingLoad},
+    cpu::{Cpu, Exception, Opcode, PendingLoad, TranslationResult},
     interconnect::Bus,
 };
 
-use super::{ExecutionResult, decoder::Operation};
+use super::{
+    ExecutionResult,
+    block::{Block, Operation, PagedCache},
+};
 
 /// How many cycles need to be elapsed, so hi/lo become available after Mul op.
 const MULT_HI_LO_LOAD_LATENCY: u64 = 5;
 /// Same as above, but for Div ops.
 const DIV_HI_LO_LOAD_LATENCY: u64 = 35;
 
-struct Context {
+struct Context<'a> {
     result: ExecutionResult,
     hi_lo_latency: u64,
+
+    blk_cache: &'a mut PagedCache,
+    block: Rc<Block>,
 }
 
-pub fn run(ins_block: &[Operation], cpu: &mut Cpu, bus: &mut Bus) -> ExecutionResult {
+enum StopReason {
+    Exception(Exception),
+    BlockInvalidated,
+}
+
+pub fn run(
+    blk_cache: &mut PagedCache,
+    block: Rc<Block>,
+    cpu: &mut Cpu,
+    bus: &mut Bus,
+) -> ExecutionResult {
     let mut ctx = Context {
         result: ExecutionResult {
             last_pc: cpu.pc,
@@ -27,9 +45,12 @@ pub fn run(ins_block: &[Operation], cpu: &mut Cpu, bus: &mut Bus) -> ExecutionRe
             exception: None,
         },
         hi_lo_latency: 0,
+
+        blk_cache,
+        block: Rc::clone(&block),
     };
 
-    for ins in ins_block {
+    for ins in &block.ops {
         match *ins {
             Operation::Instruction {
                 pc,
@@ -44,9 +65,15 @@ pub fn run(ins_block: &[Operation], cpu: &mut Cpu, bus: &mut Bus) -> ExecutionRe
                 ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(1);
                 ctx.hi_lo_latency = ctx.hi_lo_latency.saturating_sub(1);
 
-                if let Err(exception) = res {
-                    ctx.result.exception.replace(exception);
-                    break;
+                match res {
+                    Err(StopReason::Exception(exc)) => {
+                        ctx.result.exception.replace(exc);
+                        break;
+                    }
+                    Err(StopReason::BlockInvalidated) => {
+                        break;
+                    }
+                    _ => {}
                 }
             }
             Operation::Break {
@@ -79,7 +106,7 @@ fn execute(
     op: Opcode,
     cpu: &mut Cpu,
     bus: &mut Bus,
-) -> Result<(), Exception> {
+) -> Result<(), StopReason> {
     let rs = ((ins >> 21) & 0x1F) as usize;
     let rt = ((ins >> 16) & 0x1F) as usize;
     let rd = ((ins >> 11) & 0x1F) as usize;
@@ -89,6 +116,7 @@ fn execute(
     let target = ins & 0x03FF_FFFF;
 
     let mut pending_load = PendingLoad::default();
+    let mut written_vaddr = None;
     match op {
         // ALU ops
         Opcode::Add => {
@@ -98,7 +126,7 @@ fn execute(
                     .cast_signed()
                     .checked_add(cpu.gpr[rt].cast_signed())
                     .map(i32::cast_unsigned)
-                    .ok_or(Exception::Overflow)?,
+                    .ok_or(StopReason::Exception(Exception::Overflow))?,
             );
         }
         Opcode::Addu => {
@@ -111,7 +139,7 @@ fn execute(
                     .cast_signed()
                     .checked_add(imm_sext)
                     .map(i32::cast_unsigned)
-                    .ok_or(Exception::Overflow)?,
+                    .ok_or(StopReason::Exception(Exception::Overflow))?,
             );
         }
         Opcode::Addiu => {
@@ -124,7 +152,7 @@ fn execute(
                     .cast_signed()
                     .checked_sub(cpu.gpr[rt].cast_signed())
                     .map(i32::cast_unsigned)
-                    .ok_or(Exception::Overflow)?,
+                    .ok_or(StopReason::Exception(Exception::Overflow))?,
             );
         }
         Opcode::Subu => {
@@ -206,7 +234,8 @@ fn execute(
                 dest: rt,
                 value: cpu
                     .read_bus(bus, cpu.gpr[rs].wrapping_add_signed(imm_sext))
-                    .map(u32::from_le_bytes)?,
+                    .map(u32::from_le_bytes)
+                    .map_err(StopReason::Exception)?,
             };
         }
         Opcode::Lh => {
@@ -216,7 +245,8 @@ fn execute(
                     .read_bus(bus, cpu.gpr[rs].wrapping_add_signed(imm_sext))
                     .map(i16::from_le_bytes)
                     .map(i32::from)
-                    .map(i32::cast_unsigned)?,
+                    .map(i32::cast_unsigned)
+                    .map_err(StopReason::Exception)?,
             };
         }
         Opcode::Lhu => {
@@ -225,7 +255,8 @@ fn execute(
                 value: cpu
                     .read_bus(bus, cpu.gpr[rs].wrapping_add_signed(imm_sext))
                     .map(u16::from_le_bytes)
-                    .map(u32::from)?,
+                    .map(u32::from)
+                    .map_err(StopReason::Exception)?,
             };
         }
         Opcode::Lb => {
@@ -235,7 +266,8 @@ fn execute(
                     .read_bus(bus, cpu.gpr[rs].wrapping_add_signed(imm_sext))
                     .map(i8::from_le_bytes)
                     .map(i32::from)
-                    .map(i32::cast_unsigned)?,
+                    .map(i32::cast_unsigned)
+                    .map_err(StopReason::Exception)?,
             };
         }
         Opcode::Lbu => {
@@ -244,12 +276,16 @@ fn execute(
                 value: cpu
                     .read_bus(bus, cpu.gpr[rs].wrapping_add_signed(imm_sext))
                     .map(u8::from_le_bytes)
-                    .map(u32::from)?,
+                    .map(u32::from)
+                    .map_err(StopReason::Exception)?,
             };
         }
         Opcode::Lwl => {
             let addr = cpu.gpr[rs].wrapping_add_signed(imm_sext);
-            let word = cpu.read_bus(bus, addr & !3).map(u32::from_le_bytes)?;
+            let word = cpu
+                .read_bus(bus, addr & !3)
+                .map(u32::from_le_bytes)
+                .map_err(StopReason::Exception)?;
             let old = if rt == cpu.pending_load.dest {
                 cpu.pending_load.value
             } else {
@@ -269,7 +305,10 @@ fn execute(
         }
         Opcode::Lwr => {
             let addr = cpu.gpr[rs].wrapping_add_signed(imm_sext);
-            let word = cpu.read_bus(bus, addr & !3).map(u32::from_le_bytes)?;
+            let word = cpu
+                .read_bus(bus, addr & !3)
+                .map(u32::from_le_bytes)
+                .map_err(StopReason::Exception)?;
             let old = if rt == cpu.pending_load.dest {
                 cpu.pending_load.value
             } else {
@@ -294,31 +333,31 @@ fn execute(
 
         // Stores
         Opcode::Sw => {
-            cpu.write_bus(
-                bus,
-                cpu.gpr[rs].wrapping_add_signed(imm_sext),
-                cpu.gpr[rt].to_le_bytes(),
-            )?;
+            let vaddr = cpu.gpr[rs].wrapping_add_signed(imm_sext);
+            cpu.write_bus(bus, vaddr, cpu.gpr[rt].to_le_bytes())
+                .map_err(StopReason::Exception)?;
+            written_vaddr = Some(vaddr);
         }
         Opcode::Sh => {
-            cpu.write_bus(
-                bus,
-                cpu.gpr[rs].wrapping_add_signed(imm_sext),
-                (cpu.gpr[rt] as u16).to_le_bytes(),
-            )?;
+            let vaddr = cpu.gpr[rs].wrapping_add_signed(imm_sext);
+            cpu.write_bus(bus, vaddr, (cpu.gpr[rt] as u16).to_le_bytes())
+                .map_err(StopReason::Exception)?;
+            written_vaddr = Some(vaddr);
         }
         Opcode::Sb => {
-            cpu.write_bus(
-                bus,
-                cpu.gpr[rs].wrapping_add_signed(imm_sext),
-                (cpu.gpr[rt] as u8).to_le_bytes(),
-            )?;
+            let vaddr = cpu.gpr[rs].wrapping_add_signed(imm_sext);
+            cpu.write_bus(bus, vaddr, (cpu.gpr[rt] as u8).to_le_bytes())
+                .map_err(StopReason::Exception)?;
+            written_vaddr = Some(vaddr);
         }
         Opcode::Swl => {
-            let addr = cpu.gpr[rs].wrapping_add_signed(imm_sext);
-            let word = cpu.read_bus(bus, addr & !3).map(u32::from_le_bytes)?;
+            let vaddr = cpu.gpr[rs].wrapping_add_signed(imm_sext);
+            let word = cpu
+                .read_bus(bus, vaddr & !3)
+                .map(u32::from_le_bytes)
+                .map_err(StopReason::Exception)?;
 
-            let val = match addr & 3 {
+            let val = match vaddr & 3 {
                 0 => (word & 0xFFFF_FF00) | (cpu.gpr[rt] >> 24),
                 1 => (word & 0xFFFF_0000) | (cpu.gpr[rt] >> 16),
                 2 => (word & 0xFF00_0000) | (cpu.gpr[rt] >> 8),
@@ -326,13 +365,18 @@ fn execute(
                 _ => unreachable!(),
             };
 
-            cpu.write_bus(bus, addr & !3, val.to_le_bytes())?;
+            cpu.write_bus(bus, vaddr & !3, val.to_le_bytes())
+                .map_err(StopReason::Exception)?;
+            written_vaddr = Some(vaddr & !3);
         }
         Opcode::Swr => {
-            let addr = cpu.gpr[rs].wrapping_add_signed(imm_sext);
-            let word = cpu.read_bus(bus, addr & !3).map(u32::from_le_bytes)?;
+            let vaddr = cpu.gpr[rs].wrapping_add_signed(imm_sext);
+            let word = cpu
+                .read_bus(bus, vaddr & !3)
+                .map(u32::from_le_bytes)
+                .map_err(StopReason::Exception)?;
 
-            let val = match addr & 3 {
+            let val = match vaddr & 3 {
                 0 => cpu.gpr[rt],
                 1 => (word & 0x0000_00FF) | (cpu.gpr[rt] << 8),
                 2 => (word & 0x0000_FFFF) | (cpu.gpr[rt] << 16),
@@ -340,7 +384,9 @@ fn execute(
                 _ => unreachable!(),
             };
 
-            cpu.write_bus(bus, addr & !3, val.to_le_bytes())?;
+            cpu.write_bus(bus, vaddr & !3, val.to_le_bytes())
+                .map_err(StopReason::Exception)?;
+            written_vaddr = Some(vaddr & !3);
         }
 
         // Branches
@@ -522,11 +568,19 @@ fn execute(
         }
 
         // Exceptions
-        Opcode::Break => return Err(Exception::Break),
-        Opcode::Syscall => return Err(Exception::Syscall),
+        Opcode::Break => return Err(StopReason::Exception(Exception::Break)),
+        Opcode::Syscall => return Err(StopReason::Exception(Exception::Syscall)),
     }
 
     cpu.write_delayed(pending_load);
+
+    if let Some(vaddr) = written_vaddr
+        && let TranslationResult::PhysAddr(paddr) = cpu.mmu.translate_addr(vaddr)
+        && let Some(invalidated_page) = ctx.blk_cache.invalidate_page(paddr)
+        && ctx.block.pages.contains(&invalidated_page)
+    {
+        return Err(StopReason::BlockInvalidated);
+    }
 
     Ok(())
 }

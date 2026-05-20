@@ -1,59 +1,40 @@
-use alloc::{string::String, vec::Vec};
+use alloc::string::String;
 
 use crate::{
     cpu::{Cpu, Exception, PendingLoad},
+    devices::{dma::DmaController, gpu::Gpu, timer::TimerController},
     interconnect::Bus,
 };
 
 mod block;
-mod decoder;
 mod interpreter;
 
-// TODO : rename
-#[derive(Debug)]
-pub struct CpuExecutor {
-    pub cpu: Cpu,
-    /// Maximum block size. If the last op is branch delay, block may be max+1
-    pub block_size: usize,
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
+struct ExecutionResult {
+    last_pc: u32,
+    last_in_delay_slot: bool,
+    jump: bool,
+    jump_target: u32,
+    cycles_elapsed: u64,
+    exception: Option<Exception>,
+}
 
-    /// Cache of decoded block of ops
-    block: Vec<decoder::Operation>,
+#[derive(Debug, Default)]
+pub struct Executor {
+    pub cpu: Cpu,
+    /// Cache for fetched & decoded blocks
+    blk_cache: block::PagedCache,
     /// TTY line.
     tty_line: String,
 }
 
-#[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
-pub struct ExecutionResult {
-    pub last_pc: u32,
-    pub last_in_delay_slot: bool,
-    pub jump: bool,
-    pub jump_target: u32,
-    pub cycles_elapsed: u64,
-    pub exception: Option<Exception>,
-}
-
-impl Default for CpuExecutor {
-    fn default() -> Self {
-        // TODO : block may be invalidated by stores from the inside
-        const DEFAULT_INS_BLOCK: usize = 1;
-
-        Self {
-            cpu: Cpu::default(),
-
-            block_size: DEFAULT_INS_BLOCK,
-            block: Vec::with_capacity(DEFAULT_INS_BLOCK + 1),
-            tty_line: String::new(),
-        }
-    }
-}
-
-impl CpuExecutor {
+impl Executor {
     pub fn run(&mut self, bus: &mut Bus) {
-        // Decode batch of instructions, stopping at an error in fetch/decode or Syscall/Break.
-        decoder::fetch_and_decode_block(&mut self.block, self.block_size, &mut self.cpu, bus);
+        // Cache fetch & decode of blocks
+        let block = self.blk_cache.get_or_fetch_decode_block(&mut self.cpu, bus);
 
         // CPU first
-        let execution = interpreter::run(&self.block, &mut self.cpu, bus);
+        let execution = interpreter::run(&mut self.blk_cache, block, &mut self.cpu, bus);
         let next_pc = if execution.jump {
             execution.jump_target
         } else {
@@ -61,7 +42,7 @@ impl CpuExecutor {
         };
 
         // Then devices on the bus are updated
-        bus.update(execution.cycles_elapsed);
+        self.update_devices(execution.cycles_elapsed, bus);
 
         self.cpu.cop0.set_hw_irq(bus.int_ctrl.pending());
         let interrupt = self
@@ -78,7 +59,8 @@ impl CpuExecutor {
                 ..Default::default()
             });
 
-        // Interrupt changes flow like it's an error occurred in the last op
+        // Interrupt changes flow like it's an error occurred in the last op,
+        // but EPC set to the next ins
         let execution = interrupt.unwrap_or(execution);
         if let Some(exception) = execution.exception {
             tracing::debug!(
@@ -100,6 +82,17 @@ impl CpuExecutor {
             self.cpu.pc = next_pc;
             self.handle_tty();
         }
+    }
+
+    fn update_devices(&mut self, cpu_cycles: u64, bus: &mut Bus) {
+        let dma_cycles = DmaController::run(bus, |paddr| {
+            self.blk_cache.invalidate_page(paddr);
+        });
+
+        Gpu::run(bus);
+
+        let sys_cycles = cpu_cycles.saturating_add(dma_cycles);
+        TimerController::update(bus, sys_cycles);
     }
 
     fn handle_tty(&mut self) {
