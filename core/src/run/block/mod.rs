@@ -33,9 +33,9 @@ pub struct PagedCache {
 
 #[derive(Debug)]
 pub struct Block {
-    pub phys_pc: u32,
     pub ops: Vec<Operation>,
     pub pages: SmallVec<[usize; 2]>,
+    phys_pc: u32,
 }
 
 #[derive(Debug)]

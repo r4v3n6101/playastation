@@ -5,8 +5,10 @@ use std::{
 
 use clap::{Parser, Subcommand};
 use image::{ImageBuffer, Rgb};
-use playastation::{Console, render::software::SoftwareRenderer};
+use playastation::{interconnect::Bus, render::software::SoftwareRenderer, run::Executor};
 use tracing::Level;
+
+const LOOPS: usize = 30_000_000;
 
 #[derive(Parser)]
 struct Args {
@@ -21,7 +23,7 @@ enum Command {
     },
     TestRom {
         path: PathBuf,
-        #[arg(default_value_t = 0x10000)]
+        #[arg(default_value_t = 0x1_0000)]
         start_pc: u32,
     },
 }
@@ -36,18 +38,19 @@ fn main() {
 
     let args = Args::parse();
 
-    let mut console = Console::default();
+    let mut bus = Bus::default();
+    let mut executor = Executor::default();
     let rom_filename = match args.command {
         Command::TestRom { path, start_pc } => {
             let prg = fs::read(&path).unwrap();
-            console.bus.direct_ram()[start_pc as usize..][..prg.len()].copy_from_slice(&prg);
-            console.executor.cpu.pc = start_pc;
+            bus.direct_ram()[start_pc as usize..][..prg.len()].copy_from_slice(&prg);
+            executor.cpu.pc = start_pc;
 
             path.file_name().unwrap().to_os_string()
         }
         Command::Bios { path } => {
             let bios = fs::read(&path).unwrap();
-            console.load_bios(&bios);
+            bus.bios.clone_from_slice(&bios);
 
             path.file_name().unwrap().to_os_string()
         }
@@ -62,9 +65,11 @@ fn main() {
             format!("output/{}.png", rom_filename.display()),
         );
     }));
+    bus.gpu.renderer = Box::new(renderer);
 
-    console.set_render(renderer);
-    console.run();
+    for _ in 0..LOOPS {
+        executor.run(&mut bus);
+    }
 }
 
 fn dump_bgr555_texture_png(

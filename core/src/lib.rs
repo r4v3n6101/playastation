@@ -9,25 +9,3 @@ pub mod globals;
 pub mod interconnect;
 pub mod render;
 pub mod run;
-
-#[derive(Default)]
-pub struct Console {
-    pub executor: run::Executor,
-    pub bus: interconnect::Bus,
-}
-
-impl Console {
-    pub fn load_bios(&mut self, bios: &[u8]) {
-        self.bus.bios.copy_from_slice(bios);
-    }
-
-    pub fn set_render(&mut self, renderer: impl render::Renderer) {
-        self.bus.gpu.renderer = alloc::boxed::Box::new(renderer);
-    }
-
-    pub fn run(mut self) {
-        loop {
-            self.executor.run(&mut self.bus);
-        }
-    }
-}
