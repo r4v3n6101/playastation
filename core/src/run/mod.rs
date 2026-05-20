@@ -2,7 +2,6 @@ use alloc::string::String;
 
 use crate::{
     cpu::{Cpu, Exception, PendingLoad},
-    devices::{dma::DmaController, gpu::Gpu, timer::TimerController},
     interconnect::Bus,
 };
 
@@ -42,7 +41,9 @@ impl Executor {
         };
 
         // Then devices on the bus are updated
-        self.update_devices(execution.cycles_elapsed, bus);
+        bus.update(execution.cycles_elapsed, |paddr| {
+            self.blk_cache.invalidate_page(paddr);
+        });
 
         self.cpu.cop0.set_hw_irq(bus.int_ctrl.pending());
         let interrupt = self
@@ -82,17 +83,6 @@ impl Executor {
             self.cpu.pc = next_pc;
             self.handle_tty();
         }
-    }
-
-    fn update_devices(&mut self, cpu_cycles: u64, bus: &mut Bus) {
-        let dma_cycles = DmaController::run(bus, |paddr| {
-            self.blk_cache.invalidate_page(paddr);
-        });
-
-        Gpu::run(bus);
-
-        let sys_cycles = cpu_cycles.saturating_add(dma_cycles);
-        TimerController::update(bus, sys_cycles);
     }
 
     fn handle_tty(&mut self) {
