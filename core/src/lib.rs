@@ -18,7 +18,6 @@ pub struct Console {
 
 impl Console {
     pub fn load_bios(&mut self, bios: &[u8]) {
-        assert_eq!(bios.len(), globals::BIOS_SIZE, "invalid bios size");
         self.bus.bios.copy_from_slice(bios);
     }
 
