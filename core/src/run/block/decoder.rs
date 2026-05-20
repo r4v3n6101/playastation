@@ -127,7 +127,7 @@ mod tests {
             (0x0000_0008, 0x0000_0000),
         ]);
 
-        let mut out = fetch_and_decode_block(1024, &mut cpu, &mut bus);
+        let out = fetch_and_decode_block(1024, &mut cpu, &mut bus);
 
         assert_eq!(out.len(), 2);
 
@@ -167,7 +167,7 @@ mod tests {
             (0x0000_0008, 0x0000_0000),
         ]);
 
-        let mut out = fetch_and_decode_block(1024, &mut cpu, &mut bus);
+        let out = fetch_and_decode_block(1024, &mut cpu, &mut bus);
 
         assert_eq!(out.len(), 2);
 
@@ -196,7 +196,7 @@ mod tests {
         };
         let mut bus = make_bus(&[(0x0000_0000, 0x0000_000C), (0x0000_0004, 0x0000_0000)]);
 
-        let mut out = fetch_and_decode_block(1024, &mut cpu, &mut bus);
+        let out = fetch_and_decode_block(1024, &mut cpu, &mut bus);
 
         assert_eq!(out.len(), 1);
 
@@ -220,7 +220,7 @@ mod tests {
         };
         let mut bus = make_bus(&[(0x0000_0000, 0x0000_000D), (0x0000_0004, 0x0000_0000)]);
 
-        let mut out = fetch_and_decode_block(1024, &mut cpu, &mut bus);
+        let out = fetch_and_decode_block(1024, &mut cpu, &mut bus);
 
         assert_eq!(out.len(), 1);
 
@@ -243,7 +243,7 @@ mod tests {
         };
         let mut bus = make_bus(&[(0x0000_0000, 0xFFFF_FFFF), (0x0000_0004, 0x0000_0000)]);
 
-        let mut out = fetch_and_decode_block(1024, &mut cpu, &mut bus);
+        let out = fetch_and_decode_block(1024, &mut cpu, &mut bus);
 
         assert_eq!(out.len(), 1);
         assert!(matches!(

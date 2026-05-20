@@ -71,6 +71,15 @@ impl Default for Bus {
 }
 
 impl Bus {
+    pub fn update(&mut self, cpu_cycles: u64, ram_touched: impl FnMut(u32)) {
+        let dma_cycles = DmaController::run(self, ram_touched);
+
+        Gpu::run(self);
+
+        let sys_cycles = cpu_cycles.saturating_add(dma_cycles);
+        TimerController::update(self, sys_cycles);
+    }
+
     /// Return PSX RAM as host RAM
     pub fn direct_ram(&mut self) -> &mut [u8] {
         &mut self.ram
@@ -82,7 +91,7 @@ impl Bus {
         let mmio_span = tracing::trace_span!(
             target: "bus.mmio",
             "load",
-            addr=%format_args!("{paddr:#X}")
+            paddr=%format_args!("{paddr:#X}")
         );
         match region_of(paddr) {
             Region::Ram => {
@@ -131,7 +140,7 @@ impl Bus {
             }
             Region::HwRegs => {
                 let _guard = mmio_span.enter();
-                tracing::trace!(translated_addr=%format_args!("{paddr:#X}"), "HW regs touched");
+                tracing::trace!("HW regs touched");
             }
             Region::Unmapped => {}
         }
@@ -143,7 +152,7 @@ impl Bus {
         let mmio_span = tracing::trace_span!(
             target: "bus.mmio",
             "store",
-            addr=%format_args!("{paddr:#X}"),
+            paddr=%format_args!("{paddr:#X}"),
             ?value
         );
         match region_of(paddr) {
@@ -192,7 +201,7 @@ impl Bus {
             }
             Region::HwRegs => {
                 let _guard = mmio_span.enter();
-                tracing::trace!(translated_addr=%format_args!("{paddr:#X}"), "HW regs touched");
+                tracing::trace!("HW regs touched");
             }
             Region::Unmapped => {}
         }
