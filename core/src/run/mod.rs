@@ -2,6 +2,7 @@ use alloc::string::String;
 
 use crate::{
     cpu::{Cpu, Exception, PendingLoad},
+    formats::{BoxedExeFile, ExeHeader},
     interconnect::Bus,
 };
 
@@ -21,6 +22,7 @@ struct ExecutionResult {
 #[derive(Debug, Default)]
 pub struct Executor {
     pub cpu: Cpu,
+    pub pending_exe: Option<BoxedExeFile>,
     /// Cache for fetched & decoded blocks
     blk_cache: block::PagedCache,
     /// TTY line.
@@ -81,7 +83,39 @@ impl Executor {
             self.cpu.pc = self.cpu.cop0.exception_handler();
         } else {
             self.cpu.pc = next_pc;
+
             self.handle_tty();
+            self.handle_exe(bus);
+        }
+    }
+
+    fn handle_exe(&mut self, bus: &mut Bus) {
+        if self.cpu.pc == 0x80030000
+            && let Some(exe) = self.pending_exe.take()
+        {
+            let ExeHeader {
+                ipc,
+                igp,
+                file_size,
+                ispb,
+                ispoff,
+                ram_dest,
+                ..
+            } = exe.header;
+            let prog = &exe.prog;
+
+            for i in 0..file_size.get() {
+                self.cpu
+                    .write_bus(bus, ram_dest.get().wrapping_add(i), [prog[i as usize]])
+                    .expect("valid ram dest in exe file");
+            }
+
+            self.cpu.pc = ipc.get();
+            self.cpu.gpr[28] = igp.get();
+            if ispb.get() != 0 {
+                self.cpu.gpr[29] = ispb.get() + ispoff.get();
+                self.cpu.gpr[30] = self.cpu.gpr[29];
+            }
         }
     }
 

@@ -1,6 +1,6 @@
 use strum::FromRepr;
 
-#[derive(Debug, Copy, Clone, FromRepr)]
+#[derive(FromRepr, Debug, Copy, Clone)]
 #[repr(u16)]
 pub enum Opcode {
     /// Shift left logical (shamt).

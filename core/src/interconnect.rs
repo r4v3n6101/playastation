@@ -80,11 +80,6 @@ impl Bus {
         TimerController::update(self, sys_cycles);
     }
 
-    /// Return PSX RAM as host RAM
-    pub fn direct_ram(&mut self) -> &mut [u8] {
-        &mut self.ram
-    }
-
     pub fn load<const N: usize>(&mut self, paddr: u32) -> [u8; N] {
         let mut bytes = [0; N];
 

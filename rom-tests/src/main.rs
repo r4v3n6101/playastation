@@ -3,29 +3,19 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use clap::{Parser, Subcommand};
+use clap::Parser;
 use image::{ImageBuffer, Rgb};
-use playastation::{interconnect::Bus, render::software::SoftwareRenderer, run::Executor};
+use playastation::{
+    formats::BoxedExeFile, interconnect::Bus, render::software::SoftwareRenderer, run::Executor,
+};
 use tracing::Level;
 
-const LOOPS: usize = 30_000_000;
+const LOOPS: usize = 100_000_000;
 
 #[derive(Parser)]
 struct Args {
-    #[command(subcommand)]
-    command: Command,
-}
-
-#[derive(Subcommand)]
-enum Command {
-    Bios {
-        path: PathBuf,
-    },
-    TestRom {
-        path: PathBuf,
-        #[arg(default_value_t = 0x1_0000)]
-        start_pc: u32,
-    },
+    bios: PathBuf,
+    rom: PathBuf,
 }
 
 fn main() {
@@ -40,21 +30,13 @@ fn main() {
 
     let mut bus = Bus::default();
     let mut executor = Executor::default();
-    let rom_filename = match args.command {
-        Command::TestRom { path, start_pc } => {
-            let prg = fs::read(&path).unwrap();
-            bus.direct_ram()[start_pc as usize..][..prg.len()].copy_from_slice(&prg);
-            executor.cpu.pc = start_pc;
 
-            path.file_name().unwrap().to_os_string()
-        }
-        Command::Bios { path } => {
-            let bios = fs::read(&path).unwrap();
-            bus.bios.clone_from_slice(&bios);
+    let bios = fs::read(&args.bios).unwrap().into_boxed_slice();
+    let rom = fs::read(&args.rom).unwrap().into_boxed_slice();
+    let rom_filename = args.rom.file_name().unwrap().to_os_string();
 
-            path.file_name().unwrap().to_os_string()
-        }
-    };
+    bus.bios.copy_from_slice(&bios);
+    executor.pending_exe = Some(BoxedExeFile::new(rom));
 
     let mut renderer = SoftwareRenderer::default();
     renderer.set_screen_output(Box::new(move |buf, width, height| {

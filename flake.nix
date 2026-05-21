@@ -68,15 +68,12 @@
         formatter = pkgs.nixpkgs-fmt;
 
         packages = {
-          bios = pkgs.callPackage ./rom-tests/bios.nix {
-            inherit bios test-rom-runner;
-          };
-          cpu-tests = pkgs.callPackage ./rom-tests/test-rom.nix {
-            inherit test-rom-runner;
+          cpu-tests = pkgs.callPackage ./rom-tests {
+            inherit test-rom-runner bios;
             test-dir = "${psx-tests}/CPUTest/CPU/";
           };
-          gpu-tests = pkgs.callPackage ./rom-tests/test-rom.nix {
-            inherit test-rom-runner;
+          gpu-tests = pkgs.callPackage ./rom-tests {
+            inherit test-rom-runner bios;
             test-dir = "${psx-tests}/GPU/";
           };
         };
