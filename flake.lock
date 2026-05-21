@@ -13,6 +13,19 @@
         "url": "https://psx.amidog.se/lib/exe/fetch.php?media=psx:download:psxtest_cpu.zip"
       }
     },
+    "amidog-cpx-test-rom": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1388492877,
+        "narHash": "sha256-QgYKuo812yLyZvJ1GFTn5Je7EMUIqyLZ572HJv/fMa4=",
+        "type": "tarball",
+        "url": "https://psx.amidog.se/lib/exe/fetch.php?media=psx:download:psxtest_cpx.zip"
+      },
+      "original": {
+        "type": "tarball",
+        "url": "https://psx.amidog.se/lib/exe/fetch.php?media=psx:download:psxtest_cpx.zip"
+      }
+    },
     "bios": {
       "flake": false,
       "locked": {
@@ -93,6 +106,7 @@
     "root": {
       "inputs": {
         "amidog-cpu-test-rom": "amidog-cpu-test-rom",
+        "amidog-cpx-test-rom": "amidog-cpx-test-rom",
         "bios": "bios",
         "crane": "crane",
         "flake-utils": "flake-utils",

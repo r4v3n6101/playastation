@@ -93,7 +93,9 @@ impl Worker {
     pub fn run(mut self) {
         while let Ok(cmd) = self.cmd_rx.recv() {
             match cmd {
-                Command::DrawRect(_) => {}
+                Command::DrawRect(rect) => {
+                    self.draw_rect(rect);
+                }
                 Command::DrawPolygon(polygon) => match polygon.vertices.len() {
                     len @ ..3 => tracing::debug!(%len, "degenerate polygon"),
                     3 => {
@@ -369,6 +371,39 @@ impl Worker {
 
                 let idx = y as usize * VRAM_WIDTH + x as usize;
                 self.vram[idx] = color;
+            }
+        }
+    }
+
+    #[tracing::instrument(target = "render.software", level = "DEBUG", "draw_rect", skip(self))]
+    fn draw_rect(&mut self, rect: Rect) {
+        let draw_area = (self.draw_area.0, self.draw_area.1);
+        let draw_offset = self.draw_offset;
+
+        let pos = Location {
+            x: rect.location.x + draw_offset.x,
+            y: rect.location.y + draw_offset.y,
+        };
+
+        for j in 0..rect.size.h {
+            for i in 0..rect.size.w {
+                let x = pos.x + i as i16;
+                let y = pos.y + j as i16;
+
+                if x < draw_area.0.x as i16
+                    || x > draw_area.1.x as i16
+                    || y < draw_area.0.y as i16
+                    || y > draw_area.1.y as i16
+                {
+                    continue;
+                }
+
+                let x = x as usize;
+                let y = y as usize;
+                if x < VRAM_WIDTH || y < VRAM_HEIGHT {
+                    self.vram[y * VRAM_WIDTH + x] =
+                        rgb888_to_bgr555(rect.flat_color.r, rect.flat_color.g, rect.flat_color.b);
+                }
             }
         }
     }

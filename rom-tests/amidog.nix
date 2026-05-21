@@ -7,7 +7,7 @@
   test-rom,
 }:
 pkgs.writeShellApplication {
-  name = "rom-cpu-tests";
+  name = "amidog-tests";
 
   text = ''
     mkdir -p output

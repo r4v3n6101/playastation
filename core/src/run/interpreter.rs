@@ -14,35 +14,37 @@ const MULT_HI_LO_LOAD_LATENCY: u64 = 5;
 const DIV_HI_LO_LOAD_LATENCY: u64 = 35;
 
 struct Context<'a> {
+    cpu: &'a mut Cpu,
+    bus: &'a mut Bus,
+    cache: &'a mut PagedCache,
+    block: &'a Block,
+
     result: ExecutionResult,
     hi_lo_latency: u64,
-
-    blk_cache: &'a mut PagedCache,
-    block: &'a Block,
 }
 
-enum StopReason {
+enum BreakReason {
     Exception(Exception),
     SelfModified,
 }
 
-pub fn run(
-    blk_cache: &mut PagedCache,
-    block: &Block,
-    cpu: &mut Cpu,
-    bus: &mut Bus,
-) -> ExecutionResult {
+pub fn run(cache: &mut PagedCache, block: &Block, cpu: &mut Cpu, bus: &mut Bus) -> ExecutionResult {
+    // In case if block is empty
+    let last_pc = cpu.pc;
+    // Branch delay is cancelled (exception) or handled in other block
+    let last_in_delay_slot = false;
     let mut ctx = Context {
+        cpu,
+        bus,
+        cache,
+        block,
+
         result: ExecutionResult {
-            last_pc: cpu.pc,
-            // Branch delay is cancelled (exception) or handled in other block
-            last_in_delay_slot: false,
+            last_pc,
+            last_in_delay_slot,
             ..Default::default()
         },
         hi_lo_latency: 0,
-
-        blk_cache,
-        block,
     };
 
     for ins in &block.ops {
@@ -56,16 +58,16 @@ pub fn run(
                 ctx.result.last_pc = pc;
                 ctx.result.last_in_delay_slot = in_delay_slot;
 
-                let res = execute(&mut ctx, ins, op, cpu, bus);
+                let res = execute(&mut ctx, ins, op);
                 ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(1);
                 ctx.hi_lo_latency = ctx.hi_lo_latency.saturating_sub(1);
 
                 match res {
-                    Err(StopReason::Exception(exc)) => {
+                    Err(BreakReason::Exception(exc)) => {
                         ctx.result.exception.replace(exc);
                         break;
                     }
-                    Err(StopReason::SelfModified) => {
+                    Err(BreakReason::SelfModified) => {
                         break;
                     }
                     _ => {}
@@ -95,13 +97,7 @@ pub fn run(
     ctx.result
 }
 
-fn execute(
-    ctx: &mut Context,
-    ins: u32,
-    op: Opcode,
-    cpu: &mut Cpu,
-    bus: &mut Bus,
-) -> Result<(), StopReason> {
+fn execute(ctx: &mut Context, ins: u32, op: Opcode) -> Result<(), BreakReason> {
     let rs = ((ins >> 21) & 0x1F) as usize;
     let rt = ((ins >> 16) & 0x1F) as usize;
     let rd = ((ins >> 11) & 0x1F) as usize;
@@ -115,176 +111,190 @@ fn execute(
     match op {
         // ALU ops
         Opcode::Add => {
-            cpu.write_gpr(
+            ctx.cpu.write_gpr(
                 rd,
-                cpu.gpr[rs]
+                ctx.cpu.gpr[rs]
                     .cast_signed()
-                    .checked_add(cpu.gpr[rt].cast_signed())
+                    .checked_add(ctx.cpu.gpr[rt].cast_signed())
                     .map(i32::cast_unsigned)
-                    .ok_or(StopReason::Exception(Exception::Overflow))?,
+                    .ok_or(BreakReason::Exception(Exception::Overflow))?,
             );
         }
         Opcode::Addu => {
-            cpu.write_gpr(rd, cpu.gpr[rs].wrapping_add(cpu.gpr[rt]));
+            ctx.cpu
+                .write_gpr(rd, ctx.cpu.gpr[rs].wrapping_add(ctx.cpu.gpr[rt]));
         }
         Opcode::Addi => {
-            cpu.write_gpr(
+            ctx.cpu.write_gpr(
                 rt,
-                cpu.gpr[rs]
+                ctx.cpu.gpr[rs]
                     .cast_signed()
                     .checked_add(imm_sext)
                     .map(i32::cast_unsigned)
-                    .ok_or(StopReason::Exception(Exception::Overflow))?,
+                    .ok_or(BreakReason::Exception(Exception::Overflow))?,
             );
         }
         Opcode::Addiu => {
-            cpu.write_gpr(rt, cpu.gpr[rs].wrapping_add_signed(imm_sext));
+            ctx.cpu
+                .write_gpr(rt, ctx.cpu.gpr[rs].wrapping_add_signed(imm_sext));
         }
         Opcode::Sub => {
-            cpu.write_gpr(
+            ctx.cpu.write_gpr(
                 rd,
-                cpu.gpr[rs]
+                ctx.cpu.gpr[rs]
                     .cast_signed()
-                    .checked_sub(cpu.gpr[rt].cast_signed())
+                    .checked_sub(ctx.cpu.gpr[rt].cast_signed())
                     .map(i32::cast_unsigned)
-                    .ok_or(StopReason::Exception(Exception::Overflow))?,
+                    .ok_or(BreakReason::Exception(Exception::Overflow))?,
             );
         }
         Opcode::Subu => {
-            cpu.write_gpr(rd, cpu.gpr[rs].wrapping_sub(cpu.gpr[rt]));
+            ctx.cpu
+                .write_gpr(rd, ctx.cpu.gpr[rs].wrapping_sub(ctx.cpu.gpr[rt]));
         }
         Opcode::And => {
-            cpu.write_gpr(rd, cpu.gpr[rs] & cpu.gpr[rt]);
+            ctx.cpu.write_gpr(rd, ctx.cpu.gpr[rs] & ctx.cpu.gpr[rt]);
         }
         Opcode::Or => {
-            cpu.write_gpr(rd, cpu.gpr[rs] | cpu.gpr[rt]);
+            ctx.cpu.write_gpr(rd, ctx.cpu.gpr[rs] | ctx.cpu.gpr[rt]);
         }
         Opcode::Xor => {
-            cpu.write_gpr(rd, cpu.gpr[rs] ^ cpu.gpr[rt]);
+            ctx.cpu.write_gpr(rd, ctx.cpu.gpr[rs] ^ ctx.cpu.gpr[rt]);
         }
         Opcode::Nor => {
-            cpu.write_gpr(rd, !(cpu.gpr[rs] | cpu.gpr[rt]));
+            ctx.cpu.write_gpr(rd, !(ctx.cpu.gpr[rs] | ctx.cpu.gpr[rt]));
         }
         Opcode::Slt => {
-            cpu.write_gpr(
+            ctx.cpu.write_gpr(
                 rd,
-                u32::from(cpu.gpr[rs].cast_signed() < cpu.gpr[rt].cast_signed()),
+                u32::from(ctx.cpu.gpr[rs].cast_signed() < ctx.cpu.gpr[rt].cast_signed()),
             );
         }
         Opcode::Sltu => {
-            cpu.write_gpr(rd, u32::from(cpu.gpr[rs] < cpu.gpr[rt]));
+            ctx.cpu
+                .write_gpr(rd, u32::from(ctx.cpu.gpr[rs] < ctx.cpu.gpr[rt]));
         }
         Opcode::Sll => {
-            cpu.write_gpr(rd, cpu.gpr[rt].wrapping_shl(shamt));
+            ctx.cpu.write_gpr(rd, ctx.cpu.gpr[rt].wrapping_shl(shamt));
         }
         Opcode::Srl => {
-            cpu.write_gpr(rd, cpu.gpr[rt].wrapping_shr(shamt));
+            ctx.cpu.write_gpr(rd, ctx.cpu.gpr[rt].wrapping_shr(shamt));
         }
         Opcode::Sra => {
-            cpu.write_gpr(
+            ctx.cpu.write_gpr(
                 rd,
-                cpu.gpr[rt]
+                ctx.cpu.gpr[rt]
                     .cast_signed()
                     .wrapping_shr(shamt)
                     .cast_unsigned(),
             );
         }
         Opcode::Sllv => {
-            cpu.write_gpr(rd, cpu.gpr[rt].wrapping_shl(cpu.gpr[rs] & 0x1F));
+            ctx.cpu
+                .write_gpr(rd, ctx.cpu.gpr[rt].wrapping_shl(ctx.cpu.gpr[rs] & 0x1F));
         }
         Opcode::Srlv => {
-            cpu.write_gpr(rd, cpu.gpr[rt].wrapping_shr(cpu.gpr[rs] & 0x1F));
+            ctx.cpu
+                .write_gpr(rd, ctx.cpu.gpr[rt].wrapping_shr(ctx.cpu.gpr[rs] & 0x1F));
         }
         Opcode::Srav => {
-            cpu.write_gpr(
+            ctx.cpu.write_gpr(
                 rd,
-                cpu.gpr[rt]
+                ctx.cpu.gpr[rt]
                     .cast_signed()
-                    .wrapping_shr(cpu.gpr[rs] & 0x1F)
+                    .wrapping_shr(ctx.cpu.gpr[rs] & 0x1F)
                     .cast_unsigned(),
             );
         }
         Opcode::Slti => {
-            cpu.write_gpr(rt, u32::from(cpu.gpr[rs].cast_signed() < imm_sext));
+            ctx.cpu
+                .write_gpr(rt, u32::from(ctx.cpu.gpr[rs].cast_signed() < imm_sext));
         }
         Opcode::Sltiu => {
-            cpu.write_gpr(rt, u32::from(cpu.gpr[rs] < imm_sext.cast_unsigned()));
+            ctx.cpu
+                .write_gpr(rt, u32::from(ctx.cpu.gpr[rs] < imm_sext.cast_unsigned()));
         }
         Opcode::Andi => {
-            cpu.write_gpr(rt, cpu.gpr[rs] & imm);
+            ctx.cpu.write_gpr(rt, ctx.cpu.gpr[rs] & imm);
         }
         Opcode::Ori => {
-            cpu.write_gpr(rt, cpu.gpr[rs] | imm);
+            ctx.cpu.write_gpr(rt, ctx.cpu.gpr[rs] | imm);
         }
         Opcode::Xori => {
-            cpu.write_gpr(rt, cpu.gpr[rs] ^ imm);
+            ctx.cpu.write_gpr(rt, ctx.cpu.gpr[rs] ^ imm);
         }
         Opcode::Lui => {
-            cpu.write_gpr(rt, imm << 16);
+            ctx.cpu.write_gpr(rt, imm << 16);
         }
 
         // Loads
         Opcode::Lw => {
             pending_load = PendingLoad {
                 dest: rt,
-                value: cpu
-                    .read_bus(bus, cpu.gpr[rs].wrapping_add_signed(imm_sext))
+                value: ctx
+                    .cpu
+                    .read_bus(ctx.bus, ctx.cpu.gpr[rs].wrapping_add_signed(imm_sext))
                     .map(u32::from_le_bytes)
-                    .map_err(StopReason::Exception)?,
+                    .map_err(BreakReason::Exception)?,
             };
         }
         Opcode::Lh => {
             pending_load = PendingLoad {
                 dest: rt,
-                value: cpu
-                    .read_bus(bus, cpu.gpr[rs].wrapping_add_signed(imm_sext))
+                value: ctx
+                    .cpu
+                    .read_bus(ctx.bus, ctx.cpu.gpr[rs].wrapping_add_signed(imm_sext))
                     .map(i16::from_le_bytes)
                     .map(i32::from)
                     .map(i32::cast_unsigned)
-                    .map_err(StopReason::Exception)?,
+                    .map_err(BreakReason::Exception)?,
             };
         }
         Opcode::Lhu => {
             pending_load = PendingLoad {
                 dest: rt,
-                value: cpu
-                    .read_bus(bus, cpu.gpr[rs].wrapping_add_signed(imm_sext))
+                value: ctx
+                    .cpu
+                    .read_bus(ctx.bus, ctx.cpu.gpr[rs].wrapping_add_signed(imm_sext))
                     .map(u16::from_le_bytes)
                     .map(u32::from)
-                    .map_err(StopReason::Exception)?,
+                    .map_err(BreakReason::Exception)?,
             };
         }
         Opcode::Lb => {
             pending_load = PendingLoad {
                 dest: rt,
-                value: cpu
-                    .read_bus(bus, cpu.gpr[rs].wrapping_add_signed(imm_sext))
+                value: ctx
+                    .cpu
+                    .read_bus(ctx.bus, ctx.cpu.gpr[rs].wrapping_add_signed(imm_sext))
                     .map(i8::from_le_bytes)
                     .map(i32::from)
                     .map(i32::cast_unsigned)
-                    .map_err(StopReason::Exception)?,
+                    .map_err(BreakReason::Exception)?,
             };
         }
         Opcode::Lbu => {
             pending_load = PendingLoad {
                 dest: rt,
-                value: cpu
-                    .read_bus(bus, cpu.gpr[rs].wrapping_add_signed(imm_sext))
+                value: ctx
+                    .cpu
+                    .read_bus(ctx.bus, ctx.cpu.gpr[rs].wrapping_add_signed(imm_sext))
                     .map(u8::from_le_bytes)
                     .map(u32::from)
-                    .map_err(StopReason::Exception)?,
+                    .map_err(BreakReason::Exception)?,
             };
         }
         Opcode::Lwl => {
-            let addr = cpu.gpr[rs].wrapping_add_signed(imm_sext);
-            let word = cpu
-                .read_bus(bus, addr & !3)
+            let addr = ctx.cpu.gpr[rs].wrapping_add_signed(imm_sext);
+            let word = ctx
+                .cpu
+                .read_bus(ctx.bus, addr & !3)
                 .map(u32::from_le_bytes)
-                .map_err(StopReason::Exception)?;
-            let old = if rt == cpu.pending_load.dest {
-                cpu.pending_load.value
+                .map_err(BreakReason::Exception)?;
+            let old = if rt == ctx.cpu.pending_load.dest {
+                ctx.cpu.pending_load.value
             } else {
-                cpu.gpr[rt]
+                ctx.cpu.gpr[rt]
             };
 
             pending_load = PendingLoad {
@@ -299,15 +309,16 @@ fn execute(
             };
         }
         Opcode::Lwr => {
-            let addr = cpu.gpr[rs].wrapping_add_signed(imm_sext);
-            let word = cpu
-                .read_bus(bus, addr & !3)
+            let addr = ctx.cpu.gpr[rs].wrapping_add_signed(imm_sext);
+            let word = ctx
+                .cpu
+                .read_bus(ctx.bus, addr & !3)
                 .map(u32::from_le_bytes)
-                .map_err(StopReason::Exception)?;
-            let old = if rt == cpu.pending_load.dest {
-                cpu.pending_load.value
+                .map_err(BreakReason::Exception)?;
+            let old = if rt == ctx.cpu.pending_load.dest {
+                ctx.cpu.pending_load.value
             } else {
-                cpu.gpr[rt]
+                ctx.cpu.gpr[rt]
             };
 
             pending_load = PendingLoad {
@@ -324,69 +335,76 @@ fn execute(
 
         // Ignore writes if IsC=1
         Opcode::Sw | Opcode::Sh | Opcode::Sb | Opcode::Swl | Opcode::Swr
-            if cpu.cop0.status().isc() => {}
+            if ctx.cpu.cop0.status().isc() => {}
 
         // Stores
         Opcode::Sw => {
-            let vaddr = cpu.gpr[rs].wrapping_add_signed(imm_sext);
-            cpu.write_bus(bus, vaddr, cpu.gpr[rt].to_le_bytes())
-                .map_err(StopReason::Exception)?;
+            let vaddr = ctx.cpu.gpr[rs].wrapping_add_signed(imm_sext);
+            ctx.cpu
+                .write_bus(ctx.bus, vaddr, ctx.cpu.gpr[rt].to_le_bytes())
+                .map_err(BreakReason::Exception)?;
             written_vaddr = Some(vaddr);
         }
         Opcode::Sh => {
-            let vaddr = cpu.gpr[rs].wrapping_add_signed(imm_sext);
-            cpu.write_bus(bus, vaddr, (cpu.gpr[rt] as u16).to_le_bytes())
-                .map_err(StopReason::Exception)?;
+            let vaddr = ctx.cpu.gpr[rs].wrapping_add_signed(imm_sext);
+            ctx.cpu
+                .write_bus(ctx.bus, vaddr, (ctx.cpu.gpr[rt] as u16).to_le_bytes())
+                .map_err(BreakReason::Exception)?;
             written_vaddr = Some(vaddr);
         }
         Opcode::Sb => {
-            let vaddr = cpu.gpr[rs].wrapping_add_signed(imm_sext);
-            cpu.write_bus(bus, vaddr, (cpu.gpr[rt] as u8).to_le_bytes())
-                .map_err(StopReason::Exception)?;
+            let vaddr = ctx.cpu.gpr[rs].wrapping_add_signed(imm_sext);
+            ctx.cpu
+                .write_bus(ctx.bus, vaddr, (ctx.cpu.gpr[rt] as u8).to_le_bytes())
+                .map_err(BreakReason::Exception)?;
             written_vaddr = Some(vaddr);
         }
         Opcode::Swl => {
-            let vaddr = cpu.gpr[rs].wrapping_add_signed(imm_sext);
-            let word = cpu
-                .read_bus(bus, vaddr & !3)
+            let vaddr = ctx.cpu.gpr[rs].wrapping_add_signed(imm_sext);
+            let word = ctx
+                .cpu
+                .read_bus(ctx.bus, vaddr & !3)
                 .map(u32::from_le_bytes)
-                .map_err(StopReason::Exception)?;
+                .map_err(BreakReason::Exception)?;
 
             let val = match vaddr & 3 {
-                0 => (word & 0xFFFF_FF00) | (cpu.gpr[rt] >> 24),
-                1 => (word & 0xFFFF_0000) | (cpu.gpr[rt] >> 16),
-                2 => (word & 0xFF00_0000) | (cpu.gpr[rt] >> 8),
-                3 => cpu.gpr[rt],
+                0 => (word & 0xFFFF_FF00) | (ctx.cpu.gpr[rt] >> 24),
+                1 => (word & 0xFFFF_0000) | (ctx.cpu.gpr[rt] >> 16),
+                2 => (word & 0xFF00_0000) | (ctx.cpu.gpr[rt] >> 8),
+                3 => ctx.cpu.gpr[rt],
                 _ => unreachable!(),
             };
 
-            cpu.write_bus(bus, vaddr & !3, val.to_le_bytes())
-                .map_err(StopReason::Exception)?;
+            ctx.cpu
+                .write_bus(ctx.bus, vaddr & !3, val.to_le_bytes())
+                .map_err(BreakReason::Exception)?;
             written_vaddr = Some(vaddr & !3);
         }
         Opcode::Swr => {
-            let vaddr = cpu.gpr[rs].wrapping_add_signed(imm_sext);
-            let word = cpu
-                .read_bus(bus, vaddr & !3)
+            let vaddr = ctx.cpu.gpr[rs].wrapping_add_signed(imm_sext);
+            let word = ctx
+                .cpu
+                .read_bus(ctx.bus, vaddr & !3)
                 .map(u32::from_le_bytes)
-                .map_err(StopReason::Exception)?;
+                .map_err(BreakReason::Exception)?;
 
             let val = match vaddr & 3 {
-                0 => cpu.gpr[rt],
-                1 => (word & 0x0000_00FF) | (cpu.gpr[rt] << 8),
-                2 => (word & 0x0000_FFFF) | (cpu.gpr[rt] << 16),
-                3 => (word & 0x00FF_FFFF) | (cpu.gpr[rt] << 24),
+                0 => ctx.cpu.gpr[rt],
+                1 => (word & 0x0000_00FF) | (ctx.cpu.gpr[rt] << 8),
+                2 => (word & 0x0000_FFFF) | (ctx.cpu.gpr[rt] << 16),
+                3 => (word & 0x00FF_FFFF) | (ctx.cpu.gpr[rt] << 24),
                 _ => unreachable!(),
             };
 
-            cpu.write_bus(bus, vaddr & !3, val.to_le_bytes())
-                .map_err(StopReason::Exception)?;
+            ctx.cpu
+                .write_bus(ctx.bus, vaddr & !3, val.to_le_bytes())
+                .map_err(BreakReason::Exception)?;
             written_vaddr = Some(vaddr & !3);
         }
 
         // Branches
         Opcode::Beq => {
-            ctx.result.jump = cpu.gpr[rs] == cpu.gpr[rt];
+            ctx.result.jump = ctx.cpu.gpr[rs] == ctx.cpu.gpr[rt];
             ctx.result.jump_target = ctx
                 .result
                 .last_pc
@@ -394,7 +412,7 @@ fn execute(
                 .wrapping_add_signed(imm_sext << 2);
         }
         Opcode::Bne => {
-            ctx.result.jump = cpu.gpr[rs] != cpu.gpr[rt];
+            ctx.result.jump = ctx.cpu.gpr[rs] != ctx.cpu.gpr[rt];
             ctx.result.jump_target = ctx
                 .result
                 .last_pc
@@ -402,7 +420,7 @@ fn execute(
                 .wrapping_add_signed(imm_sext << 2);
         }
         Opcode::Bgez => {
-            ctx.result.jump = cpu.gpr[rs].cast_signed() >= 0;
+            ctx.result.jump = ctx.cpu.gpr[rs].cast_signed() >= 0;
             ctx.result.jump_target = ctx
                 .result
                 .last_pc
@@ -410,7 +428,7 @@ fn execute(
                 .wrapping_add_signed(imm_sext << 2);
         }
         Opcode::Blez => {
-            ctx.result.jump = cpu.gpr[rs].cast_signed() <= 0;
+            ctx.result.jump = ctx.cpu.gpr[rs].cast_signed() <= 0;
             ctx.result.jump_target = ctx
                 .result
                 .last_pc
@@ -418,7 +436,7 @@ fn execute(
                 .wrapping_add_signed(imm_sext << 2);
         }
         Opcode::Bgtz => {
-            ctx.result.jump = cpu.gpr[rs].cast_signed() > 0;
+            ctx.result.jump = ctx.cpu.gpr[rs].cast_signed() > 0;
             ctx.result.jump_target = ctx
                 .result
                 .last_pc
@@ -426,7 +444,7 @@ fn execute(
                 .wrapping_add_signed(imm_sext << 2);
         }
         Opcode::Bltz => {
-            ctx.result.jump = cpu.gpr[rs].cast_signed() < 0;
+            ctx.result.jump = ctx.cpu.gpr[rs].cast_signed() < 0;
             ctx.result.jump_target = ctx
                 .result
                 .last_pc
@@ -434,24 +452,26 @@ fn execute(
                 .wrapping_add_signed(imm_sext << 2);
         }
         Opcode::Bgezal => {
-            ctx.result.jump = cpu.gpr[rs].cast_signed() >= 0;
+            ctx.result.jump = ctx.cpu.gpr[rs].cast_signed() >= 0;
             ctx.result.jump_target = ctx
                 .result
                 .last_pc
                 .wrapping_add(4)
                 .wrapping_add_signed(imm_sext << 2);
 
-            cpu.write_gpr(Cpu::DEFAULT_LINK_REG, ctx.result.last_pc.wrapping_add(8));
+            ctx.cpu
+                .write_gpr(Cpu::DEFAULT_LINK_REG, ctx.result.last_pc.wrapping_add(8));
         }
         Opcode::Bltzal => {
-            ctx.result.jump = cpu.gpr[rs].cast_signed() < 0;
+            ctx.result.jump = ctx.cpu.gpr[rs].cast_signed() < 0;
             ctx.result.jump_target = ctx
                 .result
                 .last_pc
                 .wrapping_add(4)
                 .wrapping_add_signed(imm_sext << 2);
 
-            cpu.write_gpr(Cpu::DEFAULT_LINK_REG, ctx.result.last_pc.wrapping_add(8));
+            ctx.cpu
+                .write_gpr(Cpu::DEFAULT_LINK_REG, ctx.result.last_pc.wrapping_add(8));
         }
 
         // Jumps
@@ -465,43 +485,44 @@ fn execute(
             ctx.result.jump_target =
                 (ctx.result.last_pc.wrapping_add(4) & 0xF000_0000) | (target << 2);
 
-            cpu.write_gpr(Cpu::DEFAULT_LINK_REG, ctx.result.last_pc.wrapping_add(8));
+            ctx.cpu
+                .write_gpr(Cpu::DEFAULT_LINK_REG, ctx.result.last_pc.wrapping_add(8));
         }
         Opcode::Jr => {
             ctx.result.jump = true;
-            ctx.result.jump_target = cpu.gpr[rs];
+            ctx.result.jump_target = ctx.cpu.gpr[rs];
         }
         Opcode::Jalr => {
             ctx.result.jump = true;
-            ctx.result.jump_target = cpu.gpr[rs];
+            ctx.result.jump_target = ctx.cpu.gpr[rs];
 
-            cpu.write_gpr(rd, ctx.result.last_pc.wrapping_add(8));
+            ctx.cpu.write_gpr(rd, ctx.result.last_pc.wrapping_add(8));
         }
 
         // MulDiv
         Opcode::Mult => {
-            let a = i64::from(cpu.gpr[rs].cast_signed());
-            let b = i64::from(cpu.gpr[rt].cast_signed());
+            let a = i64::from(ctx.cpu.gpr[rs].cast_signed());
+            let b = i64::from(ctx.cpu.gpr[rt].cast_signed());
             let res = (a * b).cast_unsigned();
 
-            cpu.hi = (res >> 32) as u32;
-            cpu.lo = res as u32;
+            ctx.cpu.hi = (res >> 32) as u32;
+            ctx.cpu.lo = res as u32;
 
             ctx.hi_lo_latency = MULT_HI_LO_LOAD_LATENCY;
         }
         Opcode::Multu => {
-            let a = u64::from(cpu.gpr[rs]);
-            let b = u64::from(cpu.gpr[rt]);
+            let a = u64::from(ctx.cpu.gpr[rs]);
+            let b = u64::from(ctx.cpu.gpr[rt]);
             let res = a * b;
 
-            cpu.hi = (res >> 32) as u32;
-            cpu.lo = res as u32;
+            ctx.cpu.hi = (res >> 32) as u32;
+            ctx.cpu.lo = res as u32;
 
             ctx.hi_lo_latency = MULT_HI_LO_LOAD_LATENCY;
         }
         Opcode::Div => {
-            let a = cpu.gpr[rs].cast_signed();
-            let b = cpu.gpr[rt].cast_signed();
+            let a = ctx.cpu.gpr[rs].cast_signed();
+            let b = ctx.cpu.gpr[rt].cast_signed();
 
             let (hi, lo) = if b == 0 {
                 (a.cast_unsigned(), if a < 0 { 1 } else { 0xFFFF_FFFF })
@@ -511,75 +532,75 @@ fn execute(
                 ((a % b).cast_unsigned(), (a / b).cast_unsigned())
             };
 
-            cpu.hi = hi;
-            cpu.lo = lo;
+            ctx.cpu.hi = hi;
+            ctx.cpu.lo = lo;
 
             ctx.hi_lo_latency = DIV_HI_LO_LOAD_LATENCY;
         }
         Opcode::Divu => {
-            let a = cpu.gpr[rs];
-            let b = cpu.gpr[rt];
+            let a = ctx.cpu.gpr[rs];
+            let b = ctx.cpu.gpr[rt];
             let (hi, lo) = if b == 0 {
                 (a, 0xFFFF_FFFF)
             } else {
                 (a % b, a / b)
             };
 
-            cpu.hi = hi;
-            cpu.lo = lo;
+            ctx.cpu.hi = hi;
+            ctx.cpu.lo = lo;
 
             ctx.hi_lo_latency = DIV_HI_LO_LOAD_LATENCY;
         }
 
         // From/to copies
         Opcode::Mfhi => {
-            cpu.write_gpr(rd, cpu.hi);
+            ctx.cpu.write_gpr(rd, ctx.cpu.hi);
 
             ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(ctx.hi_lo_latency);
             ctx.hi_lo_latency = 0;
         }
         Opcode::Mflo => {
-            cpu.write_gpr(rd, cpu.lo);
+            ctx.cpu.write_gpr(rd, ctx.cpu.lo);
 
             ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(ctx.hi_lo_latency);
             ctx.hi_lo_latency = 0;
         }
         Opcode::Mtlo => {
-            cpu.lo = cpu.gpr[rs];
+            ctx.cpu.lo = ctx.cpu.gpr[rs];
         }
         Opcode::Mthi => {
-            cpu.hi = cpu.gpr[rs];
+            ctx.cpu.hi = ctx.cpu.gpr[rs];
         }
         Opcode::Mfc0 => {
             pending_load = PendingLoad {
                 dest: rt,
-                value: cpu.cop0.regs[rd],
+                value: ctx.cpu.cop0.regs[rd],
             };
         }
         Opcode::Mtc0 => {
-            cpu.cop0.regs[rd] = cpu.gpr[rt];
+            ctx.cpu.cop0.regs[rd] = ctx.cpu.gpr[rt];
         }
         Opcode::Cfc0 => unimplemented!(),
         Opcode::Ctc0 => unimplemented!(),
 
         // Return state before exception
         Opcode::Rfe => {
-            cpu.cop0.exception_leave();
+            ctx.cpu.cop0.exception_leave();
         }
 
         // Exceptions
-        Opcode::Break => return Err(StopReason::Exception(Exception::Break)),
-        Opcode::Syscall => return Err(StopReason::Exception(Exception::Syscall)),
+        Opcode::Break => return Err(BreakReason::Exception(Exception::Break)),
+        Opcode::Syscall => return Err(BreakReason::Exception(Exception::Syscall)),
     }
 
-    cpu.write_delayed(pending_load);
+    ctx.cpu.write_delayed(pending_load);
 
     if let Some(vaddr) = written_vaddr
-        && let TranslationResult::PhysAddr(paddr) = cpu.mmu.translate_addr(vaddr)
-        && let Some(invalidated_page) = ctx.blk_cache.invalidate_page(paddr)
+        && let TranslationResult::PhysAddr(paddr) = ctx.cpu.mmu.translate_addr(vaddr)
+        && let Some(invalidated_page) = ctx.cache.invalidate_page(paddr)
         && ctx.block.pages.contains(&invalidated_page)
     {
-        return Err(StopReason::SelfModified);
+        return Err(BreakReason::SelfModified);
     }
 
     Ok(())

@@ -100,6 +100,7 @@ impl Executor {
                 ispb,
                 ispoff,
                 ram_dest,
+                text,
                 ..
             } = exe.header;
             let prog = &exe.prog;
@@ -116,6 +117,23 @@ impl Executor {
                 self.cpu.gpr[29] = ispb.get() + ispoff.get();
                 self.cpu.gpr[30] = self.cpu.gpr[29];
             }
+
+            let text = text
+                .iter()
+                .copied()
+                .take_while(|&c| c != 0)
+                .map(|c| c as char)
+                .collect::<String>();
+            tracing::info!(
+                initial_pc=%format_args!("{ipc:#X}"),
+                initial_gpr28=%format_args!("{igp:#X}"),
+                initial_sp_base=%format_args!("{ispb:#X}"),
+                initial_sp_offset=%format_args!("{ispoff:#X}"),
+                ram_dest=%format_args!("{ram_dest:#X}"),
+                file_size=%format_args!("{file_size:#X}",),
+                %text,
+                "PS-EXE loaded"
+            );
         }
     }
 

@@ -6,7 +6,7 @@
   test-dir,
 }:
 pkgs.writeShellApplication {
-  name = "rom-cpu-tests";
+  name = "peter-lemon-tests";
 
   text = ''
     mkdir -p output

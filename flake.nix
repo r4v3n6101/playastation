@@ -24,6 +24,11 @@
       url = "tarball+https://psx.amidog.se/lib/exe/fetch.php?media=psx:download:psxtest_cpu.zip";
       flake = false;
     };
+
+    amidog-cpx-test-rom = {
+      url = "tarball+https://psx.amidog.se/lib/exe/fetch.php?media=psx:download:psxtest_cpx.zip";
+      flake = false;
+    };
   };
 
   outputs =
@@ -37,6 +42,7 @@
       bios,
       peter-lemon-test-roms,
       amidog-cpu-test-rom,
+      amidog-cpx-test-rom,
     }:
     flake-utils.lib.eachDefaultSystem (
       system:
@@ -75,7 +81,7 @@
       {
         formatter = pkgs.nixpkgs-fmt;
 
-        packages = {
+        packages = rec {
           peter-lemon-cpu-tests = pkgs.callPackage ./rom-tests/peter-lemon.nix {
             inherit test-rom-runner bios;
             test-dir = "${peter-lemon-test-roms}/CPUTest/CPU/";
@@ -87,6 +93,21 @@
           amidog-cpu-tests = pkgs.callPackage ./rom-tests/amidog.nix {
             inherit test-rom-runner bios;
             test-rom = "${amidog-cpu-test-rom}/psxtest_cpu.exe";
+          };
+          amidog-cpx-tests = pkgs.callPackage ./rom-tests/amidog.nix {
+            inherit test-rom-runner bios;
+            test-rom = "${amidog-cpx-test-rom}/psxtest_cpx.exe";
+          };
+
+          rom-tests = pkgs.writeShellApplication {
+            name = "rom-tests";
+
+            text = ''
+              ${pkgs.lib.getExe peter-lemon-cpu-tests}
+              ${pkgs.lib.getExe peter-lemon-gpu-tests}
+              ${pkgs.lib.getExe amidog-cpu-tests}
+              ${pkgs.lib.getExe amidog-cpx-tests}
+            '';
           };
         };
 
