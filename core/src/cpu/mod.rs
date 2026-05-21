@@ -67,9 +67,13 @@ impl Cpu {
         self.gpr[0] = 0;
     }
 
-    pub fn write_delayed(&mut self, pending_load: PendingLoad) {
-        let pending_load = mem::replace(&mut self.pending_load, pending_load);
-        self.gpr[pending_load.dest] = pending_load.value;
+    pub fn write_delayed(&mut self, new_pending_load: PendingLoad) {
+        let old_pending_load = mem::replace(&mut self.pending_load, new_pending_load);
+
+        if old_pending_load.dest != new_pending_load.dest {
+            self.gpr[old_pending_load.dest] = old_pending_load.value;
+        }
+
         self.gpr[0] = 0;
     }
 

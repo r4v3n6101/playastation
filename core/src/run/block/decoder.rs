@@ -44,6 +44,7 @@ pub fn fetch_and_decode_block(mut limit: usize, cpu: &mut Cpu, bus: &mut Bus) ->
         let Some(op) = Opcode::decode(ins) else {
             tracing::warn!(
                 pc=%format_args!("{pc:#X}"),
+                ins=%format_args!("{ins:#X}"),
                 "ins decode failed"
             );
             output.push(Operation::Break {

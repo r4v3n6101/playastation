@@ -1,3 +1,4 @@
+# Author and source: https://github.com/PeterLemon/PSX/
 {
   pkgs,
   test-rom-runner,

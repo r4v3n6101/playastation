@@ -45,6 +45,7 @@ pub enum Region {
 pub struct Bus {
     pub bios: Vec<u8>,
     pub ram: Vec<u8>,
+    pub scratchpad: Vec<u8>,
 
     // Devices
     pub int_ctrl: InterruptController,
@@ -57,10 +58,12 @@ impl Default for Bus {
     fn default() -> Self {
         let bios = alloc::vec![0; BIOS_SIZE];
         let ram = alloc::vec![0; RAM_SIZE];
+        let scratchpad = alloc::vec![0; SCRATCHPAD.len()];
 
         Self {
             bios,
             ram,
+            scratchpad,
 
             int_ctrl: InterruptController::default(),
             dma_ctrl: DmaController::default(),
@@ -96,7 +99,9 @@ impl Bus {
             Region::Bios => {
                 bytes.copy_from_slice(&self.bios[(paddr - BIOS.start) as usize..][..N]);
             }
-            Region::Scratchpad => {}
+            Region::Scratchpad => {
+                bytes.copy_from_slice(&self.scratchpad[(paddr - SCRATCHPAD.start) as usize..][..N]);
+            }
             Region::Expansion1 => {}
             Region::Expansion2 => {}
             Region::Int => {
@@ -157,7 +162,9 @@ impl Bus {
             Region::Bios => {
                 self.bios[(paddr - BIOS.start) as usize..][..N].copy_from_slice(&value);
             }
-            Region::Scratchpad => {}
+            Region::Scratchpad => {
+                self.scratchpad[(paddr - SCRATCHPAD.start) as usize..][..N].copy_from_slice(&value);
+            }
             Region::Expansion1 => {}
             Region::Expansion2 => {}
             Region::Int => {

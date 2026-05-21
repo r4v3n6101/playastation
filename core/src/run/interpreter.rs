@@ -434,24 +434,24 @@ fn execute(
                 .wrapping_add_signed(imm_sext << 2);
         }
         Opcode::Bgezal => {
-            cpu.write_gpr(Cpu::DEFAULT_LINK_REG, ctx.result.last_pc.wrapping_add(8));
-
             ctx.result.jump = cpu.gpr[rs].cast_signed() >= 0;
             ctx.result.jump_target = ctx
                 .result
                 .last_pc
                 .wrapping_add(4)
                 .wrapping_add_signed(imm_sext << 2);
+
+            cpu.write_gpr(Cpu::DEFAULT_LINK_REG, ctx.result.last_pc.wrapping_add(8));
         }
         Opcode::Bltzal => {
-            cpu.write_gpr(Cpu::DEFAULT_LINK_REG, ctx.result.last_pc.wrapping_add(8));
-
             ctx.result.jump = cpu.gpr[rs].cast_signed() < 0;
             ctx.result.jump_target = ctx
                 .result
                 .last_pc
                 .wrapping_add(4)
                 .wrapping_add_signed(imm_sext << 2);
+
+            cpu.write_gpr(Cpu::DEFAULT_LINK_REG, ctx.result.last_pc.wrapping_add(8));
         }
 
         // Jumps
@@ -461,21 +461,21 @@ fn execute(
                 (ctx.result.last_pc.wrapping_add(4) & 0xF000_0000) | (target << 2);
         }
         Opcode::Jal => {
-            cpu.write_gpr(Cpu::DEFAULT_LINK_REG, ctx.result.last_pc.wrapping_add(8));
-
             ctx.result.jump = true;
             ctx.result.jump_target =
                 (ctx.result.last_pc.wrapping_add(4) & 0xF000_0000) | (target << 2);
+
+            cpu.write_gpr(Cpu::DEFAULT_LINK_REG, ctx.result.last_pc.wrapping_add(8));
         }
         Opcode::Jr => {
             ctx.result.jump = true;
             ctx.result.jump_target = cpu.gpr[rs];
         }
         Opcode::Jalr => {
-            cpu.write_gpr(rd, ctx.result.last_pc.wrapping_add(8));
-
             ctx.result.jump = true;
             ctx.result.jump_target = cpu.gpr[rs];
+
+            cpu.write_gpr(rd, ctx.result.last_pc.wrapping_add(8));
         }
 
         // MulDiv
@@ -503,9 +503,10 @@ fn execute(
             let a = cpu.gpr[rs].cast_signed();
             let b = cpu.gpr[rt].cast_signed();
 
-            // Overflow or div by 0
-            let (hi, lo) = if (b == 0) || (a.cast_unsigned() == 0x8000_0000 && b == -1) {
-                (a.cast_unsigned(), b.cast_unsigned())
+            let (hi, lo) = if b == 0 {
+                (a.cast_unsigned(), if a < 0 { 1 } else { 0xFFFF_FFFF })
+            } else if a.cast_unsigned() == 0x8000_0000 && b.cast_unsigned() == 0xFFFF_FFFF {
+                (0, 0x8000_0000)
             } else {
                 ((a % b).cast_unsigned(), (a / b).cast_unsigned())
             };
@@ -518,7 +519,11 @@ fn execute(
         Opcode::Divu => {
             let a = cpu.gpr[rs];
             let b = cpu.gpr[rt];
-            let (hi, lo) = if b == 0 { (a, b) } else { (a % b, a / b) };
+            let (hi, lo) = if b == 0 {
+                (a, 0xFFFF_FFFF)
+            } else {
+                (a % b, a / b)
+            };
 
             cpu.hi = hi;
             cpu.lo = lo;

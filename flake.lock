@@ -1,5 +1,30 @@
 {
   "nodes": {
+    "amidog-cpu-test-rom": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1391784307,
+        "narHash": "sha256-QuuiP4AIfDlJEb4kZlofUGxENeML9qaLaBoAT84lsAg=",
+        "type": "tarball",
+        "url": "https://psx.amidog.se/lib/exe/fetch.php?media=psx:download:psxtest_cpu.zip"
+      },
+      "original": {
+        "type": "tarball",
+        "url": "https://psx.amidog.se/lib/exe/fetch.php?media=psx:download:psxtest_cpu.zip"
+      }
+    },
+    "bios": {
+      "flake": false,
+      "locked": {
+        "narHash": "sha256-7JdZ4N9k5e/LUm8Sx5QlnOr1yRxpXqol90lyqLosIgE=",
+        "type": "file",
+        "url": "https://github.com/Abdess/retrobios/raw/refs/heads/main/bios/Sony/PlayStation/scph1001.bin"
+      },
+      "original": {
+        "type": "file",
+        "url": "https://github.com/Abdess/retrobios/raw/refs/heads/main/bios/Sony/PlayStation/scph1001.bin"
+      }
+    },
     "crane": {
       "locked": {
         "lastModified": 1778106249,
@@ -49,7 +74,7 @@
         "type": "github"
       }
     },
-    "psx-tests": {
+    "peter-lemon-test-roms": {
       "flake": false,
       "locked": {
         "lastModified": 1768939783,
@@ -67,10 +92,12 @@
     },
     "root": {
       "inputs": {
+        "amidog-cpu-test-rom": "amidog-cpu-test-rom",
+        "bios": "bios",
         "crane": "crane",
         "flake-utils": "flake-utils",
         "nixpkgs": "nixpkgs",
-        "psx-tests": "psx-tests",
+        "peter-lemon-test-roms": "peter-lemon-test-roms",
         "rust-overlay": "rust-overlay"
       }
     },

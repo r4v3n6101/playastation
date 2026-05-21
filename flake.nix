@@ -10,8 +10,18 @@
     };
     crane.url = "github:ipetkov/crane";
 
-    psx-tests = {
+    bios = {
+      url = "https://github.com/Abdess/retrobios/raw/refs/heads/main/bios/Sony/PlayStation/scph1001.bin";
+      flake = false;
+    };
+
+    peter-lemon-test-roms = {
       url = "github:PeterLemon/PSX";
+      flake = false;
+    };
+
+    amidog-cpu-test-rom = {
+      url = "tarball+https://psx.amidog.se/lib/exe/fetch.php?media=psx:download:psxtest_cpu.zip";
       flake = false;
     };
   };
@@ -23,7 +33,10 @@
       flake-utils,
       rust-overlay,
       crane,
-      psx-tests,
+
+      bios,
+      peter-lemon-test-roms,
+      amidog-cpu-test-rom,
     }:
     flake-utils.lib.eachDefaultSystem (
       system:
@@ -58,23 +71,22 @@
             inherit src strictDeps;
           };
         };
-
-        bios = pkgs.fetchurl {
-          url = "https://github.com/Abdess/retrobios/raw/refs/heads/main/bios/Sony/PlayStation/scph1001.bin";
-          hash = "sha256-ca+U0eR6aMEej9ufg2gEBgFRSkKlo5nNpIx9O/8emdM=";
-        };
       in
       {
         formatter = pkgs.nixpkgs-fmt;
 
         packages = {
-          cpu-tests = pkgs.callPackage ./rom-tests {
+          peter-lemon-cpu-tests = pkgs.callPackage ./rom-tests/peter-lemon.nix {
             inherit test-rom-runner bios;
-            test-dir = "${psx-tests}/CPUTest/CPU/";
+            test-dir = "${peter-lemon-test-roms}/CPUTest/CPU/";
           };
-          gpu-tests = pkgs.callPackage ./rom-tests {
+          peter-lemon-gpu-tests = pkgs.callPackage ./rom-tests/peter-lemon.nix {
             inherit test-rom-runner bios;
-            test-dir = "${psx-tests}/GPU/";
+            test-dir = "${peter-lemon-test-roms}/GPU/";
+          };
+          amidog-cpu-tests = pkgs.callPackage ./rom-tests/amidog.nix {
+            inherit test-rom-runner bios;
+            test-rom = "${amidog-cpu-test-rom}/psxtest_cpu.exe";
           };
         };
 

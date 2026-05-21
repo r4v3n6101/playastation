@@ -143,13 +143,38 @@ impl Opcode {
         let rs = ((ins >> 21) & 0x1F) as usize;
         let rt = ((ins >> 16) & 0x1F) as usize;
         let funct = ins & 0x3F;
-        let tag = match opcode {
-            0x00 => ((funct as u16) << 8) | opcode,
-            0x01 => ((rt as u16) << 8) | opcode,
-            0x10 => ((rs as u16) << 8) | opcode,
-            _ => opcode,
-        };
-        Self::from_repr(tag)
+
+        match opcode {
+            // SPECIAL
+            0x00 => {
+                let tag = ((funct as u16) << 8) | opcode;
+                Self::from_repr(tag)
+            }
+
+            // REGIMM, including PSX undocumented aliases
+            0x01 => {
+                let rt = rt as u16;
+
+                let is_bgez = (rt & 1) != 0;
+                let is_link = ((rt >> 1) & 0x0F) == 0x08;
+
+                Some(match (is_link, is_bgez) {
+                    (false, false) => Self::Bltz,
+                    (false, true) => Self::Bgez,
+                    (true, false) => Self::Bltzal,
+                    (true, true) => Self::Bgezal,
+                })
+            }
+
+            // COP0
+            0x10 => {
+                let tag = ((rs as u16) << 8) | opcode;
+                Self::from_repr(tag)
+            }
+
+            // Primary opcode
+            _ => Self::from_repr(opcode),
+        }
     }
 
     pub fn has_branch_delay(self) -> bool {
