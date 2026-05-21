@@ -1,4 +1,4 @@
-use std::ops::Deref;
+use core::ops::Deref;
 
 use yoke::Yoke;
 use zerocopy::{SplitAt, TryFromBytes, little_endian::U32};
