@@ -26,11 +26,7 @@ impl Default for NoopRenderer {
 
 impl Renderer for NoopRenderer {
     fn state(&self) -> RenderState {
-        RenderState {
-            draw_area: (Position { x: 0, y: 0 }, Position { x: 0, y: 0 }),
-            draw_offset: Location { x: 0, y: 0 },
-            vblank_int: false,
-        }
+        RenderState { vblank_int: false }
     }
 
     fn set_draw_area_top_left(&mut self, pos: Position) {

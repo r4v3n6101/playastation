@@ -33,7 +33,7 @@ impl Executor {
         let block = self.blk_cache.get_or_fetch_decode_block(&mut self.cpu, bus);
 
         // CPU first
-        let execution = interpreter::run(&mut self.blk_cache, block, &mut self.cpu, bus);
+        let execution = interpreter::run(&mut self.blk_cache, &block, &mut self.cpu, bus);
         let next_pc = if execution.jump {
             execution.jump_target
         } else {

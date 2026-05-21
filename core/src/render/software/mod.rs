@@ -31,7 +31,7 @@ pub struct SoftwareRenderer {
 
 impl Default for SoftwareRenderer {
     fn default() -> Self {
-        let (cmd_tx, vram_view, worker) = backend::Worker::new();
+        let (cmd_tx, vram_view, state, worker) = backend::Worker::new();
 
         Self {
             cmd_tx,
@@ -40,7 +40,7 @@ impl Default for SoftwareRenderer {
                 backend::VRAM_WIDTH * backend::VRAM_HEIGHT,
             ),
 
-            state: Arc::clone(&worker.state),
+            state,
             download_area: (Position { x: 0, y: 0 }, Size { w: 0, h: 0 }),
             upload_area: (Position { x: 0, y: 0 }, Size { w: 0, h: 0 }),
             pop_counter: 0,
@@ -62,8 +62,6 @@ impl SoftwareRenderer {
 impl Renderer for SoftwareRenderer {
     fn state(&self) -> RenderState {
         RenderState {
-            draw_area: (self.state.draw_area.0.load(), self.state.draw_area.1.load()),
-            draw_offset: self.state.draw_offset.load(),
             vblank_int: self.state.vblank_int.load(Ordering::Acquire),
         }
     }

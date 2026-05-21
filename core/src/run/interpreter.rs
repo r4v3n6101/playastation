@@ -1,5 +1,3 @@
-use alloc::rc::Rc;
-
 use crate::{
     cpu::{Cpu, Exception, Opcode, PendingLoad, TranslationResult},
     interconnect::Bus,
@@ -20,17 +18,17 @@ struct Context<'a> {
     hi_lo_latency: u64,
 
     blk_cache: &'a mut PagedCache,
-    block: Rc<Block>,
+    block: &'a Block,
 }
 
 enum StopReason {
     Exception(Exception),
-    BlockInvalidated,
+    SelfModified,
 }
 
 pub fn run(
     blk_cache: &mut PagedCache,
-    block: Rc<Block>,
+    block: &Block,
     cpu: &mut Cpu,
     bus: &mut Bus,
 ) -> ExecutionResult {
@@ -44,7 +42,7 @@ pub fn run(
         hi_lo_latency: 0,
 
         blk_cache,
-        block: Rc::clone(&block),
+        block,
     };
 
     for ins in &block.ops {
@@ -67,7 +65,7 @@ pub fn run(
                         ctx.result.exception.replace(exc);
                         break;
                     }
-                    Err(StopReason::BlockInvalidated) => {
+                    Err(StopReason::SelfModified) => {
                         break;
                     }
                     _ => {}
@@ -576,7 +574,7 @@ fn execute(
         && let Some(invalidated_page) = ctx.blk_cache.invalidate_page(paddr)
         && ctx.block.pages.contains(&invalidated_page)
     {
-        return Err(StopReason::BlockInvalidated);
+        return Err(StopReason::SelfModified);
     }
 
     Ok(())

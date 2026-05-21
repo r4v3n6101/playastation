@@ -9,7 +9,6 @@ use std::{
     time::Duration,
 };
 
-use crossbeam_utils::atomic::AtomicCell;
 use triple_buffer::{Input, Output, triple_buffer};
 
 use super::super::types::{Color, Location, Polygon, Polyline, Position, Rect, Size, Vertex};
@@ -22,8 +21,6 @@ pub type TextureBuf = VecDeque<u16>;
 pub type ScreenFillCallback = Box<dyn FnMut(&[u16], usize, usize) + Send>;
 
 pub struct SharedState {
-    pub draw_area: (AtomicCell<Position>, AtomicCell<Position>),
-    pub draw_offset: AtomicCell<Location>,
     pub vblank_int: AtomicBool,
     pub screen_fill: Mutex<ScreenFillCallback>,
 }
@@ -57,38 +54,37 @@ pub struct Worker {
 
     vram: Vram,
     vram_view: Input<Vram>,
-    pub state: Arc<SharedState>,
+
+    state: Arc<SharedState>,
+    draw_area: (Position, Position),
+    draw_offset: Location,
 }
 
 impl Worker {
-    pub fn new() -> (Sender<Command>, Output<Vram>, Self) {
+    pub fn new() -> (Sender<Command>, Output<Vram>, Arc<SharedState>, Self) {
         let (cmd_tx, cmd_rx) = mpsc::channel();
 
         let vram = vec![0; VRAM_WIDTH * VRAM_HEIGHT].into_boxed_slice();
         let (vram_view, vram_out) = triple_buffer(&vram);
 
+        let state = Arc::new(SharedState {
+            vblank_int: AtomicBool::new(false),
+            screen_fill: Mutex::new(Box::new(|_, _, _| {})),
+        });
+
         (
             cmd_tx,
             vram_out,
+            Arc::clone(&state),
             Self {
                 cmd_rx,
 
                 vram,
                 vram_view,
-                state: Arc::new(SharedState {
-                    draw_area: (
-                        AtomicCell::new(Position { x: 0, y: 0 }),
-                        AtomicCell::new(Position {
-                            x: (VRAM_WIDTH - 1) as _,
-                            y: (VRAM_HEIGHT - 1) as _,
-                        }),
-                    ),
-                    draw_offset: AtomicCell::new(Location { x: 0, y: 0 }),
-                    vblank_int: AtomicBool::new(true),
 
-                    // FIXME : experimental
-                    screen_fill: Mutex::new(Box::new(|_, _, _| {})),
-                }),
+                state,
+                draw_area: (Position { x: 0, y: 0 }, Position { x: 0, y: 0 }),
+                draw_offset: Location { x: 0, y: 0 },
             },
         )
     }
@@ -142,13 +138,13 @@ impl Worker {
                     self.mirror_vram_area(src, dest, size);
                 }
                 Command::SetDrawAreaTopLeft(pos) => {
-                    self.state.draw_area.0.store(pos);
+                    self.draw_area.0 = pos;
                 }
                 Command::SetDrawAreaBottomRight(pos) => {
-                    self.state.draw_area.1.store(pos);
+                    self.draw_area.1 = pos;
                 }
                 Command::SetDrawOffset(loc) => {
-                    self.state.draw_offset.store(loc);
+                    self.draw_offset = loc;
                 }
                 _ => {}
             }
@@ -278,8 +274,8 @@ impl Worker {
             },
         ]: [Vertex; 3],
     ) {
-        let draw_area = (self.state.draw_area.0.load(), self.state.draw_area.1.load());
-        let draw_offset = self.state.draw_offset.load();
+        let draw_area = (self.draw_area.0, self.draw_area.1);
+        let draw_offset = self.draw_offset;
 
         let v0 = Location {
             x: v0.x + draw_offset.x,

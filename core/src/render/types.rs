@@ -7,10 +7,6 @@ pub const POLYLINE_STACK_LIMIT: usize = 10;
 
 #[derive(Debug, Copy, Clone)]
 pub struct RenderState {
-    /// Top-left and bottom-right points.
-    pub draw_area: (Position, Position),
-    /// Origin for primitives.
-    pub draw_offset: Location,
     /// Whether the frame is drawn.
     pub vblank_int: bool,
 }
