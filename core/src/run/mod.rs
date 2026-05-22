@@ -41,10 +41,15 @@ impl Executor {
             self.blk_cache.invalidate_page(paddr);
         });
 
-        self.cpu.cop0.set_hw_irq(bus.int_ctrl.pending());
         let can_take_interrupt = !self.cpu.pending_jump.valid;
-        let interrupt =
-            (can_take_interrupt && self.cpu.cop0.interrupt_pending()).then_some(ExecutionResult {
+        self.cpu
+            .cop0
+            .set_hw_irq(can_take_interrupt && bus.int_ctrl.pending());
+        let interrupt = self
+            .cpu
+            .cop0
+            .interrupt_pending()
+            .then_some(ExecutionResult {
                 exception: Some(Exception::Interrupt),
                 last_pc: execution.next_pc,
                 last_in_delay_slot: false,
