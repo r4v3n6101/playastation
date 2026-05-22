@@ -87,6 +87,25 @@
         "type": "github"
       }
     },
+    "pcsx-redux": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1758432800,
+        "narHash": "sha256-Yde1s+1xDrwh9cg+HhOevCe6gcOR6+mM6UuzK3/YskI=",
+        "ref": "fuckit",
+        "rev": "3b2bbe267a40170e5763a42cb604b3ea052909d9",
+        "revCount": 7021,
+        "submodules": true,
+        "type": "git",
+        "url": "https://github.com/nicolasnoble/pcsx-redux"
+      },
+      "original": {
+        "ref": "fuckit",
+        "submodules": true,
+        "type": "git",
+        "url": "https://github.com/nicolasnoble/pcsx-redux"
+      }
+    },
     "peter-lemon-test-roms": {
       "flake": false,
       "locked": {
@@ -111,6 +130,7 @@
         "crane": "crane",
         "flake-utils": "flake-utils",
         "nixpkgs": "nixpkgs",
+        "pcsx-redux": "pcsx-redux",
         "peter-lemon-test-roms": "peter-lemon-test-roms",
         "rust-overlay": "rust-overlay"
       }

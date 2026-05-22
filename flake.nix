@@ -29,6 +29,11 @@
       url = "tarball+https://psx.amidog.se/lib/exe/fetch.php?media=psx:download:psxtest_cpx.zip";
       flake = false;
     };
+
+    pcsx-redux = {
+      url = "git+https://github.com/nicolasnoble/pcsx-redux?ref=fuckit&submodules=1";
+      flake = false;
+    };
   };
 
   outputs =
@@ -43,6 +48,7 @@
       peter-lemon-test-roms,
       amidog-cpu-test-rom,
       amidog-cpx-test-rom,
+      pcsx-redux,
     }:
     flake-utils.lib.eachDefaultSystem (
       system:
@@ -98,6 +104,10 @@
             inherit test-rom-runner bios;
             test-rom = "${amidog-cpx-test-rom}/psxtest_cpx.exe";
           };
+          pcsx-redux-cpu-tests = pkgs.callPackage ./rom-tests/pcsx-redux-tests.nix {
+            inherit test-rom-runner bios pcsx-redux;
+            kind = "cpu";
+          };
 
           rom-tests = pkgs.writeShellApplication {
             name = "rom-tests";
@@ -107,6 +117,7 @@
               ${pkgs.lib.getExe peter-lemon-gpu-tests}
               ${pkgs.lib.getExe amidog-cpu-tests}
               ${pkgs.lib.getExe amidog-cpx-tests}
+              ${pkgs.lib.getExe pcsx-redux-cpu-tests}
             '';
           };
         };
