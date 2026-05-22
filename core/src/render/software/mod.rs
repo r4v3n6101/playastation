@@ -1,6 +1,7 @@
+use alloc::sync::Arc;
+use core::{mem, sync::atomic::Ordering};
 use std::{
-    mem,
-    sync::{Arc, atomic::Ordering, mpsc::Sender},
+    sync::mpsc::Sender,
     thread::{self, JoinHandle},
 };
 

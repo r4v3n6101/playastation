@@ -1,12 +1,14 @@
+use alloc::{collections::VecDeque, sync::Arc};
+use core::{
+    sync::atomic::{AtomicBool, Ordering},
+    time::Duration,
+};
 use std::{
-    collections::VecDeque,
     sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        Mutex,
         mpsc::{self, Receiver, Sender},
     },
     thread,
-    time::Duration,
 };
 
 use triple_buffer::{Input, Output, triple_buffer};
@@ -206,8 +208,9 @@ impl Worker {
             for i in 0..w {
                 let (x, y) = (x + i, y + j);
                 let (x, y) = (x as usize, y as usize);
+                let data = data.pop_front().unwrap();
                 if (0..VRAM_WIDTH).contains(&x) && (0..VRAM_HEIGHT).contains(&y) {
-                    self.vram[y * VRAM_WIDTH + x] = data.pop_front().unwrap();
+                    self.vram[y * VRAM_WIDTH + x] = data;
                 }
             }
         }

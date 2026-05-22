@@ -2,7 +2,6 @@ use modular_bitfield::prelude::*;
 use strum::{EnumDiscriminants, IntoDiscriminant};
 
 /// Simplified Cop0 (coprocessor 0) with the logic used in PSX.
-/// It's not fully implemented, because PSX doesn't use TLB for example.
 #[derive(Debug, Copy, Clone)]
 pub struct Cop0 {
     pub regs: [u32; 32],

@@ -56,7 +56,7 @@ impl Executor {
                 ..Default::default()
             });
 
-        // Interrupt changes flow like it's an error occurred in the next op/or in delay slot.
+        // Interrupt changes flow like it's an error occurred before the next op/or after delay slot.
         let execution = interrupt.unwrap_or(execution);
         if let Some(exception) = execution.exception {
             tracing::debug!(

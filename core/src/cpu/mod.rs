@@ -1,10 +1,10 @@
 use core::mem;
 
+use crate::interconnect::Bus;
+
 pub use cop0::{Cop0, Exception};
 pub use ins::Opcode;
 pub use mmu::{Mmu, TranslationResult};
-
-use crate::interconnect::Bus;
 
 mod cop0;
 mod ins;
