@@ -1,7 +1,7 @@
 use alloc::string::String;
 
 use crate::{
-    cpu::{Cpu, Exception, PendingLoad},
+    cpu::{Cpu, Exception, PendingJump, PendingLoad},
     formats::{BoxedExeFile, ExeHeader},
     interconnect::Bus,
 };
@@ -12,9 +12,8 @@ mod interpreter;
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
 struct ExecutionResult {
     last_pc: u32,
+    next_pc: u32,
     last_in_delay_slot: bool,
-    jump: bool,
-    jump_target: u32,
     cycles_elapsed: u64,
     exception: Option<Exception>,
 }
@@ -36,11 +35,6 @@ impl Executor {
 
         // CPU first
         let execution = interpreter::run(&mut self.blk_cache, &block, &mut self.cpu, bus);
-        let next_pc = if execution.jump {
-            execution.jump_target
-        } else {
-            execution.last_pc.wrapping_add(4)
-        };
 
         // Then devices on the bus are updated
         bus.update(execution.cycles_elapsed, |paddr| {
@@ -48,22 +42,16 @@ impl Executor {
         });
 
         self.cpu.cop0.set_hw_irq(bus.int_ctrl.pending());
-        let interrupt = self
-            .cpu
-            .cop0
-            .interrupt_pending()
-            .then_some(ExecutionResult {
+        let can_take_interrupt = !self.cpu.pending_jump.valid;
+        let interrupt =
+            (can_take_interrupt && self.cpu.cop0.interrupt_pending()).then_some(ExecutionResult {
                 exception: Some(Exception::Interrupt),
-                // EPC must be set to the next instruction, so it either pc+4 or jump target
-                last_pc: next_pc,
-                // The last called instruction may be in delay slot, but the next must not be
-                // I.e. the last op must not be branch
+                last_pc: execution.next_pc,
                 last_in_delay_slot: false,
                 ..Default::default()
             });
 
-        // Interrupt changes flow like it's an error occurred in the last op,
-        // but EPC set to the next ins
+        // Interrupt changes flow like it's an error occurred in the next op/or in delay slot.
         let execution = interrupt.unwrap_or(execution);
         if let Some(exception) = execution.exception {
             tracing::debug!(
@@ -73,6 +61,7 @@ impl Executor {
                 "entering exception handler"
             );
 
+            self.cpu.pending_jump = PendingJump::default();
             self.cpu.write_delayed(PendingLoad::default());
 
             self.cpu.cop0.exception_enter(
@@ -82,7 +71,7 @@ impl Executor {
             );
             self.cpu.pc = self.cpu.cop0.exception_handler();
         } else {
-            self.cpu.pc = next_pc;
+            self.cpu.pc = execution.next_pc;
 
             self.handle_tty();
             self.handle_exe(bus);

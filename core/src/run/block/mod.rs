@@ -40,17 +40,8 @@ pub struct Block {
 
 #[derive(Debug)]
 pub enum Operation {
-    Instruction {
-        pc: u32,
-        in_delay_slot: bool,
-        ins: u32,
-        op: Opcode,
-    },
-    Break {
-        pc: u32,
-        in_delay_slot: bool,
-        cause: Exception,
-    },
+    Instruction { pc: u32, ins: u32, op: Opcode },
+    Error { pc: u32, cause: Exception },
 }
 
 impl Default for PagedCache {
@@ -74,9 +65,11 @@ impl PagedCache {
             .and_then(|&block_key| self.blocks.get(block_key))
             .map(Rc::clone)
             .unwrap_or_else(|| {
-                // For example, 1023 ins + 1 possible branch delay slot
-                let ops = decoder::fetch_and_decode_block(OPS_PER_BLOCK - 1, cpu, bus);
-                self.insert_block(phys_pc, ops, matches!(region_of(phys_pc), Region::Ram))
+                self.insert_block(
+                    phys_pc,
+                    decoder::fetch_and_decode_block(OPS_PER_BLOCK, cpu, bus),
+                    matches!(region_of(phys_pc), Region::Ram),
+                )
             })
     }
 
