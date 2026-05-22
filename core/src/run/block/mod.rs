@@ -1,6 +1,8 @@
-use alloc::{boxed::Box, collections::BTreeMap, rc::Rc, vec::Vec};
+use alloc::{boxed::Box, rc::Rc, vec::Vec};
 use core::mem;
 
+use fnv::FnvBuildHasher;
+use hashbrown::HashMap;
 use slotmap::{SlotMap, new_key_type};
 use smallvec::SmallVec;
 
@@ -28,7 +30,7 @@ pub struct PagedCache {
     /// Page -> array of [`Block`]
     pages: Box<[Vec<BlockKey>; PAGES]>,
     /// `phys_pc` -> [`Block`]
-    by_pc: BTreeMap<u32, BlockKey>,
+    by_pc: HashMap<u32, BlockKey, FnvBuildHasher>,
 }
 
 #[derive(Debug)]
@@ -49,7 +51,7 @@ impl Default for PagedCache {
         Self {
             blocks: SlotMap::default(),
             pages: Box::new([const { Vec::new() }; _]),
-            by_pc: BTreeMap::new(),
+            by_pc: HashMap::default(),
         }
     }
 }
