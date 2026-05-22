@@ -87,39 +87,47 @@
       {
         formatter = pkgs.nixpkgs-fmt;
 
-        packages = rec {
-          peter-lemon-cpu-tests = pkgs.callPackage ./rom-tests/peter-lemon.nix {
-            inherit test-rom-runner bios;
-            test-dir = "${peter-lemon-test-roms}/CPUTest/CPU/";
-          };
-          peter-lemon-gpu-tests = pkgs.callPackage ./rom-tests/peter-lemon.nix {
-            inherit test-rom-runner bios;
-            test-dir = "${peter-lemon-test-roms}/GPU/";
-          };
-          amidog-cpu-tests = pkgs.callPackage ./rom-tests/amidog.nix {
-            inherit test-rom-runner bios;
-            test-rom = "${amidog-cpu-test-rom}/psxtest_cpu.exe";
-          };
-          amidog-cpx-tests = pkgs.callPackage ./rom-tests/amidog.nix {
-            inherit test-rom-runner bios;
-            test-rom = "${amidog-cpx-test-rom}/psxtest_cpx.exe";
-          };
-          pcsx-redux-cpu-tests = pkgs.callPackage ./rom-tests/pcsx-redux-tests.nix {
-            inherit test-rom-runner bios pcsx-redux;
-            kind = "cpu";
-          };
+        packages = {
+          peter-lemon-tests = pkgs.lib.makeScope pkgs.newScope (self: {
+            cpu = pkgs.callPackage ./rom-tests/peter-lemon.nix {
+              inherit test-rom-runner bios;
+              test-dir = "${peter-lemon-test-roms}/CPUTest/CPU/";
+            };
+            gpu = pkgs.callPackage ./rom-tests/peter-lemon.nix {
+              inherit test-rom-runner bios;
+              test-dir = "${peter-lemon-test-roms}/GPU/";
+            };
+          });
 
-          rom-tests = pkgs.writeShellApplication {
-            name = "rom-tests";
+          amidog-tests = pkgs.lib.makeScope pkgs.newScope (self: {
+            cpu = pkgs.callPackage ./rom-tests/amidog.nix {
+              inherit test-rom-runner bios;
+              test-rom = "${amidog-cpu-test-rom}/psxtest_cpu.exe";
+            };
+            cpx = pkgs.callPackage ./rom-tests/amidog.nix {
+              inherit test-rom-runner bios;
+              test-rom = "${amidog-cpx-test-rom}/psxtest_cpx.exe";
+            };
+          });
 
-            text = ''
-              ${pkgs.lib.getExe peter-lemon-cpu-tests}
-              ${pkgs.lib.getExe peter-lemon-gpu-tests}
-              ${pkgs.lib.getExe amidog-cpu-tests}
-              ${pkgs.lib.getExe amidog-cpx-tests}
-              ${pkgs.lib.getExe pcsx-redux-cpu-tests}
-            '';
-          };
+          pcsx-redux-tests = pkgs.lib.makeScope pkgs.newScope (self: {
+            basic = pkgs.callPackage ./rom-tests/pcsx-redux-tests.nix {
+              inherit test-rom-runner bios pcsx-redux;
+              kind = "basic";
+            };
+            cop0 = pkgs.callPackage ./rom-tests/pcsx-redux-tests.nix {
+              inherit test-rom-runner bios pcsx-redux;
+              kind = "cop0";
+            };
+            cpu = pkgs.callPackage ./rom-tests/pcsx-redux-tests.nix {
+              inherit test-rom-runner bios pcsx-redux;
+              kind = "cpu";
+            };
+            gpu = pkgs.callPackage ./rom-tests/pcsx-redux-tests.nix {
+              inherit test-rom-runner bios pcsx-redux;
+              kind = "gpu";
+            };
+          });
         };
 
         devShells.default = pkgs.mkShell {

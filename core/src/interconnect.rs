@@ -157,7 +157,8 @@ impl Bus {
         );
         match region_of(paddr) {
             Region::Ram => {
-                self.ram[(paddr - RAM.start) as usize..][..N].copy_from_slice(&value);
+                let addr = ((paddr - RAM.start) as usize) % RAM_SIZE;
+                self.ram[addr..][..N].copy_from_slice(&value);
             }
             Region::Bios => {
                 self.bios[(paddr - BIOS.start) as usize..][..N].copy_from_slice(&value);
