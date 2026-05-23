@@ -631,7 +631,6 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
         _ => unimplemented!(),
     }
 
-    // TODO : do only in not gpr_write ops
     pend_load(ctx.cpu, pending_load);
 
     let PendingJump {

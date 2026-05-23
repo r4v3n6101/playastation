@@ -5,3 +5,7 @@ edition = "2024"
 [workspace]
 members = [ "./core", "./rom-tests" ]
 resolver = "2"
+
+[profile.profiling]
+inherits = "release"
+debug = true

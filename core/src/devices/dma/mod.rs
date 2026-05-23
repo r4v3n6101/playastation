@@ -1,5 +1,3 @@
-use core::array;
-
 use modular_bitfield::prelude::*;
 
 use crate::{devices::int::InterruptFlags, interconnect::Bus};
@@ -155,41 +153,6 @@ impl Default for Dpcr {
     }
 }
 
-impl Dpcr {
-    fn sorted_chans(self) -> [(usize, bool); CHANNELS] {
-        let chan_enabled = |ch: usize| match ch {
-            0 => self.enabled0(),
-            1 => self.enabled1(),
-            2 => self.enabled2(),
-            3 => self.enabled3(),
-            4 => self.enabled4(),
-            5 => self.enabled5(),
-            6 => self.enabled6(),
-            _ => unreachable!(),
-        };
-        let chan_prio = |ch: usize| match ch {
-            0 => self.priority0(),
-            1 => self.priority1(),
-            2 => self.priority2(),
-            3 => self.priority3(),
-            4 => self.priority4(),
-            5 => self.priority5(),
-            6 => self.priority6(),
-            _ => unreachable!(),
-        };
-        let mut channels = array::from_fn(|x| (x, chan_enabled(x)));
-
-        // Lower prio goes first, if equal then higher index go first
-        channels.sort_unstable_by(|(idx1, _), (idx2, _)| {
-            chan_prio(*idx1)
-                .cmp(&chan_prio(*idx2))
-                .then(idx1.cmp(idx2).reverse())
-        });
-
-        channels
-    }
-}
-
 impl Dicr {
     fn set_irq_lane(&mut self, ch: usize) {
         self.set_irq_flags(self.irq_flags() | (1 << ch));
@@ -205,55 +168,94 @@ impl Dicr {
 }
 
 impl DmaController {
+    fn pick_highest_priority_chan(&self) -> Option<usize> {
+        let chan_enabled = |ch: usize| match ch {
+            0 => self.dpcr.enabled0(),
+            1 => self.dpcr.enabled1(),
+            2 => self.dpcr.enabled2(),
+            3 => self.dpcr.enabled3(),
+            4 => self.dpcr.enabled4(),
+            5 => self.dpcr.enabled5(),
+            6 => self.dpcr.enabled6(),
+            _ => unreachable!(),
+        };
+        let chan_prio = |ch: usize| match ch {
+            0 => self.dpcr.priority0(),
+            1 => self.dpcr.priority1(),
+            2 => self.dpcr.priority2(),
+            3 => self.dpcr.priority3(),
+            4 => self.dpcr.priority4(),
+            5 => self.dpcr.priority5(),
+            6 => self.dpcr.priority6(),
+            _ => unreachable!(),
+        };
+
+        let mut best = None;
+        let mut best_prio = u8::MAX;
+
+        for ch in 0..7 {
+            if !chan_enabled(ch) {
+                continue;
+            }
+
+            if !self.channels[ch].chcr.active() {
+                continue;
+            }
+
+            let prio = chan_prio(ch);
+
+            if prio < best_prio {
+                best = Some(ch);
+                best_prio = prio;
+            }
+        }
+
+        best
+    }
+
     pub fn run(bus: &mut Bus, mut ram_touched: impl FnMut(u32)) -> u64 {
         let mut cycles = 0u64;
 
-        for (ch, enabled) in bus.dma_ctrl.dpcr.sorted_chans() {
-            if !enabled {
-                continue;
-            }
-
+        if let Some(ch) = bus.dma_ctrl.pick_highest_priority_chan() {
             let mut chan = bus.dma_ctrl.channels[ch];
 
             // trigger bit must be present when sync_mode is Manual
-            if matches!(chan.chcr.sync_mode(), SyncMode::Manual) && !chan.chcr.trigger() {
-                continue;
-            }
-
-            // non-active skipped at all
-            // TODO : should be for trigger = true, active = false?
-            if !chan.chcr.active() {
-                continue;
-            }
-
+            if chan.chcr.active()
+                && (!matches!(chan.chcr.sync_mode(), SyncMode::Manual) || chan.chcr.trigger())
             {
-                let transfer_span = tracing::debug_span!(
-                    target: "dma",
-                    "transfer",
-                    index=%ch,
-                    ?chan
-                );
-                let _guard = transfer_span.enter();
+                {
+                    let transfer_span = tracing::debug_span!(
+                        target: "dma",
+                        "transfer",
+                        index=%ch,
+                        ?chan
+                    );
+                    let _guard = transfer_span.enter();
 
-                let elapsed_cycles = match chan.chcr.sync_mode() {
-                    SyncMode::Manual => handler::do_manual(bus, ch, &mut chan, &mut ram_touched),
-                    SyncMode::Request => handler::do_block(bus, ch, &mut chan, &mut ram_touched),
-                    SyncMode::LinkedList => handler::do_linked_list(bus, ch, &mut chan),
-                    SyncMode::Reserved => unreachable!(),
-                };
-                tracing::trace!(%elapsed_cycles, "dma cycles spent");
-                cycles = cycles.saturating_add(elapsed_cycles);
-            };
+                    let elapsed_cycles = match chan.chcr.sync_mode() {
+                        SyncMode::Manual => {
+                            handler::do_manual(bus, ch, &mut chan, &mut ram_touched)
+                        }
+                        SyncMode::Request => {
+                            handler::do_block(bus, ch, &mut chan, &mut ram_touched)
+                        }
+                        SyncMode::LinkedList => handler::do_linked_list(bus, ch, &mut chan),
+                        SyncMode::Reserved => unreachable!(),
+                    };
+                    tracing::trace!(%elapsed_cycles, "dma cycles spent");
+                    cycles = cycles.saturating_add(elapsed_cycles);
+                }
 
-            chan.chcr.set_active(false);
-            chan.chcr.set_trigger(false);
+                chan.chcr.set_active(false);
+                chan.chcr.set_trigger(false);
 
-            bus.dma_ctrl.dicr.set_irq_lane(ch);
-            if bus.dma_ctrl.dicr.irq_signal() {
-                bus.int_ctrl.raise(InterruptFlags::DMA);
+                bus.dma_ctrl.dicr.set_irq_lane(ch);
+                if bus.dma_ctrl.dicr.irq_signal() {
+                    bus.int_ctrl.raise(InterruptFlags::DMA);
+                }
+
+                bus.dma_ctrl.channels[ch] = chan;
             }
-
-            bus.dma_ctrl.channels[ch] = chan;
         }
 
         cycles
