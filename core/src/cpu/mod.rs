@@ -1,9 +1,7 @@
-use core::mem;
-
 use crate::interconnect::Bus;
 
 pub use cop0::{Cop0, Exception};
-pub use ins::Opcode;
+pub use ins::Instruction;
 pub use mmu::{Mmu, TranslationResult};
 
 mod cop0;
@@ -74,23 +72,6 @@ impl Default for Cpu {
 
 impl Cpu {
     pub const DEFAULT_LINK_REG: usize = 31;
-
-    pub fn write_gpr(&mut self, dest: usize, value: u32) {
-        let pending_load = mem::take(&mut self.pending_load);
-        self.gpr[pending_load.dest] = pending_load.value;
-        self.gpr[dest] = value;
-        self.gpr[0] = 0;
-    }
-
-    pub fn write_delayed(&mut self, new_pending_load: PendingLoad) {
-        let old_pending_load = mem::replace(&mut self.pending_load, new_pending_load);
-
-        if old_pending_load.dest != new_pending_load.dest {
-            self.gpr[old_pending_load.dest] = old_pending_load.value;
-        }
-
-        self.gpr[0] = 0;
-    }
 
     pub fn read_bus<const N: usize>(
         &mut self,

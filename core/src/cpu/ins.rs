@@ -1,197 +1,184 @@
-use strum::FromRepr;
-
-#[derive(FromRepr, Debug, Copy, Clone)]
-#[repr(u16)]
-pub enum Opcode {
-    /// Shift left logical (shamt).
-    Sll = 0x00_00,
-    /// Shift right logical (shamt).
-    Srl = 0x02_00,
-    /// Shift right arithmetic (shamt).
-    Sra = 0x03_00,
-    /// Shift left logical (var).
-    Sllv = 0x04_00,
-    /// Shift right logical (var).
-    Srlv = 0x06_00,
-    /// Shift right arithmetic (var).
-    Srav = 0x07_00,
-    /// Jump register.
-    Jr = 0x08_00,
-    /// Jump and link register.
-    Jalr = 0x09_00,
-    /// Syscall trap.
-    Syscall = 0x0C_00,
-    /// Breakpoint trap.
-    Break = 0x0D_00,
-    /// Move from HI.
-    Mfhi = 0x10_00,
-    /// Move to HI.
-    Mthi = 0x11_00,
-    /// Move from LO.
-    Mflo = 0x12_00,
-    /// Move to LO.
-    Mtlo = 0x13_00,
-    /// Multiply (signed) -> HI/LO.
-    Mult = 0x18_00,
-    /// Multiply (unsigned) -> HI/LO.
-    Multu = 0x19_00,
-    /// Divide (signed) -> HI/LO.
-    Div = 0x1A_00,
-    /// Divide (unsigned) -> HI/LO.
-    Divu = 0x1B_00,
-    /// Add (signed, overflow).
-    Add = 0x20_00,
-    /// Add unsigned (no overflow).
-    Addu = 0x21_00,
-    /// Subtract (signed, overflow).
-    Sub = 0x22_00,
-    /// Subtract unsigned (no overflow).
-    Subu = 0x23_00,
-    /// Bitwise and.
-    And = 0x24_00,
-    /// Bitwise or.
-    Or = 0x25_00,
-    /// Bitwise xor.
-    Xor = 0x26_00,
-    /// Bitwise nor.
-    Nor = 0x27_00,
-    /// Set on less than (signed).
-    Slt = 0x2A_00,
-    /// Set on less than (unsigned).
-    Sltu = 0x2B_00,
-
-    // REGIMM (opcode 0x01, tag uses rt field)
-    /// Branch on < 0.
-    Bltz = 0x00_01,
-    /// Branch on >= 0.
-    Bgez = 0x01_01,
-    /// Branch on < 0 and link.
-    Bltzal = 0x10_01,
-    /// Branch on >= 0 and link.
-    Bgezal = 0x11_01,
-
-    /// Move from coprocessor 0.
-    Mfc0 = 0x00_10,
-    /// Move to coprocessor 0.
-    Mtc0 = 0x04_10,
-    /// Move from coprocessor 0 control.
-    Cfc0 = 0x02_10,
-    /// Move to coprocessor 0 control.
-    Ctc0 = 0x06_10,
-    /// Return from exception.
-    Rfe = 0x10_10,
-
-    /// Jump.
-    J = 0x00_02,
-    /// Jump and link.
-    Jal = 0x00_03,
-    /// Branch on equal.
-    Beq = 0x00_04,
-    /// Branch on not equal.
-    Bne = 0x00_05,
-    /// Branch on <= 0.
-    Blez = 0x00_06,
-    /// Branch on > 0.
-    Bgtz = 0x00_07,
-    /// Add immediate (signed, overflow).
-    Addi = 0x00_08,
-    /// Add immediate unsigned (no overflow).
-    Addiu = 0x00_09,
-    /// Set on less than immediate (signed).
-    Slti = 0x00_0A,
-    /// Set on less than immediate (unsigned).
-    Sltiu = 0x00_0B,
-    /// Bitwise and immediate.
-    Andi = 0x00_0C,
-    /// Bitwise or immediate.
-    Ori = 0x00_0D,
-    /// Bitwise xor immediate.
-    Xori = 0x00_0E,
-    /// Load upper immediate.
-    Lui = 0x00_0F,
-
-    /// Load byte (signed).
-    Lb = 0x00_20,
-    /// Load halfword (signed).
-    Lh = 0x00_21,
-    /// Load word left.
-    Lwl = 0x00_22,
-    /// Load word.
-    Lw = 0x00_23,
-    /// Load byte (unsigned).
-    Lbu = 0x00_24,
-    /// Load halfword (unsigned).
-    Lhu = 0x00_25,
-    /// Load word right.
-    Lwr = 0x00_26,
-
-    /// Store byte.
-    Sb = 0x00_28,
-    /// Store halfword.
-    Sh = 0x00_29,
-    /// Store word left.
-    Swl = 0x00_2A,
-    /// Store word.
-    Sw = 0x00_2B,
-    /// Store word right.
-    Swr = 0x00_2E,
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum Instruction {
+    Sll { rt: usize, rd: usize, shamt: u32 },
+    Srl { rt: usize, rd: usize, shamt: u32 },
+    Sra { rt: usize, rd: usize, shamt: u32 },
+    Sllv { rs: usize, rt: usize, rd: usize },
+    Srlv { rs: usize, rt: usize, rd: usize },
+    Srav { rs: usize, rt: usize, rd: usize },
+    Jr { rs: usize },
+    Jalr { rs: usize, rd: usize },
+    Syscall { code: u32 },
+    Break { code: u32 },
+    Mfhi { rd: usize },
+    Mthi { rs: usize },
+    Mflo { rd: usize },
+    Mtlo { rs: usize },
+    Mult { rs: usize, rt: usize },
+    Multu { rs: usize, rt: usize },
+    Div { rs: usize, rt: usize },
+    Divu { rs: usize, rt: usize },
+    Add { rs: usize, rt: usize, rd: usize },
+    Addu { rs: usize, rt: usize, rd: usize },
+    Sub { rs: usize, rt: usize, rd: usize },
+    Subu { rs: usize, rt: usize, rd: usize },
+    And { rs: usize, rt: usize, rd: usize },
+    Or { rs: usize, rt: usize, rd: usize },
+    Xor { rs: usize, rt: usize, rd: usize },
+    Nor { rs: usize, rt: usize, rd: usize },
+    Slt { rs: usize, rt: usize, rd: usize },
+    Sltu { rs: usize, rt: usize, rd: usize },
+    Bltz { rs: usize, imm_sext: i32 },
+    Bgez { rs: usize, imm_sext: i32 },
+    Bltzal { rs: usize, imm_sext: i32 },
+    Bgezal { rs: usize, imm_sext: i32 },
+    Mfc0 { rt: usize, cop0_reg: usize },
+    Mtc0 { rt: usize, cop0_reg: usize },
+    Cfc0 { rt: usize, cop0_reg: usize },
+    Ctc0 { rt: usize, cop0_reg: usize },
+    Rfe,
+    J { target: u32 },
+    Jal { target: u32 },
+    Beq { rs: usize, rt: usize, imm_sext: i32 },
+    Bne { rs: usize, rt: usize, imm_sext: i32 },
+    Blez { rs: usize, imm_sext: i32 },
+    Bgtz { rs: usize, imm_sext: i32 },
+    Addi { rs: usize, rt: usize, imm_sext: i32 },
+    Addiu { rs: usize, rt: usize, imm_sext: i32 },
+    Slti { rs: usize, rt: usize, imm_sext: i32 },
+    Sltiu { rs: usize, rt: usize, imm_sext: i32 },
+    Andi { rs: usize, rt: usize, imm: u32 },
+    Ori { rs: usize, rt: usize, imm: u32 },
+    Xori { rs: usize, rt: usize, imm: u32 },
+    Lui { rt: usize, imm: u32 },
+    Lb { rs: usize, rt: usize, imm_sext: i32 },
+    Lh { rs: usize, rt: usize, imm_sext: i32 },
+    Lwl { rs: usize, rt: usize, imm_sext: i32 },
+    Lw { rs: usize, rt: usize, imm_sext: i32 },
+    Lbu { rs: usize, rt: usize, imm_sext: i32 },
+    Lhu { rs: usize, rt: usize, imm_sext: i32 },
+    Lwr { rs: usize, rt: usize, imm_sext: i32 },
+    Sb { rs: usize, rt: usize, imm_sext: i32 },
+    Sh { rs: usize, rt: usize, imm_sext: i32 },
+    Swl { rs: usize, rt: usize, imm_sext: i32 },
+    Sw { rs: usize, rt: usize, imm_sext: i32 },
+    Swr { rs: usize, rt: usize, imm_sext: i32 },
 }
 
-impl Opcode {
+impl Instruction {
     pub fn decode(ins: u32) -> Option<Self> {
-        let opcode = (ins >> 26) as u16;
         let rs = ((ins >> 21) & 0x1F) as usize;
         let rt = ((ins >> 16) & 0x1F) as usize;
-        let funct = ins & 0x3F;
+        let rd = ((ins >> 11) & 0x1F) as usize;
+        let shamt = (ins >> 6) & 0x1F;
+        let imm = ins & 0xFFFF;
+        let imm_sext = i32::from((imm as u16).cast_signed());
+        let target = ins & 0x03FF_FFFF;
 
-        match opcode {
+        Some(match ins >> 26 {
             // SPECIAL
-            0x00 => {
-                let tag = ((funct as u16) << 8) | opcode;
-                Self::from_repr(tag)
-            }
+            0x00 => match ins & 0x3F {
+                0x00 => Self::Sll { rt, rd, shamt },
+                0x02 => Self::Srl { rt, rd, shamt },
+                0x03 => Self::Sra { rt, rd, shamt },
+                0x04 => Self::Sllv { rs, rt, rd },
+                0x06 => Self::Srlv { rs, rt, rd },
+                0x07 => Self::Srav { rs, rt, rd },
+                0x08 => Self::Jr { rs },
+                0x09 => Self::Jalr { rs, rd },
+                0x0C => Self::Syscall {
+                    code: (ins >> 6) & 0x000F_FFFF,
+                },
+                0x0D => Self::Break {
+                    code: (ins >> 6) & 0x000F_FFFF,
+                },
+                0x10 => Self::Mfhi { rd },
+                0x11 => Self::Mthi { rs },
+                0x12 => Self::Mflo { rd },
+                0x13 => Self::Mtlo { rs },
+                0x18 => Self::Mult { rs, rt },
+                0x19 => Self::Multu { rs, rt },
+                0x1A => Self::Div { rs, rt },
+                0x1B => Self::Divu { rs, rt },
+                0x20 => Self::Add { rs, rt, rd },
+                0x21 => Self::Addu { rs, rt, rd },
+                0x22 => Self::Sub { rs, rt, rd },
+                0x23 => Self::Subu { rs, rt, rd },
+                0x24 => Self::And { rs, rt, rd },
+                0x25 => Self::Or { rs, rt, rd },
+                0x26 => Self::Xor { rs, rt, rd },
+                0x27 => Self::Nor { rs, rt, rd },
+                0x2A => Self::Slt { rs, rt, rd },
+                0x2B => Self::Sltu { rs, rt, rd },
+                _ => return None,
+            },
 
-            // REGIMM, including PSX undocumented aliases
-            0x01 => {
-                let rt = rt as u16;
+            // REGIMM. Only the canonical link encodings link on the PSX CPU;
+            // the other rt values alias to BLTZ/BGEZ by their low bit.
+            0x01 => match rt {
+                0x10 => Self::Bltzal { rs, imm_sext },
+                0x11 => Self::Bgezal { rs, imm_sext },
+                rt if rt & 1 == 0 => Self::Bltz { rs, imm_sext },
+                _ => Self::Bgez { rs, imm_sext },
+            },
 
-                let is_bgez = (rt & 1) != 0;
-                let is_link = ((rt >> 1) & 0x0F) == 0x08;
-
-                Some(match (is_link, is_bgez) {
-                    (false, false) => Self::Bltz,
-                    (false, true) => Self::Bgez,
-                    (true, false) => Self::Bltzal,
-                    (true, true) => Self::Bgezal,
-                })
-            }
+            0x02 => Self::J { target },
+            0x03 => Self::Jal { target },
+            0x04 => Self::Beq { rs, rt, imm_sext },
+            0x05 => Self::Bne { rs, rt, imm_sext },
+            0x06 => Self::Blez { rs, imm_sext },
+            0x07 => Self::Bgtz { rs, imm_sext },
+            0x08 => Self::Addi { rs, rt, imm_sext },
+            0x09 => Self::Addiu { rs, rt, imm_sext },
+            0x0A => Self::Slti { rs, rt, imm_sext },
+            0x0B => Self::Sltiu { rs, rt, imm_sext },
+            0x0C => Self::Andi { rs, rt, imm },
+            0x0D => Self::Ori { rs, rt, imm },
+            0x0E => Self::Xori { rs, rt, imm },
+            0x0F => Self::Lui { rt, imm },
 
             // COP0
-            0x10 => {
-                let tag = ((rs as u16) << 8) | opcode;
-                Self::from_repr(tag)
-            }
+            0x10 => match (ins >> 21) & 0x1F {
+                0x00 => Self::Mfc0 { rt, cop0_reg: rd },
+                0x02 => Self::Cfc0 { rt, cop0_reg: rd },
+                0x04 => Self::Mtc0 { rt, cop0_reg: rd },
+                0x06 => Self::Ctc0 { rt, cop0_reg: rd },
+                0x10 if ins & 0x3F == 0x10 => Self::Rfe,
+                _ => return None,
+            },
 
-            // Primary opcode
-            _ => Self::from_repr(opcode),
-        }
+            0x20 => Self::Lb { rs, rt, imm_sext },
+            0x21 => Self::Lh { rs, rt, imm_sext },
+            0x22 => Self::Lwl { rs, rt, imm_sext },
+            0x23 => Self::Lw { rs, rt, imm_sext },
+            0x24 => Self::Lbu { rs, rt, imm_sext },
+            0x25 => Self::Lhu { rs, rt, imm_sext },
+            0x26 => Self::Lwr { rs, rt, imm_sext },
+            0x28 => Self::Sb { rs, rt, imm_sext },
+            0x29 => Self::Sh { rs, rt, imm_sext },
+            0x2A => Self::Swl { rs, rt, imm_sext },
+            0x2B => Self::Sw { rs, rt, imm_sext },
+            0x2E => Self::Swr { rs, rt, imm_sext },
+
+            _ => return None,
+        })
     }
 
     pub fn has_branch_delay(self) -> bool {
         matches!(
             self,
-            Self::J
-                | Self::Jal
-                | Self::Jr
-                | Self::Jalr
-                | Self::Beq
-                | Self::Bne
-                | Self::Blez
-                | Self::Bgtz
-                | Self::Bltz
-                | Self::Bgez
-                | Self::Bltzal
-                | Self::Bgezal
+            Self::J { .. }
+                | Self::Jal { .. }
+                | Self::Jr { .. }
+                | Self::Jalr { .. }
+                | Self::Beq { .. }
+                | Self::Bne { .. }
+                | Self::Blez { .. }
+                | Self::Bgtz { .. }
+                | Self::Bltz { .. }
+                | Self::Bgez { .. }
+                | Self::Bltzal { .. }
+                | Self::Bgezal { .. }
         )
     }
 }

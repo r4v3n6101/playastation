@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 
 use crate::{
-    cpu::{Cpu, Exception, Opcode},
+    cpu::{Cpu, Exception, Instruction},
     interconnect::Bus,
 };
 
@@ -35,7 +35,7 @@ pub fn fetch_and_decode_block(limit: usize, cpu: &mut Cpu, bus: &mut Bus) -> Vec
             }
         };
 
-        let Some(op) = Opcode::decode(ins) else {
+        let Some(ins) = Instruction::decode(ins) else {
             tracing::warn!(
                 pc=%format_args!("{pc:#X}"),
                 ins=%format_args!("{ins:#X}"),
@@ -48,9 +48,9 @@ pub fn fetch_and_decode_block(limit: usize, cpu: &mut Cpu, bus: &mut Bus) -> Vec
             break;
         };
 
-        output.push(Operation::Instruction { pc, ins, op });
+        output.push(Operation::Instruction { pc, ins });
 
-        if let Opcode::Syscall | Opcode::Break = op {
+        if let Instruction::Syscall { .. } | Instruction::Break { .. } = ins {
             break;
         }
 
@@ -58,7 +58,7 @@ pub fn fetch_and_decode_block(limit: usize, cpu: &mut Cpu, bus: &mut Bus) -> Vec
             break;
         }
 
-        if op.has_branch_delay() {
+        if ins.has_branch_delay() {
             pending_delay_slot = true;
         }
 

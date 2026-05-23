@@ -1,7 +1,8 @@
 use alloc::string::String;
+use core::mem;
 
 use crate::{
-    cpu::{Cpu, Exception, PendingJump, PendingLoad},
+    cpu::{Cpu, Exception, PendingJump},
     formats::{BoxedExeFile, ExeHeader},
     interconnect::Bus,
 };
@@ -66,8 +67,12 @@ impl Executor {
                 "entering exception handler"
             );
 
+            // Reset jump
             self.cpu.pending_jump = PendingJump::default();
-            self.cpu.write_delayed(PendingLoad::default());
+            // Commit pending load
+            let pending_load = mem::take(&mut self.cpu.pending_load);
+            self.cpu.gpr[pending_load.dest] = pending_load.value;
+            self.cpu.gpr[0] = 0;
 
             self.cpu.cop0.exception_enter(
                 exception,

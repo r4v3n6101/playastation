@@ -7,7 +7,7 @@ use slotmap::{SlotMap, new_key_type};
 use smallvec::SmallVec;
 
 use crate::{
-    cpu::{Cpu, Exception, Opcode, TranslationResult::PhysAddr},
+    cpu::{Cpu, Exception, Instruction, TranslationResult},
     globals::RAM_SIZE,
     interconnect::{Bus, Region, region_of},
 };
@@ -42,7 +42,7 @@ pub struct Block {
 
 #[derive(Debug)]
 pub enum Operation {
-    Instruction { pc: u32, ins: u32, op: Opcode },
+    Instruction { pc: u32, ins: Instruction },
     Error { pc: u32, cause: Exception },
 }
 
@@ -58,7 +58,7 @@ impl Default for PagedCache {
 
 impl PagedCache {
     pub fn get_or_fetch_decode_block(&mut self, cpu: &mut Cpu, bus: &mut Bus) -> Rc<Block> {
-        let PhysAddr(phys_pc) = cpu.mmu.translate_addr(cpu.pc) else {
+        let TranslationResult::PhysAddr(phys_pc) = cpu.mmu.translate_addr(cpu.pc) else {
             unimplemented!()
         };
 
