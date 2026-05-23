@@ -34,7 +34,7 @@ pub struct Cpu {
 #[derive(Debug, Default, Copy, Clone)]
 pub struct PendingLoad {
     /// Where write to value. Zero ignores any write.
-    pub dest: usize,
+    pub dest: u8,
     /// Loaded value.
     pub value: u32,
 }
@@ -71,8 +71,9 @@ impl Default for Cpu {
 }
 
 impl Cpu {
-    pub const DEFAULT_LINK_REG: usize = 31;
+    pub const DEFAULT_LINK_REG: u8 = 31;
 
+    #[inline(always)]
     pub fn read_bus<const N: usize>(
         &mut self,
         bus: &mut Bus,
@@ -91,6 +92,7 @@ impl Cpu {
         Ok(bus.load(paddr))
     }
 
+    #[inline(always)]
     pub fn write_bus<const N: usize>(
         &mut self,
         bus: &mut Bus,

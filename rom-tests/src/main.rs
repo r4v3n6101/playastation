@@ -10,7 +10,7 @@ use playastation::{
 };
 use tracing::Level;
 
-const LOOPS: usize = 100_000_000;
+const LOOPS: usize = 400_000_000;
 
 #[derive(Parser)]
 struct Args {

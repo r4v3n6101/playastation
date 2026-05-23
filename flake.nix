@@ -31,7 +31,7 @@
     };
 
     pcsx-redux = {
-      url = "git+https://github.com/nicolasnoble/pcsx-redux?ref=fuckit&submodules=1";
+      url = "git+https://github.com/nicolasnoble/pcsx-redux?submodules=1";
       flake = false;
     };
   };
@@ -131,7 +131,11 @@
         };
 
         devShells.default = pkgs.mkShell {
-          buildInputs = [ pkgs.rust-bin.nightly.latest.default ];
+          buildInputs = with pkgs; [
+            rust-bin.nightly.latest.default
+            cargo-show-asm
+            samply
+          ];
         };
       }
     );

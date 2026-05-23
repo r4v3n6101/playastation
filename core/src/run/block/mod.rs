@@ -58,9 +58,14 @@ impl Default for PagedCache {
 
 impl PagedCache {
     pub fn get_or_fetch_decode_block(&mut self, cpu: &mut Cpu, bus: &mut Bus) -> Rc<Block> {
-        let TranslationResult::PhysAddr(phys_pc) = cpu.mmu.translate_addr(cpu.pc) else {
+        let TranslationResult::PhysAddr(mut phys_pc) = cpu.mmu.translate_addr(cpu.pc) else {
             unimplemented!()
         };
+
+        // Cut RAM mirrors
+        if let Region::Ram = region_of(phys_pc) {
+            phys_pc &= RAM_SIZE as u32 - 1;
+        }
 
         self.by_pc
             .get(&phys_pc)
@@ -128,5 +133,5 @@ impl PagedCache {
 fn page_of(paddr: u32) -> usize {
     debug_assert_eq!(region_of(paddr), Region::Ram);
 
-    ((paddr as usize) % RAM_SIZE) >> PAGE_BITS
+    ((paddr as usize) & (RAM_SIZE - 1)) >> PAGE_BITS
 }

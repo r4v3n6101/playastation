@@ -40,11 +40,11 @@
     },
     "crane": {
       "locked": {
-        "lastModified": 1778106249,
-        "narHash": "sha256-cM/AuKy5tMhwOOQIbha8ZRRMHVfNf7cv2aljIw+qoCg=",
+        "lastModified": 1779130139,
+        "narHash": "sha256-BLrtr42azquO7MdGFU5a7KiMl3YpFlTeIXqy1fT5GlQ=",
         "owner": "ipetkov",
         "repo": "crane",
-        "rev": "6d015ea29630b7ad2402841386da2cb617a470a7",
+        "rev": "edb38893982a3338972bb4a2ec7ce7c29ba10fd9",
         "type": "github"
       },
       "original": {
@@ -73,11 +73,11 @@
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1778839678,
-        "narHash": "sha256-thPtLgK+UoBEyGC0e1Cl+gI9apePqvzd2VCdbdguyQU=",
+        "lastModified": 1779568489,
+        "narHash": "sha256-TOHGX8VlskYJ2oTYQhZqz0gIe2MGqkqPLpk8JdDKCJ0=",
         "owner": "nixos",
         "repo": "nixpkgs",
-        "rev": "3f3001c30537feefd238bb5805633cb2220859e8",
+        "rev": "55532ed09e74a950eb4bf1390cdc5e9d4549f2fb",
         "type": "github"
       },
       "original": {
@@ -90,17 +90,16 @@
     "pcsx-redux": {
       "flake": false,
       "locked": {
-        "lastModified": 1758432800,
-        "narHash": "sha256-Yde1s+1xDrwh9cg+HhOevCe6gcOR6+mM6UuzK3/YskI=",
-        "ref": "fuckit",
-        "rev": "3b2bbe267a40170e5763a42cb604b3ea052909d9",
-        "revCount": 7021,
+        "lastModified": 1779549428,
+        "narHash": "sha256-Nyl3v6lw6nAx0vsLjuWO+77ctDA0EYQmpvH6WrbJDVg=",
+        "ref": "refs/heads/main",
+        "rev": "8de5168c9cdf8d25bf11c9acf23baef91a009afd",
+        "revCount": 7051,
         "submodules": true,
         "type": "git",
         "url": "https://github.com/nicolasnoble/pcsx-redux"
       },
       "original": {
-        "ref": "fuckit",
         "submodules": true,
         "type": "git",
         "url": "https://github.com/nicolasnoble/pcsx-redux"
@@ -142,11 +141,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1778815121,
-        "narHash": "sha256-xlhD+1NVJbhrUUM2usRHW6iKWTXP2uw2Fo6sWJmLg8g=",
+        "lastModified": 1779506148,
+        "narHash": "sha256-OffE5yuMrSW71zIJNLvtl9MCO6WTAHEjlFPUCvkd/QM=",
         "owner": "oxalica",
         "repo": "rust-overlay",
-        "rev": "017351829a9356423afd2cca0dde9b63346c8ab3",
+        "rev": "d9973e2ab49747fada06ebbe26cda27eb0220cf1",
         "type": "github"
       },
       "original": {

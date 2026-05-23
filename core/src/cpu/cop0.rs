@@ -78,14 +78,17 @@ impl Cop0 {
     pub const CAUSE_IDX: usize = 13;
     pub const EPC_IDX: usize = 14;
 
+    #[inline(always)]
     pub fn status(&self) -> Status {
         Status::from_bytes(self.regs[Self::STATUS_IDX].to_le_bytes())
     }
 
+    #[inline(always)]
     pub fn cause(&self) -> Cause {
         Cause::from_bytes(self.regs[Self::CAUSE_IDX].to_le_bytes())
     }
 
+    #[inline(always)]
     pub fn exception_handler(&self) -> u32 {
         if self.status().bev() {
             0xBFC0_0180
@@ -95,6 +98,7 @@ impl Cop0 {
     }
 
     /// Push IEc/KUc to IEp/KUp and IEp/KUp to IEo/KUo, then clear current mode
+    #[inline(always)]
     pub fn exception_enter(&mut self, exception: Exception, fault_pc: u32, in_delay_slot: bool) {
         self.regs[Self::EPC_IDX] = if in_delay_slot {
             fault_pc.wrapping_sub(4)
@@ -120,12 +124,14 @@ impl Cop0 {
     }
 
     /// Pop the status stack: restore IEc/KUc from IEp/KUp and IEp/KUp from IEo/KUo
+    #[inline(always)]
     pub fn exception_leave(&mut self) {
         let sr = &mut self.regs[Self::STATUS_IDX];
         let low6 = *sr & 0b111111;
         *sr = (*sr & !0b111111) | (low6 & 0b110000) | ((low6 >> 2) & 0b1111);
     }
 
+    #[inline(always)]
     pub fn interrupt_pending(&self) -> bool {
         let iec = self.status().iec();
         let ip = self.cause().ip();
@@ -134,6 +140,7 @@ impl Cop0 {
         iec && ((ip & im) != 0)
     }
 
+    #[inline(always)]
     pub fn set_hw_irq(&mut self, active: bool) {
         let mut cause = self.cause();
         let mut ip = cause.ip();

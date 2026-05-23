@@ -69,9 +69,10 @@ impl Executor {
 
             // Reset jump
             self.cpu.pending_jump = PendingJump::default();
-            // Commit pending load
+            // Commit pending load in a slow, but safe way
+            // In case one of instruction executor will write a garbage
             let pending_load = mem::take(&mut self.cpu.pending_load);
-            self.cpu.gpr[pending_load.dest] = pending_load.value;
+            self.cpu.gpr[pending_load.dest as usize] = pending_load.value;
             self.cpu.gpr[0] = 0;
 
             self.cpu.cop0.exception_enter(

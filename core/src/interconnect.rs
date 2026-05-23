@@ -12,16 +12,13 @@ use crate::{
 const RAM: Range<u32> = 0x0000_0000..0x0080_0000;
 const EXPANSION1: Range<u32> = 0x1F00_0000..0x1F80_0000;
 const SCRATCHPAD: Range<u32> = 0x1F80_0000..0x1F80_0400;
-
 const HW_REGS: Range<u32> = 0x1F80_1000..0x1F80_2000;
-
 const INT_CTRL: Range<u32> = 0x1F80_1070..0x1F80_1078;
 const DMA_CTRL: Range<u32> = 0x1F80_1080..0x1F80_1100;
 const TIMER_CTRL: Range<u32> = 0x1F80_1100..0x1F80_1130;
 const CDROM: Range<u32> = 0x1F80_1800..0x1F80_1804;
 const GPU: Range<u32> = 0x1F80_1810..0x1F80_1818;
 const SPU: Range<u32> = 0x1F80_1C00..0x1F80_2000;
-
 const EXPANSION2: Range<u32> = 0x1F80_2000..0x1F80_3000;
 const BIOS: Range<u32> = 0x1FC0_0000..0x1FC8_0000;
 
@@ -83,44 +80,106 @@ impl Bus {
         TimerController::update(self, sys_cycles);
     }
 
+    // Inlined because RAM/BIOS hot paths are needed for caller
+    #[inline(always)]
     pub fn load<const N: usize>(&mut self, paddr: u32) -> [u8; N] {
-        let mut bytes = [0; N];
+        let mut buf = [0; N];
 
+        // Aligned access is faster due to check of `start` only
+        if paddr.is_multiple_of(N as _) {
+            if RAM.contains(&paddr) {
+                // SAFETY: Hot path for RAM, `paddr` and `paddr + N` are inside of RAM, so...
+                unsafe {
+                    let addr = (paddr as usize) & (RAM_SIZE - 1);
+                    buf.copy_from_slice(self.ram.get_unchecked(addr..).get_unchecked(..N));
+
+                    return buf;
+                }
+            } else if BIOS.contains(&paddr) {
+                // SAFETY: same as above
+                unsafe {
+                    let addr = (paddr - BIOS.start) as usize;
+                    buf.copy_from_slice(self.bios.get_unchecked(addr..).get_unchecked(..N));
+
+                    return buf;
+                }
+            } else if SCRATCHPAD.contains(&paddr) {
+                // SAFETY: same as above
+                unsafe {
+                    let addr = (paddr - SCRATCHPAD.start) as usize;
+                    buf.copy_from_slice(self.scratchpad.get_unchecked(addr..).get_unchecked(..N));
+
+                    return buf;
+                }
+            }
+        }
+
+        self.load_slow_path::<N>(&mut buf, paddr);
+
+        buf
+    }
+
+    // Inlining: same as above
+    #[inline(always)]
+    pub fn store<const N: usize>(&mut self, paddr: u32, value: [u8; N]) {
+        // Same as above
+        if paddr.is_multiple_of(N as _) {
+            if RAM.contains(&paddr) {
+                // SAFETY: Hot path for RAM, `paddr` and `paddr + N` are inside of RAM, so...
+                unsafe {
+                    let addr = (paddr as usize) & (RAM_SIZE - 1);
+                    self.ram
+                        .get_unchecked_mut(addr..)
+                        .get_unchecked_mut(..N)
+                        .copy_from_slice(&value);
+
+                    return;
+                }
+            } else if SCRATCHPAD.contains(&paddr) {
+                // SAFETY: as above
+                unsafe {
+                    let addr = (paddr - SCRATCHPAD.start) as usize;
+                    self.scratchpad
+                        .get_unchecked_mut(addr..)
+                        .get_unchecked_mut(..N)
+                        .copy_from_slice(&value);
+
+                    return;
+                }
+            }
+        }
+
+        self.store_slow_path(paddr, value);
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn load_slow_path<const N: usize>(&mut self, buf: &mut [u8], paddr: u32) {
         let mmio_span = tracing::trace_span!(
             target: "bus.mmio",
             "load",
             paddr=%format_args!("{paddr:#X}")
         );
         match region_of(paddr) {
-            Region::Ram => {
-                let addr = ((paddr - RAM.start) as usize) % RAM_SIZE;
-                bytes.copy_from_slice(&self.ram[addr..][..N]);
-            }
-            Region::Bios => {
-                bytes.copy_from_slice(&self.bios[(paddr - BIOS.start) as usize..][..N]);
-            }
-            Region::Scratchpad => {
-                bytes.copy_from_slice(&self.scratchpad[(paddr - SCRATCHPAD.start) as usize..][..N]);
-            }
             Region::Expansion1 => {}
             Region::Expansion2 => {}
             Region::Int => {
                 let _guard = mmio_span.enter();
                 let mmio_addr = paddr - INT_CTRL.start;
                 tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "int ctrl read");
-                self.int_ctrl.read(&mut bytes, mmio_addr);
+                self.int_ctrl.read(buf, mmio_addr);
             }
             Region::Dma => {
                 let _guard = mmio_span.enter();
                 let mmio_addr = paddr - DMA_CTRL.start;
                 tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "dma ctrl read");
-                self.dma_ctrl.read(&mut bytes, mmio_addr);
+                self.dma_ctrl.read(buf, mmio_addr);
             }
             Region::Timer => {
                 let _guard = mmio_span.enter();
                 let mmio_addr = paddr - TIMER_CTRL.start;
                 tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "timer ctrl read");
-                self.timer_ctrl.read(&mut bytes, mmio_addr);
+                self.timer_ctrl.read(buf, mmio_addr);
             }
             Region::CdRom => {
                 let _guard = mmio_span.enter();
@@ -131,7 +190,7 @@ impl Bus {
                 let _guard = mmio_span.enter();
                 let mmio_addr = paddr - GPU.start;
                 tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "gpu read");
-                self.gpu.read(&mut bytes, mmio_addr);
+                self.gpu.read(buf, mmio_addr);
             }
             Region::Spu => {
                 let _guard = mmio_span.enter();
@@ -142,13 +201,17 @@ impl Bus {
                 let _guard = mmio_span.enter();
                 tracing::trace!("HW regs touched");
             }
+            // Unaligned access is not implemented and *probably* not used anywhere
+            Region::Ram => unimplemented!(),
+            Region::Bios => unimplemented!(),
+            Region::Scratchpad => unimplemented!(),
             Region::Unmapped => {}
         }
-
-        bytes
     }
 
-    pub fn store<const N: usize>(&mut self, paddr: u32, value: [u8; N]) {
+    #[cold]
+    #[inline(never)]
+    fn store_slow_path<const N: usize>(&mut self, paddr: u32, value: [u8; N]) {
         let mmio_span = tracing::trace_span!(
             target: "bus.mmio",
             "store",
@@ -156,16 +219,6 @@ impl Bus {
             ?value
         );
         match region_of(paddr) {
-            Region::Ram => {
-                let addr = ((paddr - RAM.start) as usize) % RAM_SIZE;
-                self.ram[addr..][..N].copy_from_slice(&value);
-            }
-            Region::Bios => {
-                self.bios[(paddr - BIOS.start) as usize..][..N].copy_from_slice(&value);
-            }
-            Region::Scratchpad => {
-                self.scratchpad[(paddr - SCRATCHPAD.start) as usize..][..N].copy_from_slice(&value);
-            }
             Region::Expansion1 => {}
             Region::Expansion2 => {}
             Region::Int => {
@@ -206,7 +259,11 @@ impl Bus {
                 let _guard = mmio_span.enter();
                 tracing::trace!("HW regs touched");
             }
-            Region::Unmapped => {}
+            // Unaligned access is not implemented and *probably* not used anywhere
+            Region::Ram => unimplemented!(),
+            Region::Bios => unimplemented!(),
+            Region::Scratchpad => unimplemented!(),
+            Region::Unmapped => todo!(),
         }
     }
 }

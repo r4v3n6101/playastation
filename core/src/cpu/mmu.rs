@@ -20,6 +20,7 @@ pub struct Mmu;
 
 impl Mmu {
     /// Translate a virtual address from segments into physical one.
+    #[inline(always)]
     pub fn translate_addr(&self, vaddr: u32) -> TranslationResult {
         match vaddr {
             x if KUSEG.contains(&x) || KSEG0.contains(&x) || KSEG1.contains(&x) => {
