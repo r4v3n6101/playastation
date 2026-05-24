@@ -4,8 +4,8 @@ use smallbox::{SmallBox, space::S32};
 use smallvec::SmallVec;
 
 use crate::render::types::{
-    Color, Location, POLYGON_STACK_LIMIT, POLYLINE_STACK_LIMIT, Polygon, Polyline, Position, Rect,
-    Size, TextureWindow, UV, Vertex,
+    Color, DrawMode, EnvParameter, Location, MaskBitSetting, POLYGON_STACK_LIMIT,
+    POLYLINE_STACK_LIMIT, Polygon, Polyline, Position, Rect, Size, TextureWindow, UV, Vertex,
 };
 
 use super::Gpu;
@@ -65,12 +65,12 @@ pub fn dispatch(gpu: &mut Gpu, cmd: u32) {
             0xC0 => {
                 cmdbuf.0 = SmallBox::new(Vram2CpuPacket::init(cmd));
             }
-            // 0xE1 => set_draw_mode(gpu, cmd),
+            0xE1 => set_draw_mode(gpu, cmd),
             0xE2 => set_texture_window(gpu, cmd),
             0xE3 => set_draw_area_top_left(gpu, cmd),
             0xE4 => set_draw_area_bottom_right(gpu, cmd),
             0xE5 => set_draw_offset(gpu, cmd),
-            // 0xE6 => set_mask_bit_setting(gpu, cmd),
+            0xE6 => set_mask_bit_setting(gpu, cmd),
             _ => {}
         }
     }
@@ -584,10 +584,6 @@ impl PacketBuilder for Vram2CpuPacket {
     fn commit(&mut self, gpu: &mut Gpu) {
         gpu.renderer
             .prepare_vram_for_read(self.pos.unwrap(), self.size.unwrap());
-
-        // TODO : remove
-        gpu.gpustat.set_ready_to_send_vram(true);
-        tracing::debug!("GPUREAD data transfer ready");
     }
 }
 
@@ -625,27 +621,35 @@ impl PacketBuilder for Vram2VramPacket {
     }
 }
 
+fn set_draw_mode(gpu: &mut Gpu, cmd: u32) {
+    gpu.renderer
+        .set_parameter(EnvParameter::DrawMode(DrawMode::from_bytes(
+            (cmd as u16).to_le_bytes(),
+        )));
+}
+
 fn set_texture_window(gpu: &mut Gpu, cmd: u32) {
-    gpu.renderer.set_texture_window(TextureWindow {
-        mask_x: (cmd & 0x1f) as u8,
-        mask_y: ((cmd >> 5) & 0x1f) as u8,
-        offset_x: ((cmd >> 10) & 0x1f) as u8,
-        offset_y: ((cmd >> 15) & 0x1f) as u8,
-    });
+    let bytes = cmd.to_le_bytes();
+    gpu.renderer
+        .set_parameter(EnvParameter::TextureWindow(TextureWindow::from_bytes([
+            bytes[1], bytes[2], bytes[3],
+        ])));
 }
 
 fn set_draw_area_top_left(gpu: &mut Gpu, cmd: u32) {
-    gpu.renderer.set_draw_area_top_left(Position {
-        x: (cmd & 0x03ff) as u16,
-        y: ((cmd >> 10) & 0x01ff) as u16,
-    });
+    gpu.renderer
+        .set_parameter(EnvParameter::DrawAreaTopLeft(Position {
+            x: (cmd & 0x03ff) as u16,
+            y: ((cmd >> 10) & 0x01ff) as u16,
+        }));
 }
 
 fn set_draw_area_bottom_right(gpu: &mut Gpu, cmd: u32) {
-    gpu.renderer.set_draw_area_bottom_right(Position {
-        x: (cmd & 0x03ff) as u16,
-        y: ((cmd >> 10) & 0x01ff) as u16,
-    });
+    gpu.renderer
+        .set_parameter(EnvParameter::DrawAreaBottomRight(Position {
+            x: (cmd & 0x03ff) as u16,
+            y: ((cmd >> 10) & 0x01ff) as u16,
+        }));
 }
 
 fn set_draw_offset(gpu: &mut Gpu, cmd: u32) {
@@ -653,10 +657,19 @@ fn set_draw_offset(gpu: &mut Gpu, cmd: u32) {
         ((v << 21) as i32 >> 21) as i16
     }
 
-    gpu.renderer.set_draw_offset(Location {
-        x: sign_extend_11(cmd & 0x07ff),
-        y: sign_extend_11((cmd >> 11) & 0x07ff),
-    });
+    gpu.renderer
+        .set_parameter(EnvParameter::DrawOffset(Location {
+            x: sign_extend_11(cmd & 0x07ff),
+            y: sign_extend_11((cmd >> 11) & 0x07ff),
+        }));
+}
+
+fn set_mask_bit_setting(gpu: &mut Gpu, cmd: u32) {
+    let bytes = (cmd as u8).to_le_bytes();
+    gpu.renderer
+        .set_parameter(EnvParameter::MaskBitSetting(MaskBitSetting::from_bytes(
+            bytes,
+        )));
 }
 
 fn parse_color(cmd: u32) -> Color {

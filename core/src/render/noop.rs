@@ -2,7 +2,10 @@ use core::mem;
 
 use super::{
     Renderer,
-    types::{Color, Location, Polygon, Polyline, Position, Rect, RenderState, Size, TextureWindow},
+    types::{
+        Color, DrawMode, EnvParameter, MaskBitSetting, Polygon, Polyline, Position, Rect,
+        RenderState, Size,
+    },
 };
 
 #[derive(Debug)]
@@ -26,27 +29,20 @@ impl Default for NoopRenderer {
 
 impl Renderer for NoopRenderer {
     fn state(&self) -> RenderState {
-        RenderState {}
+        RenderState {
+            draw_mode: DrawMode::new(),
+            mask_bit_setting: MaskBitSetting::new(),
+            vram_read_active: u32::from(self.pop_counter)
+                < (u32::from(self.download_area.1.w) * u32::from(self.download_area.1.h)),
+        }
     }
 
     fn draw_frame(&mut self) {
         tracing::debug!("goo-goo-guh-guh");
     }
 
-    fn set_texture_window(&mut self, tex_win: TextureWindow) {
-        tracing::debug!(?tex_win, "texture window");
-    }
-
-    fn set_draw_area_top_left(&mut self, pos: Position) {
-        tracing::debug!(?pos, "draw area top left");
-    }
-
-    fn set_draw_area_bottom_right(&mut self, pos: Position) {
-        tracing::debug!(?pos, "draw area bottom right");
-    }
-
-    fn set_draw_offset(&mut self, loc: Location) {
-        tracing::debug!(?loc, "draw offset");
+    fn set_parameter(&mut self, param: EnvParameter) {
+        tracing::debug!(?param, "change parameter");
     }
 
     fn draw_polygon(&mut self, polygon: Polygon) {
@@ -72,8 +68,8 @@ impl Renderer for NoopRenderer {
     }
 
     fn pop_pixel(&mut self) -> Option<u16> {
-        let size = self.download_area.1.w * self.download_area.1.h;
-        if self.pop_counter < size {
+        let size = u32::from(self.download_area.1.w) * u32::from(self.download_area.1.h);
+        if u32::from(self.pop_counter) < size {
             self.pop_counter = self.pop_counter.saturating_add(1);
             tracing::trace!("pop pixel {}/{}", self.pop_counter, size);
         }

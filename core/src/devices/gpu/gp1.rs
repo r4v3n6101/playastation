@@ -1,6 +1,6 @@
 use strum::FromRepr;
 
-use super::{Gpu, GpuDmaDirection};
+use super::{DmaDirection, Gpu};
 
 #[derive(FromRepr, Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -33,22 +33,25 @@ pub fn dispatch(gpu: &mut Gpu, cmd: u32) {
 
     match opcode {
         Gp1Opcode::ResetGpu => {
-            gpu.gpustat = Default::default();
             gpu.cmdbuf = Default::default();
             gpu.renderer.reset();
         }
         Gp1Opcode::ResetCommandBuffer => {
             gpu.cmdbuf = Default::default();
         }
-        Gp1Opcode::AcknowledgeInterrupt => gpu.gpustat.set_interrupt_request(false),
-        Gp1Opcode::DisplayEnable => gpu.gpustat.set_display_disabled(cmd & 0x1 != 0),
-        Gp1Opcode::DmaDirection => gpu.gpustat.set_dma_direction(match cmd & 0x3 {
-            0x0 => GpuDmaDirection::Off,
-            0x1 => GpuDmaDirection::Fifo,
-            0x2 => GpuDmaDirection::CpuToGp0,
-            0x3 => GpuDmaDirection::VramToCpu,
-            _ => unreachable!(),
-        }),
+        Gp1Opcode::AcknowledgeInterrupt => {
+            gpu.int_flag = true;
+        }
+        Gp1Opcode::DisplayEnable => {}
+        Gp1Opcode::DmaDirection => {
+            gpu.dma_direction = match cmd & 0x3 {
+                0x0 => DmaDirection::Off,
+                0x1 => DmaDirection::Fifo,
+                0x2 => DmaDirection::CpuToGp0,
+                0x3 => DmaDirection::VramToCpu,
+                _ => unreachable!(),
+            }
+        }
         Gp1Opcode::DisplayVramStart => {}
         Gp1Opcode::DisplayHorizontalRange => {}
         Gp1Opcode::DisplayVerticalRange => {}

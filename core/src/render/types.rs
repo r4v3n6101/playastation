@@ -1,5 +1,6 @@
 use alloc::boxed::Box;
 
+use modular_bitfield::prelude::*;
 use smallvec::SmallVec;
 
 /// Maximum polygon is quad, but what if greater?
@@ -13,8 +14,109 @@ pub const VRAM_HEIGHT: usize = 512;
 /// VRAM is 2d texture actually.
 pub type Vram = Box<[u16]>;
 
+#[derive(Debug, Clone)]
+pub struct RenderState {
+    pub draw_mode: DrawMode,
+    pub mask_bit_setting: MaskBitSetting,
+    pub vram_read_active: bool,
+}
+
+#[derive(Debug, Clone)]
+pub enum EnvParameter {
+    DrawMode(DrawMode),
+    TextureWindow(TextureWindow),
+    DrawAreaTopLeft(Position),
+    DrawAreaBottomRight(Position),
+    DrawOffset(Location),
+    MaskBitSetting(MaskBitSetting),
+}
+
+#[bitfield(bits = 14)]
 #[derive(Debug, Copy, Clone)]
-pub struct RenderState {}
+pub struct DrawMode {
+    pub texture_page_x_base: B4,
+    pub texture_page_y_base: B1,
+    pub semi_transparency: SemiTransparency,
+    pub texture_depth: TextureDepth,
+    pub dither_24_to_15: bool,
+    pub draw_to_display_area: bool,
+    pub texture_disable: bool,
+    pub texture_rectangle_x_flip: bool,
+    pub texture_rectangle_y_flip: bool,
+}
+
+#[bitfield(bits = 20)]
+#[derive(Debug, Copy, Clone)]
+pub struct TextureWindow {
+    pub mask_x: B5,
+    pub mask_y: B5,
+    pub offset_x: B5,
+    pub offset_y: B5,
+}
+
+#[bitfield(bits = 2)]
+#[derive(Debug, Copy, Clone)]
+pub struct MaskBitSetting {
+    pub set_mask_while_drawing: bool,
+    pub draw_to_masked_pixels: bool,
+}
+
+#[derive(Specifier, Debug, Clone, Copy, PartialEq, Eq)]
+#[bits = 2]
+pub enum SemiTransparency {
+    Average = 0,
+    Add = 1,
+    Subtract = 2,
+    AddQuarter = 3,
+}
+
+#[derive(Specifier, Debug, Clone, Copy, PartialEq, Eq)]
+#[bits = 2]
+pub enum TextureDepth {
+    Bpp4 = 0,
+    Bpp8 = 1,
+    Bpp15 = 2,
+    Reserved = 3,
+}
+
+#[derive(Specifier, Debug, Clone, Copy, PartialEq, Eq)]
+#[bits = 2]
+pub enum HorizontalResolution {
+    H256 = 0,
+    H320 = 1,
+    H512 = 2,
+    H640 = 3,
+}
+
+#[derive(Specifier, Debug, Clone, Copy, PartialEq, Eq)]
+#[bits = 1]
+pub enum VerticalResolution {
+    V240 = 0,
+    V480 = 1,
+}
+
+#[derive(Specifier, Debug, Clone, Copy, PartialEq, Eq)]
+#[bits = 1]
+pub enum VideoMode {
+    Ntsc = 0,
+    Pal = 1,
+}
+
+#[derive(Specifier, Debug, Clone, Copy, PartialEq, Eq)]
+#[bits = 1]
+pub enum DisplayDepth {
+    Bpp15 = 0,
+    Bpp24 = 1,
+}
+
+#[derive(Specifier, Debug, Clone, Copy, PartialEq, Eq)]
+#[bits = 2]
+pub enum DmaDirection {
+    Off = 0,
+    Fifo = 1,
+    CpuToGp0 = 2,
+    VramToCpu = 3,
+}
 
 #[derive(Debug, Clone)]
 pub struct Polygon {
@@ -44,14 +146,6 @@ pub struct Vertex {
     pub location: Location,
     pub color: Option<Color>,
     pub texcords: Option<UV>,
-}
-
-#[derive(Debug, Copy, Clone)]
-pub struct TextureWindow {
-    pub mask_x: u8,
-    pub mask_y: u8,
-    pub offset_x: u8,
-    pub offset_y: u8,
 }
 
 /// Position somewhere at space.

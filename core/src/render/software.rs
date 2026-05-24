@@ -4,8 +4,8 @@ use core::mem;
 use super::{
     Renderer,
     types::{
-        Color, Location, Polygon, Polyline, Position, Rect, RenderState, Size, TextureWindow,
-        VRAM_HEIGHT, VRAM_WIDTH, Vertex, Vram,
+        Color, DrawMode, EnvParameter, Location, MaskBitSetting, Polygon, Polyline, Position, Rect,
+        RenderState, Size, TextureWindow, VRAM_HEIGHT, VRAM_WIDTH, Vertex, Vram,
     },
 };
 
@@ -13,9 +13,11 @@ type ScreenFillCallback = Box<dyn FnMut(&[u16], usize, usize) + Send>;
 
 pub struct SoftwareRenderer {
     vram: Vram,
+    draw_mode: DrawMode,
     texture_window: TextureWindow,
     draw_area: (Position, Position),
     draw_offset: Location,
+    mask_bit_setting: MaskBitSetting,
 
     download_area: (Position, Size),
     upload_area: (Position, Size),
@@ -31,12 +33,9 @@ impl Default for SoftwareRenderer {
         Self {
             vram,
 
-            texture_window: TextureWindow {
-                mask_x: 0,
-                mask_y: 0,
-                offset_x: 0,
-                offset_y: 0,
-            },
+            draw_mode: DrawMode::new(),
+            texture_window: TextureWindow::new(),
+            mask_bit_setting: MaskBitSetting::new(),
             draw_area: (Position { x: 0, y: 0 }, Position { x: 0, y: 0 }),
             draw_offset: Location { x: 0, y: 0 },
 
@@ -52,27 +51,39 @@ impl Default for SoftwareRenderer {
 
 impl Renderer for SoftwareRenderer {
     fn state(&self) -> RenderState {
-        RenderState {}
+        RenderState {
+            draw_mode: self.draw_mode,
+            mask_bit_setting: self.mask_bit_setting,
+            vram_read_active: u32::from(self.pop_counter)
+                < (u32::from(self.download_area.1.w) * u32::from(self.download_area.1.h)),
+        }
     }
 
     fn draw_frame(&mut self) {
         (self.screen_fill)(&self.vram, VRAM_WIDTH, VRAM_HEIGHT);
     }
 
-    fn set_texture_window(&mut self, tex_win: TextureWindow) {
-        self.texture_window = tex_win;
-    }
-
-    fn set_draw_area_top_left(&mut self, pos: Position) {
-        self.draw_area.0 = pos;
-    }
-
-    fn set_draw_area_bottom_right(&mut self, pos: Position) {
-        self.draw_area.1 = pos;
-    }
-
-    fn set_draw_offset(&mut self, loc: Location) {
-        self.draw_offset = loc;
+    fn set_parameter(&mut self, param: EnvParameter) {
+        match param {
+            EnvParameter::DrawMode(draw_mode) => {
+                self.draw_mode = draw_mode;
+            }
+            EnvParameter::TextureWindow(texture_window) => {
+                self.texture_window = texture_window;
+            }
+            EnvParameter::DrawAreaTopLeft(position) => {
+                self.draw_area.0 = position;
+            }
+            EnvParameter::DrawAreaBottomRight(position) => {
+                self.draw_area.1 = position;
+            }
+            EnvParameter::DrawOffset(location) => {
+                self.draw_offset = location;
+            }
+            EnvParameter::MaskBitSetting(mask_bit_setting) => {
+                self.mask_bit_setting = mask_bit_setting;
+            }
+        }
     }
 
     fn draw_polygon(&mut self, polygon: Polygon) {
