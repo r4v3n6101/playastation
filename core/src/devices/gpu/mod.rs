@@ -17,6 +17,7 @@ pub struct Gpu {
     pub gpustat: GpuStat,
     pub renderer: Box<dyn Renderer>,
 
+    cycles_elapsed: u64,
     cmdbuf: gp0::CmdBuf,
 }
 
@@ -123,6 +124,7 @@ impl Default for Gpu {
             gpustat: GpuStat::default(),
             renderer: Box::new(NoopRenderer::default()),
 
+            cycles_elapsed: 0,
             cmdbuf: gp0::CmdBuf::default(),
         }
     }
@@ -137,10 +139,13 @@ impl Gpu {
         gp1::dispatch(self, cmd);
     }
 
-    pub fn run(bus: &mut Bus) {
-        if bus.gpu.renderer.state().vblank_int {
+    pub fn run(bus: &mut Bus, sys_cycles: u64) {
+        // TODO : FPS
+        bus.gpu.cycles_elapsed = bus.gpu.cycles_elapsed.saturating_add(sys_cycles);
+        if bus.gpu.cycles_elapsed > 33_000_000 / 60 {
+            bus.gpu.renderer.draw_frame();
             bus.int_ctrl.raise(InterruptFlags::VBLANK);
-            bus.gpu.renderer.clear_int();
+            bus.gpu.cycles_elapsed = 0;
         }
     }
 }

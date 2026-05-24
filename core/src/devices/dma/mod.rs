@@ -168,33 +168,24 @@ impl Dicr {
 }
 
 impl DmaController {
+    #[inline(always)]
     fn pick_highest_priority_chan(&self) -> Option<usize> {
-        let chan_enabled = |ch: usize| match ch {
-            0 => self.dpcr.enabled0(),
-            1 => self.dpcr.enabled1(),
-            2 => self.dpcr.enabled2(),
-            3 => self.dpcr.enabled3(),
-            4 => self.dpcr.enabled4(),
-            5 => self.dpcr.enabled5(),
-            6 => self.dpcr.enabled6(),
-            _ => unreachable!(),
-        };
-        let chan_prio = |ch: usize| match ch {
-            0 => self.dpcr.priority0(),
-            1 => self.dpcr.priority1(),
-            2 => self.dpcr.priority2(),
-            3 => self.dpcr.priority3(),
-            4 => self.dpcr.priority4(),
-            5 => self.dpcr.priority5(),
-            6 => self.dpcr.priority6(),
-            _ => unreachable!(),
-        };
+        #[inline(always)]
+        fn dma_prio(dpcr: u32, ch: usize) -> u8 {
+            ((dpcr >> (ch * 4)) & 0x7) as u8
+        }
+
+        #[inline(always)]
+        fn dma_enabled(dpcr: u32, ch: usize) -> bool {
+            ((dpcr >> (ch * 4 + 3)) & 1) != 0
+        }
 
         let mut best = None;
         let mut best_prio = u8::MAX;
 
+        let dpcr = u32::from_le_bytes(self.dpcr.into_bytes());
         for ch in 0..7 {
-            if !chan_enabled(ch) {
+            if !dma_enabled(dpcr, ch) {
                 continue;
             }
 
@@ -202,8 +193,7 @@ impl DmaController {
                 continue;
             }
 
-            let prio = chan_prio(ch);
-
+            let prio = dma_prio(dpcr, ch);
             if prio < best_prio {
                 best = Some(ch);
                 best_prio = prio;

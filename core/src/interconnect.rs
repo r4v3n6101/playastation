@@ -71,12 +71,12 @@ impl Default for Bus {
 }
 
 impl Bus {
+    #[inline(never)]
     pub fn update(&mut self, cpu_cycles: u64, ram_touched: impl FnMut(u32)) {
         let dma_cycles = DmaController::run(self, ram_touched);
-
-        Gpu::run(self);
-
         let sys_cycles = cpu_cycles.saturating_add(dma_cycles);
+
+        Gpu::run(self, sys_cycles);
         TimerController::update(self, sys_cycles);
     }
 

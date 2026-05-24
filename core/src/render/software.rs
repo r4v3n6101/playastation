@@ -1,180 +1,123 @@
-use alloc::{collections::VecDeque, sync::Arc};
-use core::{
-    sync::atomic::{AtomicBool, Ordering},
-    time::Duration,
-};
-use std::{
-    sync::{
-        Mutex,
-        mpsc::{self, Receiver, Sender},
+use alloc::{boxed::Box, collections::VecDeque};
+use core::mem;
+
+use super::{
+    Renderer,
+    types::{
+        Color, Location, Polygon, Polyline, Position, Rect, RenderState, Size, TextureWindow,
+        VRAM_HEIGHT, VRAM_WIDTH, Vertex, Vram,
     },
-    thread,
 };
 
-use triple_buffer::{Input, Output, triple_buffer};
+type ScreenFillCallback = Box<dyn FnMut(&[u16], usize, usize) + Send>;
 
-use super::super::types::{Color, Location, Polygon, Polyline, Position, Rect, Size, Vertex};
-
-pub const VRAM_WIDTH: usize = 1024;
-pub const VRAM_HEIGHT: usize = 512;
-
-pub type Vram = Box<[u16]>;
-pub type TextureBuf = VecDeque<u16>;
-pub type ScreenFillCallback = Box<dyn FnMut(&[u16], usize, usize) + Send>;
-
-pub struct SharedState {
-    pub vblank_int: AtomicBool,
-    pub screen_fill: Mutex<ScreenFillCallback>,
-}
-
-pub enum Command {
-    DrawPolygon(Polygon),
-    DrawPolyline(Polyline),
-    DrawRect(Rect),
-    FillVramArea {
-        pos: Position,
-        size: Size,
-        color: Color,
-    },
-    SyncUploadBufToVram {
-        pos: Position,
-        size: Size,
-        data: TextureBuf,
-    },
-    MirrorVramArea {
-        src: Position,
-        dest: Position,
-        size: Size,
-    },
-    SetDrawAreaTopLeft(Position),
-    SetDrawAreaBottomRight(Position),
-    SetDrawOffset(Location),
-}
-
-pub struct Worker {
-    cmd_rx: Receiver<Command>,
-
+pub struct SoftwareRenderer {
     vram: Vram,
-    vram_view: Input<Vram>,
-
-    state: Arc<SharedState>,
+    texture_window: TextureWindow,
     draw_area: (Position, Position),
     draw_offset: Location,
+
+    download_area: (Position, Size),
+    upload_area: (Position, Size),
+    pop_counter: u16,
+    push_counter: u16,
+
+    pub screen_fill: ScreenFillCallback,
 }
 
-impl Worker {
-    pub fn new() -> (Sender<Command>, Output<Vram>, Arc<SharedState>, Self) {
-        let (cmd_tx, cmd_rx) = mpsc::channel();
+impl Default for SoftwareRenderer {
+    fn default() -> Self {
+        let vram = alloc::vec![0; VRAM_WIDTH * VRAM_HEIGHT].into_boxed_slice();
+        Self {
+            vram,
 
-        let vram = vec![0; VRAM_WIDTH * VRAM_HEIGHT].into_boxed_slice();
-        let (vram_view, vram_out) = triple_buffer(&vram);
-
-        let state = Arc::new(SharedState {
-            vblank_int: AtomicBool::new(false),
-            screen_fill: Mutex::new(Box::new(|_, _, _| {})),
-        });
-
-        (
-            cmd_tx,
-            vram_out,
-            Arc::clone(&state),
-            Self {
-                cmd_rx,
-
-                vram,
-                vram_view,
-
-                state,
-                draw_area: (Position { x: 0, y: 0 }, Position { x: 0, y: 0 }),
-                draw_offset: Location { x: 0, y: 0 },
+            texture_window: TextureWindow {
+                mask_x: 0,
+                mask_y: 0,
+                offset_x: 0,
+                offset_y: 0,
             },
-        )
-    }
+            draw_area: (Position { x: 0, y: 0 }, Position { x: 0, y: 0 }),
+            draw_offset: Location { x: 0, y: 0 },
 
-    #[tracing::instrument(target = "render.software", level = "DEBUG", "run", skip(self))]
-    pub fn run(mut self) {
-        while let Ok(cmd) = self.cmd_rx.recv() {
-            match cmd {
-                Command::DrawRect(rect) => {
-                    self.draw_rect(rect);
-                }
-                Command::DrawPolygon(polygon) => match polygon.vertices.len() {
-                    len @ ..3 => tracing::debug!(%len, "degenerate polygon"),
-                    3 => {
-                        self.draw_triangle(
-                            polygon.flat_color,
-                            [
-                                polygon.vertices[0],
-                                polygon.vertices[1],
-                                polygon.vertices[2],
-                            ],
-                        );
-                    }
-                    4 => {
-                        self.draw_triangle(
-                            polygon.flat_color,
-                            [
-                                polygon.vertices[0],
-                                polygon.vertices[1],
-                                polygon.vertices[2],
-                            ],
-                        );
-                        self.draw_triangle(
-                            polygon.flat_color,
-                            [
-                                polygon.vertices[1],
-                                polygon.vertices[2],
-                                polygon.vertices[3],
-                            ],
-                        );
-                    }
-                    len => {
-                        tracing::debug!(%len, "polygons larger than a quad aren't supported");
-                    }
-                },
-                Command::FillVramArea { pos, size, color } => {
-                    self.fill_vram_area(pos, size, color);
-                }
-                Command::SyncUploadBufToVram { pos, size, data } => {
-                    self.copy_vram_from_upload_buf(pos, size, data);
-                }
-                Command::MirrorVramArea { src, dest, size } => {
-                    self.mirror_vram_area(src, dest, size);
-                }
-                Command::SetDrawAreaTopLeft(pos) => {
-                    self.draw_area.0 = pos;
-                }
-                Command::SetDrawAreaBottomRight(pos) => {
-                    self.draw_area.1 = pos;
-                }
-                Command::SetDrawOffset(loc) => {
-                    self.draw_offset = loc;
-                }
-                _ => {}
-            }
+            download_area: (Position { x: 0, y: 0 }, Size { w: 0, h: 0 }),
+            upload_area: (Position { x: 0, y: 0 }, Size { w: 0, h: 0 }),
+            pop_counter: 0,
+            push_counter: 0,
 
-            self.vram_view
-                .input_buffer_mut()
-                .copy_from_slice(&self.vram);
-            self.vram_view.publish();
-
-            self.state.vblank_int.store(true, Ordering::Release);
-
-            // FIXME: experimental, interface may be changed with high probability in the future
-            (self.state.screen_fill.lock().unwrap())(&self.vram, VRAM_WIDTH, VRAM_HEIGHT);
-
-            thread::sleep(Duration::from_secs(1) / 60);
+            screen_fill: Box::new(|_, _, _| {}),
         }
+    }
+}
 
-        tracing::debug!("backend worker done");
+impl Renderer for SoftwareRenderer {
+    fn state(&self) -> RenderState {
+        RenderState {}
     }
 
-    #[tracing::instrument(
-        target = "render.software",
-        level = "DEBUG",
-        "fill_vram_area",
-        skip(self)
-    )]
+    fn draw_frame(&mut self) {
+        (self.screen_fill)(&self.vram, VRAM_WIDTH, VRAM_HEIGHT);
+    }
+
+    fn set_texture_window(&mut self, tex_win: TextureWindow) {
+        self.texture_window = tex_win;
+    }
+
+    fn set_draw_area_top_left(&mut self, pos: Position) {
+        self.draw_area.0 = pos;
+    }
+
+    fn set_draw_area_bottom_right(&mut self, pos: Position) {
+        self.draw_area.1 = pos;
+    }
+
+    fn set_draw_offset(&mut self, loc: Location) {
+        self.draw_offset = loc;
+    }
+
+    fn draw_polygon(&mut self, polygon: Polygon) {
+        match polygon.vertices.len() {
+            len @ ..3 => tracing::debug!(%len, "degenerate polygon"),
+            3 => {
+                self.draw_triangle(
+                    polygon.flat_color,
+                    [
+                        polygon.vertices[0],
+                        polygon.vertices[1],
+                        polygon.vertices[2],
+                    ],
+                );
+            }
+            4 => {
+                self.draw_triangle(
+                    polygon.flat_color,
+                    [
+                        polygon.vertices[0],
+                        polygon.vertices[1],
+                        polygon.vertices[2],
+                    ],
+                );
+                self.draw_triangle(
+                    polygon.flat_color,
+                    [
+                        polygon.vertices[1],
+                        polygon.vertices[2],
+                        polygon.vertices[3],
+                    ],
+                );
+            }
+            len => {
+                tracing::debug!(%len, "polygons larger than a quad aren't supported");
+            }
+        }
+    }
+
+    fn draw_polyline(&mut self, _: Polyline) {}
+
+    fn draw_rect(&mut self, rect: Rect) {
+        self.draw_rect(rect);
+    }
+
     fn fill_vram_area(
         &mut self,
         Position { x, y }: Position,
@@ -192,36 +135,54 @@ impl Worker {
         }
     }
 
-    #[tracing::instrument(
-        target = "render.software",
-        level = "DEBUG",
-        "copy_vram_from_upload_buf",
-        skip(self)
-    )]
-    fn copy_vram_from_upload_buf(
-        &mut self,
-        Position { x, y }: Position,
-        Size { w, h }: Size,
-        mut data: TextureBuf,
-    ) {
-        for j in 0..h {
-            for i in 0..w {
-                let (x, y) = (x + i, y + j);
-                let (x, y) = (x as usize, y as usize);
-                let data = data.pop_front().unwrap();
-                if (0..VRAM_WIDTH).contains(&x) && (0..VRAM_HEIGHT).contains(&y) {
-                    self.vram[y * VRAM_WIDTH + x] = data;
-                }
-            }
+    fn prepare_vram_for_read(&mut self, pos: Position, size: Size) {
+        self.download_area = (pos, size);
+        self.pop_counter = 0;
+    }
+
+    fn pop_pixel(&mut self) -> Option<u16> {
+        let (Position { x, y }, Size { w, h }) = self.download_area;
+        if w == 0 || h == 0 {
+            return None;
+        }
+
+        let w = w as usize;
+        let h = h as usize;
+        let i = self.pop_counter as usize;
+        if i < w * h {
+            let x = (x as usize + i % w).clamp(0, VRAM_WIDTH - 1);
+            let y = (y as usize + i / w).clamp(0, VRAM_HEIGHT - 1);
+
+            self.pop_counter += 1;
+            return Some(self.vram[y * VRAM_WIDTH + x]);
+        }
+
+        None
+    }
+
+    fn prepare_vram_for_write(&mut self, pos: Position, size: Size) {
+        self.upload_area = (pos, size);
+    }
+
+    fn push_pixel(&mut self, pixel: u16) {
+        let (Position { x, y }, Size { w, h }) = self.upload_area;
+
+        if w == 0 || h == 0 {
+            return;
+        }
+
+        let w = w as usize;
+        let h = h as usize;
+        let i = self.push_counter as usize;
+        if i < w * h {
+            let x = (x as usize + (i % w)).clamp(0, VRAM_WIDTH - 1);
+            let y = (y as usize + (i / w)).clamp(0, VRAM_HEIGHT - 1);
+
+            self.vram[y * VRAM_WIDTH + x] = pixel;
+            self.push_counter += 1;
         }
     }
 
-    #[tracing::instrument(
-        target = "render.software",
-        level = "DEBUG",
-        "mirror_vram_area",
-        skip(self)
-    )]
     fn mirror_vram_area(
         &mut self,
         Position { x: sx, y: sy }: Position,
@@ -229,7 +190,7 @@ impl Worker {
         Size { w, h }: Size,
     ) {
         // areas may overlap
-        let mut tmp = TextureBuf::with_capacity(w as usize * h as usize);
+        let mut tmp = VecDeque::with_capacity(w as usize * h as usize);
 
         for y in 0..h {
             for x in 0..w {
@@ -252,12 +213,13 @@ impl Worker {
         }
     }
 
-    #[tracing::instrument(
-        target = "render.software",
-        level = "DEBUG",
-        "draw_triangle",
-        skip(self)
-    )]
+    fn reset(&mut self) {
+        let mut prev = mem::take(self);
+        mem::swap(&mut prev.screen_fill, &mut self.screen_fill);
+    }
+}
+
+impl SoftwareRenderer {
     fn draw_triangle(
         &mut self,
         flat_color: Option<Color>,
@@ -378,7 +340,6 @@ impl Worker {
         }
     }
 
-    #[tracing::instrument(target = "render.software", level = "DEBUG", "draw_rect", skip(self))]
     fn draw_rect(&mut self, rect: Rect) {
         let draw_area = (self.draw_area.0, self.draw_area.1);
         let draw_offset = self.draw_offset;

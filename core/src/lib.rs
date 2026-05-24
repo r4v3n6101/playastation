@@ -1,5 +1,4 @@
-// Used for software renderer multi-threading
-#![cfg_attr(not(feature = "software-renderer"), no_std)]
+#![no_std]
 
 extern crate alloc;
 

@@ -1,3 +1,5 @@
+use alloc::boxed::Box;
+
 use smallvec::SmallVec;
 
 /// Maximum polygon is quad, but what if greater?
@@ -5,11 +7,14 @@ pub const POLYGON_STACK_LIMIT: usize = 4;
 /// Points for polyline that will be stored on a stack. If more then heap alloc.
 pub const POLYLINE_STACK_LIMIT: usize = 10;
 
+pub const VRAM_WIDTH: usize = 1024;
+pub const VRAM_HEIGHT: usize = 512;
+
+/// VRAM is 2d texture actually.
+pub type Vram = Box<[u16]>;
+
 #[derive(Debug, Copy, Clone)]
-pub struct RenderState {
-    /// Whether the frame is drawn.
-    pub vblank_int: bool,
-}
+pub struct RenderState {}
 
 #[derive(Debug, Clone)]
 pub struct Polygon {
@@ -39,6 +44,14 @@ pub struct Vertex {
     pub location: Location,
     pub color: Option<Color>,
     pub texcords: Option<UV>,
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct TextureWindow {
+    pub mask_x: u8,
+    pub mask_y: u8,
+    pub offset_x: u8,
+    pub offset_y: u8,
 }
 
 /// Position somewhere at space.

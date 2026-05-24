@@ -1,11 +1,16 @@
 pub mod noop;
-#[cfg(feature = "software-renderer")]
 pub mod software;
 pub mod types;
 
 pub trait Renderer: 'static {
     /// Gather inner fields into [`types::RenderState`].
     fn state(&self) -> types::RenderState;
+
+    /// Draw frame somehow, triggerred on every vblank.
+    fn draw_frame(&mut self);
+
+    /// Set texture window for mapping UV.
+    fn set_texture_window(&mut self, tex_win: types::TextureWindow);
 
     /// Clip point (top-left) of bounding box of draw window.
     fn set_draw_area_top_left(&mut self, pos: types::Position);
@@ -30,26 +35,20 @@ pub trait Renderer: 'static {
     fn fill_vram_area(&mut self, pos: types::Position, size: types::Size, color: types::Color);
 
     /// Blit VRAM area to the local storage. This is done just before VRAM => CPU transfer.
-    fn download_vram_area_to_local(&mut self, pos: types::Position, size: types::Size);
+    fn prepare_vram_for_read(&mut self, pos: types::Position, size: types::Size);
 
     /// Read a pixel from VRAM snapshot taken via [`Self::download_vram_area_to_local`]
     /// and move pointer forward to the next pixel (if any have left in the area of snapshot).
     fn pop_pixel(&mut self) -> Option<u16>;
 
     /// Prepare an inner state to gather pixels for the future commit into the VRAM.
-    fn prepare_local_vram_to_upload(&mut self, pos: types::Position, size: types::Size);
+    fn prepare_vram_for_write(&mut self, pos: types::Position, size: types::Size);
 
     /// Push a pixel into the VRAM snapshot and increment pointer to the next pixel to be written.
     fn push_pixel(&mut self, pixel: u16);
 
-    /// Commit gathered pixels into VRAM ending upload started after [`Self::prepare_local_vram_to_upload`].
-    fn upload_local_vram_area(&mut self);
-
     /// Copy VRAM area into VRAM.
     fn mirror_vram_area(&mut self, src: types::Position, dest: types::Position, size: types::Size);
-
-    /// Clear any pending interruptions.
-    fn clear_int(&mut self);
 
     /// Reset inner state like push/pop pointers, etc.
     fn reset(&mut self);

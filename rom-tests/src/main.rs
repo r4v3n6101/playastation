@@ -39,14 +39,14 @@ fn main() {
     executor.pending_exe = Some(BoxedExeFile::new(rom));
 
     let mut renderer = SoftwareRenderer::default();
-    renderer.set_screen_output(Box::new(move |buf, width, height| {
+    renderer.screen_fill = Box::new(move |buf, width, height| {
         let _ = dump_bgr555_texture_png(
             buf,
             width as u32,
             height as u32,
             format!("output/{}.png", rom_filename.display()),
         );
-    }));
+    });
     bus.gpu.renderer = Box::new(renderer);
 
     for _ in 0..LOOPS {

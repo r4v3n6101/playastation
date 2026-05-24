@@ -97,6 +97,7 @@ pub fn run(cache: &mut PagedCache, block: &Block, cpu: &mut Cpu, bus: &mut Bus) 
     ctx.result
 }
 
+#[inline]
 fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
     let mut pending_load = PendingLoad::default();
     let mut pending_jump = PendingJump::default();

@@ -2,7 +2,7 @@ use core::mem;
 
 use super::{
     Renderer,
-    types::{Color, Location, Polygon, Polyline, Position, Rect, RenderState, Size},
+    types::{Color, Location, Polygon, Polyline, Position, Rect, RenderState, Size, TextureWindow},
 };
 
 #[derive(Debug)]
@@ -26,7 +26,15 @@ impl Default for NoopRenderer {
 
 impl Renderer for NoopRenderer {
     fn state(&self) -> RenderState {
-        RenderState { vblank_int: false }
+        RenderState {}
+    }
+
+    fn draw_frame(&mut self) {
+        tracing::debug!("goo-goo-guh-guh");
+    }
+
+    fn set_texture_window(&mut self, tex_win: TextureWindow) {
+        tracing::debug!(?tex_win, "texture window");
     }
 
     fn set_draw_area_top_left(&mut self, pos: Position) {
@@ -57,10 +65,10 @@ impl Renderer for NoopRenderer {
         tracing::debug!(?pos, ?size, ?color, "fill vram area");
     }
 
-    fn download_vram_area_to_local(&mut self, pos: Position, size: Size) {
+    fn prepare_vram_for_read(&mut self, pos: Position, size: Size) {
         self.download_area = (pos, size);
         self.pop_counter = 0;
-        tracing::debug!(download_area=?self.download_area, "download vram area to local storage");
+        tracing::debug!(download_area=?self.download_area, "prepare vram for popping pixels");
     }
 
     fn pop_pixel(&mut self) -> Option<u16> {
@@ -73,10 +81,10 @@ impl Renderer for NoopRenderer {
         Some(0)
     }
 
-    fn prepare_local_vram_to_upload(&mut self, pos: Position, size: Size) {
+    fn prepare_vram_for_write(&mut self, pos: Position, size: Size) {
         self.upload_area = (pos, size);
         self.push_counter = 0;
-        tracing::debug!(upload_area=?self.upload_area, "prepare inner state for pixel filling");
+        tracing::debug!(upload_area=?self.upload_area, "prepare vram for pushing pixels");
     }
 
     fn push_pixel(&mut self, pixel: u16) {
@@ -92,16 +100,8 @@ impl Renderer for NoopRenderer {
         }
     }
 
-    fn upload_local_vram_area(&mut self) {
-        tracing::debug!(upload_area=?self.upload_area, "upload filled vram area");
-    }
-
     fn mirror_vram_area(&mut self, src: Position, dest: Position, size: Size) {
         tracing::debug!(?src, ?dest, ?size, "mirror vram area");
-    }
-
-    fn clear_int(&mut self) {
-        tracing::debug!("clear interruptions");
     }
 
     fn reset(&mut self) {

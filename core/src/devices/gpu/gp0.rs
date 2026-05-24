@@ -5,7 +5,7 @@ use smallvec::SmallVec;
 
 use crate::render::types::{
     Color, Location, POLYGON_STACK_LIMIT, POLYLINE_STACK_LIMIT, Polygon, Polyline, Position, Rect,
-    Size, UV, Vertex,
+    Size, TextureWindow, UV, Vertex,
 };
 
 use super::Gpu;
@@ -66,11 +66,11 @@ pub fn dispatch(gpu: &mut Gpu, cmd: u32) {
                 cmdbuf.0 = SmallBox::new(Vram2CpuPacket::init(cmd));
             }
             // 0xE1 => set_draw_mode(gpu, cmd),
-            // 0xE2 => set_texture_window(gpu, cmd),
-            // 0xE6 => set_mask_bit_setting(gpu, cmd),
+            0xE2 => set_texture_window(gpu, cmd),
             0xE3 => set_draw_area_top_left(gpu, cmd),
             0xE4 => set_draw_area_bottom_right(gpu, cmd),
             0xE5 => set_draw_offset(gpu, cmd),
+            // 0xE6 => set_mask_bit_setting(gpu, cmd),
             _ => {}
         }
     }
@@ -532,8 +532,7 @@ impl PacketBuilder for Cpu2VramPacket {
                 size.replace(sz);
 
                 if sz.w > 0 && sz.h > 0 {
-                    gpu.renderer
-                        .prepare_local_vram_to_upload(self.pos.unwrap(), sz);
+                    gpu.renderer.prepare_vram_for_write(self.pos.unwrap(), sz);
                 }
             }
             Some(size) => {
@@ -556,9 +555,7 @@ impl PacketBuilder for Cpu2VramPacket {
         self.pixels_written < size
     }
 
-    fn commit(&mut self, gpu: &mut Gpu) {
-        gpu.renderer.upload_local_vram_area();
-    }
+    fn commit(&mut self, _: &mut Gpu) {}
 }
 
 impl PacketBuilder for Vram2CpuPacket {
@@ -586,7 +583,7 @@ impl PacketBuilder for Vram2CpuPacket {
 
     fn commit(&mut self, gpu: &mut Gpu) {
         gpu.renderer
-            .download_vram_area_to_local(self.pos.unwrap(), self.size.unwrap());
+            .prepare_vram_for_read(self.pos.unwrap(), self.size.unwrap());
 
         // TODO : remove
         gpu.gpustat.set_ready_to_send_vram(true);
@@ -626,6 +623,15 @@ impl PacketBuilder for Vram2VramPacket {
         gpu.renderer
             .mirror_vram_area(self.src.unwrap(), self.dest.unwrap(), self.size.unwrap());
     }
+}
+
+fn set_texture_window(gpu: &mut Gpu, cmd: u32) {
+    gpu.renderer.set_texture_window(TextureWindow {
+        mask_x: (cmd & 0x1f) as u8,
+        mask_y: ((cmd >> 5) & 0x1f) as u8,
+        offset_x: ((cmd >> 10) & 0x1f) as u8,
+        offset_y: ((cmd >> 15) & 0x1f) as u8,
+    });
 }
 
 fn set_draw_area_top_left(gpu: &mut Gpu, cmd: u32) {
