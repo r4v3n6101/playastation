@@ -160,7 +160,7 @@ impl Mmio for Gpu {
     }
 
     fn write(&mut self, maddr: u32, value: &[u8]) {
-        let (addr, value) = self.write_value(maddr, value);
+        let (addr, value) = self.write_unaligned(maddr, value);
         match addr {
             0x0 => self.dispatch_gp0(value),
             0x4 => self.dispatch_gp1(value),

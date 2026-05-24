@@ -148,7 +148,7 @@ impl Mmio for TimerController {
     }
 
     fn write(&mut self, maddr: u32, value: &[u8]) {
-        let (addr, val) = self.write_value(maddr, value);
+        let (addr, val) = self.write_unaligned(maddr, value);
         let timer = (addr / 0x10) as usize;
         let reg = addr % 0x10;
 

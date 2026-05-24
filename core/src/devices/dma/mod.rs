@@ -272,7 +272,7 @@ impl Mmio for DmaController {
     }
 
     fn write(&mut self, maddr: u32, value: &[u8]) {
-        let (addr, val) = self.write_value(maddr, value);
+        let (addr, val) = self.write_unaligned(maddr, value);
         match addr {
             ..0x70 => {
                 let reg = addr % 0x10;

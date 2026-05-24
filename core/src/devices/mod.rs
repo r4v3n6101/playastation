@@ -23,7 +23,7 @@ trait MmioExt: Mmio {
         dest.copy_from_slice(&bytes[off as usize..][..dest.len()]);
     }
 
-    fn write_value(&mut self, maddr: u32, value: &[u8]) -> (u32, u32) {
+    fn write_unaligned(&mut self, maddr: u32, value: &[u8]) -> (u32, u32) {
         let (addr, off) = (maddr & !0x3, maddr & 0x3);
 
         let mut buf = [0u8; 4];
