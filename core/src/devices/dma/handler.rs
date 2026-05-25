@@ -43,7 +43,11 @@ pub fn do_manual(
                     } else {
                         addr.wrapping_sub(4)
                     };
-                    store_direct_ram(bus, addr, word, ram_touched);
+
+                    // SAFETY: addr masked above
+                    unsafe {
+                        store_direct_ram(bus, addr, word, ram_touched);
+                    }
 
                     cycles = cycles.saturating_add(TIMINGS[OTC]);
                 }
@@ -79,7 +83,8 @@ pub fn do_block(
             match chan.chcr.direction() {
                 Direction::FromRam => match ch {
                     GPU => {
-                        let word = load_direct_ram(bus, addr);
+                        // SAFETY: addr masked above
+                        let word = unsafe { load_direct_ram(bus, addr) };
                         bus.gpu.dispatch_gp0(word);
 
                         cycles = cycles.saturating_add(TIMINGS[GPU]);
@@ -106,13 +111,15 @@ pub fn do_linked_list(bus: &mut Bus, ch: usize, chan: &mut Channel) -> u64 {
     loop {
         let mut addr = chan.madr & 0x1FFFFC;
 
-        let header = load_direct_ram(bus, addr);
+        // SAFETY: addr masked above
+        let header = unsafe { load_direct_ram(bus, addr) };
         let next = header & 0xFFFFFF;
         let size = header >> 24;
         for _ in 0..size {
             addr = addr.wrapping_add(4) & 0x1FFFFC;
 
-            let command = load_direct_ram(bus, addr);
+            // SAFETY: addr masked above
+            let command = unsafe { load_direct_ram(bus, addr) };
             bus.gpu.dispatch_gp0(command);
 
             cycles = cycles.saturating_add(TIMINGS[GPU]);
@@ -126,13 +133,23 @@ pub fn do_linked_list(bus: &mut Bus, ch: usize, chan: &mut Channel) -> u64 {
     }
 }
 
-fn load_direct_ram(bus: &mut Bus, paddr: u32) -> u32 {
+unsafe fn load_direct_ram(bus: &mut Bus, paddr: u32) -> u32 {
     let mut buf = [0; 4];
-    buf.copy_from_slice(&bus.ram[paddr as usize..][..4]);
+    unsafe { buf.copy_from_slice(bus.ram.get_unchecked(paddr as usize..).get_unchecked(..4)) }
     u32::from_le_bytes(buf)
 }
 
-fn store_direct_ram(bus: &mut Bus, paddr: u32, value: u32, ram_touched: &mut impl FnMut(u32)) {
-    bus.ram[paddr as usize..][..4].copy_from_slice(&value.to_le_bytes());
+unsafe fn store_direct_ram(
+    bus: &mut Bus,
+    paddr: u32,
+    value: u32,
+    ram_touched: &mut impl FnMut(u32),
+) {
+    unsafe {
+        bus.ram
+            .get_unchecked_mut(paddr as usize..)
+            .get_unchecked_mut(..4)
+            .copy_from_slice(&value.to_le_bytes());
+    }
     ram_touched(paddr);
 }
