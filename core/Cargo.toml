@@ -18,3 +18,5 @@ smallbox = { version = "0.8.8", default-features = false, features = ["coerce"] 
 yoke = { version = "0.8.2", default-features = false, features = ["alloc"] }
 zerocopy = { version = "0.8.48", default-features = false, features = ["alloc"] }
 zerocopy-derive = "0.8.48"
+
+fixed = { version = "1.31.0", default-features = false }

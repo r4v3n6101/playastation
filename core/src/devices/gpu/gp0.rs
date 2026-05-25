@@ -206,11 +206,11 @@ impl PacketBuilder for PolygonPacket {
         Self: Sized,
     {
         let op = (cmd >> 24) as u8;
-        let raw_texture = (op & 0x01) != 0;
-        let semi_transparent = (op & 0x02) != 0;
         let quad = (op & 0x08) != 0;
         let gouraud = (op & 0x10) != 0;
         let textured = (op & 0x04) != 0;
+        let raw_texture = textured && (op & 0x01) != 0;
+        let semi_transparent = (op & 0x02) != 0;
 
         let mut vertices = SmallVec::new();
         let color = parse_color(cmd);
