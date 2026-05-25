@@ -93,10 +93,10 @@ impl Gpu {
 
         GpuStat::new()
             // Via [`DrawMode`]
-            .with_texture_page_x_base(draw_mode.texture_page_x_base())
-            .with_texture_page_y_base(draw_mode.texture_page_y_base())
-            .with_semi_transparency(draw_mode.semi_transparency())
-            .with_texture_depth(draw_mode.texture_depth())
+            .with_texture_page_x_base(draw_mode.tex_page().texture_page_x_base())
+            .with_texture_page_y_base(draw_mode.tex_page().texture_page_y_base())
+            .with_semi_transparency(draw_mode.tex_page().semi_transparency())
+            .with_texture_depth(draw_mode.tex_page().texture_depth())
             .with_dither_24_to_15(draw_mode.dither_24_to_15())
             .with_draw_to_display_area(draw_mode.draw_to_display_area())
             .with_texture_disable(draw_mode.texture_disable())

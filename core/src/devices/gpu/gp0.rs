@@ -5,7 +5,8 @@ use smallvec::SmallVec;
 
 use crate::render::types::{
     Color, DrawMode, EnvParameter, Location, MaskBitSetting, POLYGON_STACK_LIMIT,
-    POLYLINE_STACK_LIMIT, Polygon, Polyline, Position, Rect, Size, TextureWindow, UV, Vertex,
+    POLYLINE_STACK_LIMIT, Polygon, Polyline, Position, Rect, Size, TexturePage, TextureWindow, UV,
+    Vertex,
 };
 
 use super::Gpu;
@@ -111,11 +112,13 @@ trait PacketBuilder: fmt::Debug {
 struct PolygonPacket {
     gouraud: bool,
     textured: bool,
+    raw_texture: bool,
+    semi_transparent: bool,
 
     color: Option<Color>,
     vertices: SmallVec<[VertexBuilder; POLYGON_STACK_LIMIT]>,
     clut: Option<Position>,
-    tpage: Option<Position>,
+    tpage: Option<TexturePage>,
 
     words_left: usize,
 }
@@ -134,6 +137,8 @@ struct LinePacket {
 #[derive(Debug)]
 struct RectPacket {
     textured: bool,
+    raw_texture: bool,
+    semi_transparent: bool,
 
     color: Color,
     loc: Option<Location>,
@@ -201,6 +206,8 @@ impl PacketBuilder for PolygonPacket {
         Self: Sized,
     {
         let op = (cmd >> 24) as u8;
+        let raw_texture = (op & 0x01) != 0;
+        let semi_transparent = (op & 0x02) != 0;
         let quad = (op & 0x08) != 0;
         let gouraud = (op & 0x10) != 0;
         let textured = (op & 0x04) != 0;
@@ -242,6 +249,8 @@ impl PacketBuilder for PolygonPacket {
         Self {
             gouraud,
             textured,
+            raw_texture,
+            semi_transparent,
 
             color,
             vertices,
@@ -303,6 +312,8 @@ impl PacketBuilder for PolygonPacket {
                     texcords: b.uv,
                 })
                 .collect(),
+            raw_texture: self.raw_texture,
+            semi_transparent: self.semi_transparent,
             flat_color: self.color,
             clut: self.clut,
             tpage: self.tpage,
@@ -405,6 +416,8 @@ impl PacketBuilder for RectPacket {
         Self: Sized,
     {
         let op = (cmd >> 24) as u8;
+        let raw_texture = (op & 0x01) != 0;
+        let semi_transparent = (op & 0x02) != 0;
         let textured = (op & 0x04) != 0;
 
         let color = parse_color(cmd);
@@ -434,6 +447,8 @@ impl PacketBuilder for RectPacket {
 
         Self {
             textured,
+            raw_texture,
+            semi_transparent,
 
             color,
             loc: None,
@@ -472,6 +487,8 @@ impl PacketBuilder for RectPacket {
         gpu.renderer.draw_rect(Rect {
             location: self.loc.unwrap(),
             size: self.size.unwrap(),
+            raw_texture: self.raw_texture,
+            semi_transparent: self.semi_transparent,
             flat_color: self.color,
             texcoords: self.uv,
             clut: self.clut,
@@ -632,29 +649,29 @@ fn set_texture_window(gpu: &mut Gpu, cmd: u32) {
     let bytes = cmd.to_le_bytes();
     gpu.renderer
         .set_parameter(EnvParameter::TextureWindow(TextureWindow::from_bytes([
-            bytes[1], bytes[2], bytes[3],
+            bytes[0], bytes[1], bytes[2],
         ])));
 }
 
 fn set_draw_area_top_left(gpu: &mut Gpu, cmd: u32) {
     gpu.renderer
         .set_parameter(EnvParameter::DrawAreaTopLeft(Position {
-            x: (cmd & 0x03ff) as u16,
-            y: ((cmd >> 10) & 0x01ff) as u16,
+            x: (cmd & 0x03ff) as usize,
+            y: ((cmd >> 10) & 0x01ff) as usize,
         }));
 }
 
 fn set_draw_area_bottom_right(gpu: &mut Gpu, cmd: u32) {
     gpu.renderer
         .set_parameter(EnvParameter::DrawAreaBottomRight(Position {
-            x: (cmd & 0x03ff) as u16,
-            y: ((cmd >> 10) & 0x01ff) as u16,
+            x: (cmd & 0x03ff) as usize,
+            y: ((cmd >> 10) & 0x01ff) as usize,
         }));
 }
 
 fn set_draw_offset(gpu: &mut Gpu, cmd: u32) {
-    fn sign_extend_11(v: u32) -> i16 {
-        ((v << 21) as i32 >> 21) as i16
+    fn sign_extend_11(v: u32) -> i32 {
+        (v << 21) as i32 >> 21
     }
 
     gpu.renderer
@@ -682,15 +699,15 @@ fn parse_color(cmd: u32) -> Color {
 
 fn parse_loc(cmd: u32) -> Location {
     Location {
-        x: cmd as i16,
-        y: (cmd >> 16) as i16,
+        x: (cmd & 0xFFFF) as i16 as i32,
+        y: ((cmd >> 16) & 0xFFFF) as i16 as i32,
     }
 }
 
 fn parse_pos(cmd: u32) -> Position {
     Position {
-        x: cmd as u16,
-        y: (cmd >> 16) as u16,
+        x: (cmd & 0xFFFF) as usize,
+        y: ((cmd >> 16) & 0xFFFF) as usize,
     }
 }
 
@@ -702,10 +719,9 @@ fn parse_size(cmd: u32) -> Size {
 }
 
 fn parse_uv_clut(cmd: u32) -> (UV, Position) {
-    let raw = (cmd >> 16) as u16;
-
-    let x = (raw & 0x3f) * 16;
-    let y = (raw >> 6) & 0x1ff;
+    let raw = cmd >> 16;
+    let x = ((raw & 0x3f) as usize) * 16;
+    let y = ((raw >> 6) & 0x1ff) as usize;
 
     (
         UV {
@@ -716,19 +732,13 @@ fn parse_uv_clut(cmd: u32) -> (UV, Position) {
     )
 }
 
-fn parse_uv_tpage(cmd: u32) -> (UV, Position) {
-    let raw = (cmd >> 16) as u16;
-
-    // tpage
-    let x = (raw & 0x0f) * 64;
-    let y = ((raw >> 4) & 0x01) * 256;
-
+fn parse_uv_tpage(cmd: u32) -> (UV, TexturePage) {
     (
         UV {
             u: cmd as u8,
             v: (cmd >> 8) as u8,
         },
-        Position { x, y },
+        TexturePage::from_bytes(((cmd >> 16) as u16).to_le_bytes()),
     )
 }
 

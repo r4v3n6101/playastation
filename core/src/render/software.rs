@@ -5,7 +5,7 @@ use super::{
     Renderer,
     types::{
         Color, DrawMode, EnvParameter, Location, MaskBitSetting, Polygon, Polyline, Position, Rect,
-        RenderState, Size, TextureWindow, VRAM_HEIGHT, VRAM_WIDTH, Vertex, Vram,
+        RenderState, Size, TextureDepth, TextureWindow, UV, VRAM_HEIGHT, VRAM_WIDTH, Vertex, Vram,
     },
 };
 
@@ -87,11 +87,28 @@ impl Renderer for SoftwareRenderer {
     }
 
     fn draw_polygon(&mut self, polygon: Polygon) {
+        if let Some(tex_page) = polygon.tpage {
+            self.draw_mode.set_tex_page(tex_page);
+        }
+
+        let flat_color = polygon.flat_color.is_some();
+        let textured = polygon.clut.is_some();
+        let raw_texture = polygon.raw_texture;
+        let mut rasterize = |a, b, c| match (flat_color, textured, raw_texture) {
+            (true, false, false) => self.rasterize_triangle::<true, false, false>(a, b, c),
+            (false, false, false) => self.rasterize_triangle::<false, false, false>(a, b, c),
+
+            (true, true, false) => self.rasterize_triangle::<true, true, false>(a, b, c),
+            (false, true, false) => self.rasterize_triangle::<false, true, false>(a, b, c),
+
+            (true, _, true) => self.rasterize_triangle::<true, true, true>(a, b, c),
+            (false, _, true) => self.rasterize_triangle::<false, true, true>(a, b, c),
+        };
         match polygon.vertices.len() {
-            len @ ..3 => tracing::debug!(%len, "degenerate polygon"),
             3 => {
-                self.draw_triangle(
+                rasterize(
                     polygon.flat_color,
+                    polygon.clut,
                     [
                         polygon.vertices[0],
                         polygon.vertices[1],
@@ -100,16 +117,18 @@ impl Renderer for SoftwareRenderer {
                 );
             }
             4 => {
-                self.draw_triangle(
+                rasterize(
                     polygon.flat_color,
+                    polygon.clut,
                     [
                         polygon.vertices[0],
                         polygon.vertices[1],
                         polygon.vertices[2],
                     ],
                 );
-                self.draw_triangle(
+                rasterize(
                     polygon.flat_color,
+                    polygon.clut,
                     [
                         polygon.vertices[1],
                         polygon.vertices[2],
@@ -117,16 +136,21 @@ impl Renderer for SoftwareRenderer {
                     ],
                 );
             }
-            len => {
-                tracing::debug!(%len, "polygons larger than a quad aren't supported");
-            }
+            _ => {}
         }
     }
 
     fn draw_polyline(&mut self, _: Polyline) {}
 
     fn draw_rect(&mut self, rect: Rect) {
-        self.draw_rect(rect);
+        let textured = rect.texcoords.is_some();
+        let raw_texture = rect.raw_texture;
+
+        match (textured, raw_texture) {
+            (false, _) => self.rasterize_rect::<false, false>(rect),
+            (true, false) => self.rasterize_rect::<true, false>(rect),
+            (_, true) => self.rasterize_rect::<true, true>(rect),
+        }
     }
 
     fn fill_vram_area(
@@ -135,10 +159,11 @@ impl Renderer for SoftwareRenderer {
         Size { w, h }: Size,
         Color { r, g, b }: Color,
     ) {
+        let w = w as usize;
+        let h = h as usize;
         for j in 0..h {
             for i in 0..w {
                 let (x, y) = (x + i, y + j);
-                let (x, y) = (x as usize, y as usize);
                 if (0..VRAM_WIDTH).contains(&x) && (0..VRAM_HEIGHT).contains(&y) {
                     self.vram[y * VRAM_WIDTH + x] = rgb888_to_bgr555(r, g, b);
                 }
@@ -161,8 +186,8 @@ impl Renderer for SoftwareRenderer {
         let h = h as usize;
         let i = self.pop_counter as usize;
         if i < w * h {
-            let x = (x as usize + i % w).clamp(0, VRAM_WIDTH - 1);
-            let y = (y as usize + i / w).clamp(0, VRAM_HEIGHT - 1);
+            let x = (x + i % w).clamp(0, VRAM_WIDTH - 1);
+            let y = (y + i / w).clamp(0, VRAM_HEIGHT - 1);
 
             self.pop_counter += 1;
             return Some(self.vram[y * VRAM_WIDTH + x]);
@@ -173,6 +198,7 @@ impl Renderer for SoftwareRenderer {
 
     fn prepare_vram_for_write(&mut self, pos: Position, size: Size) {
         self.upload_area = (pos, size);
+        self.push_counter = 0;
     }
 
     fn push_pixel(&mut self, pixel: u16) {
@@ -186,8 +212,8 @@ impl Renderer for SoftwareRenderer {
         let h = h as usize;
         let i = self.push_counter as usize;
         if i < w * h {
-            let x = (x as usize + (i % w)).clamp(0, VRAM_WIDTH - 1);
-            let y = (y as usize + (i / w)).clamp(0, VRAM_HEIGHT - 1);
+            let x = (x + i % w).clamp(0, VRAM_WIDTH - 1);
+            let y = (y + i / w).clamp(0, VRAM_HEIGHT - 1);
 
             self.vram[y * VRAM_WIDTH + x] = pixel;
             self.push_counter += 1;
@@ -200,13 +226,15 @@ impl Renderer for SoftwareRenderer {
         Position { x: dx, y: dy }: Position,
         Size { w, h }: Size,
     ) {
+        let w = w as usize;
+        let h = h as usize;
+
         // areas may overlap
-        let mut tmp = VecDeque::with_capacity(w as usize * h as usize);
+        let mut tmp = VecDeque::with_capacity(w * h);
 
         for y in 0..h {
             for x in 0..w {
                 let (x, y) = (sx + x, sy + y);
-                let (x, y) = (x as usize, y as usize);
                 if (0..VRAM_WIDTH).contains(&x) && (0..VRAM_HEIGHT).contains(&y) {
                     tmp.push_front(self.vram[y * VRAM_WIDTH + x]);
                 }
@@ -216,7 +244,6 @@ impl Renderer for SoftwareRenderer {
         for y in 0..h {
             for x in 0..w {
                 let (x, y) = (dx + x, dy + y);
-                let (x, y) = (x as usize, y as usize);
                 if (0..VRAM_WIDTH).contains(&x) && (0..VRAM_HEIGHT).contains(&y) {
                     self.vram[y * VRAM_WIDTH + x] = tmp.pop_back().unwrap();
                 }
@@ -231,9 +258,12 @@ impl Renderer for SoftwareRenderer {
 }
 
 impl SoftwareRenderer {
-    fn draw_triangle(
+    /// SAFETY: all unsafe are contracted by const-generics
+    #[inline(never)]
+    fn rasterize_triangle<const FLAT_COLOR: bool, const TEXTURED: bool, const RAW_TEXTURE: bool>(
         &mut self,
         flat_color: Option<Color>,
+        clut: Option<Position>,
         [
             Vertex {
                 location: v0,
@@ -317,41 +347,80 @@ impl SoftwareRenderer {
 
                 debug_assert_eq!(w0 + w1 + w2, area);
 
-                let c0 = c0.or(flat_color).unwrap_or(Color { r: 0, g: 0, b: 0 });
-                let c1 = c1.or(flat_color).unwrap_or(Color { r: 0, g: 0, b: 0 });
-                let c2 = c2.or(flat_color).unwrap_or(Color { r: 0, g: 0, b: 0 });
-
                 // interpolate color
-                let r = (w0 * c0.r as i32 + w1 * c1.r as i32 + w2 * c2.r as i32) / area;
-                let g = (w0 * c0.g as i32 + w1 * c1.g as i32 + w2 * c2.g as i32) / area;
-                let b = (w0 * c0.b as i32 + w1 * c1.b as i32 + w2 * c2.b as i32) / area;
+                let (r, g, b) = if FLAT_COLOR {
+                    let Color { r, g, b } = unsafe { flat_color.unwrap_unchecked() };
 
-                // interpolate texcoords
-                // let uv = if let Some(uv0) = uv0
-                //     && let Some(uv1) = uv1
-                //     && let Some(uv2) = uv2
-                // {
-                //     Some((
-                //         (w0 * uv0.u as i32 + w1 * uv1.u as i32 + w2 * uv2.u as i32) / area,
-                //         (w0 * uv0.v as i32 + w1 * uv1.v as i32 + w2 * uv2.v as i32) / area,
-                //     ))
-                // } else {
-                //     None
-                // };
+                    (r, g, b)
+                } else {
+                    let (
+                        Color {
+                            r: r0,
+                            g: g0,
+                            b: b0,
+                        },
+                        Color {
+                            r: r1,
+                            g: g1,
+                            b: b1,
+                        },
+                        Color {
+                            r: r2,
+                            g: g2,
+                            b: b2,
+                        },
+                    ) = unsafe {
+                        (
+                            c0.unwrap_unchecked(),
+                            c1.unwrap_unchecked(),
+                            c2.unwrap_unchecked(),
+                        )
+                    };
+                    (
+                        ((w0 * r0 as i32 + w1 * r1 as i32 + w2 * r2 as i32) / area) as u8,
+                        ((w0 * g0 as i32 + w1 * g1 as i32 + w2 * g2 as i32) / area) as u8,
+                        ((w0 * b0 as i32 + w1 * b1 as i32 + w2 * b2 as i32) / area) as u8,
+                    )
+                };
 
-                let color = rgb888_to_bgr555(
-                    r.clamp(0, 255) as u8,
-                    g.clamp(0, 255) as u8,
-                    b.clamp(0, 255) as u8,
-                );
+                let color = if TEXTURED {
+                    let (UV { u: u0, v: v0 }, UV { u: u1, v: v1 }, UV { u: u2, v: v2 }) = unsafe {
+                        (
+                            uv0.unwrap_unchecked(),
+                            uv1.unwrap_unchecked(),
+                            uv2.unwrap_unchecked(),
+                        )
+                    };
+                    // interpolate texcoords
+                    let (u, v) = (
+                        ((w0 * u0 as i32 + w1 * u1 as i32 + w2 * u2 as i32) / area) as u8,
+                        ((w0 * v0 as i32 + w1 * v1 as i32 + w2 * v2 as i32) / area) as u8,
+                    );
 
-                let idx = y as usize * VRAM_WIDTH + x as usize;
-                self.vram[idx] = color;
+                    let Some(texel) = self.sample_texture(clut, u, v) else {
+                        continue;
+                    };
+
+                    if RAW_TEXTURE {
+                        texel
+                    } else {
+                        modulate_bgr555(texel, r, g, b)
+                    }
+                } else {
+                    rgb888_to_bgr555(r, g, b)
+                };
+
+                unsafe {
+                    *self
+                        .vram
+                        .get_unchecked_mut(y as usize * VRAM_WIDTH + x as usize) = color;
+                }
             }
         }
     }
 
-    fn draw_rect(&mut self, rect: Rect) {
+    #[inline(never)]
+    fn rasterize_rect<const TEXTURED: bool, const RAW_TEXTURE: bool>(&mut self, rect: Rect) {
         let draw_area = (self.draw_area.0, self.draw_area.1);
         let draw_offset = self.draw_offset;
 
@@ -360,33 +429,135 @@ impl SoftwareRenderer {
             y: rect.location.y + draw_offset.y,
         };
 
+        let Color { r, g, b } = rect.flat_color;
         for j in 0..rect.size.h {
             for i in 0..rect.size.w {
-                let x = pos.x + i as i16;
-                let y = pos.y + j as i16;
+                let x = pos.x + i as i32;
+                let y = pos.y + j as i32;
 
-                if x < draw_area.0.x as i16
-                    || x > draw_area.1.x as i16
-                    || y < draw_area.0.y as i16
-                    || y > draw_area.1.y as i16
+                if x < draw_area.0.x as i32
+                    || x > draw_area.1.x as i32
+                    || y < draw_area.0.y as i32
+                    || y > draw_area.1.y as i32
                 {
                     continue;
                 }
 
-                let x = x as usize;
-                let y = y as usize;
-                if x < VRAM_WIDTH || y < VRAM_HEIGHT {
-                    self.vram[y * VRAM_WIDTH + x] =
-                        rgb888_to_bgr555(rect.flat_color.r, rect.flat_color.g, rect.flat_color.b);
+                let (x, y) = (x as usize, y as usize);
+                if x < VRAM_WIDTH && y < VRAM_HEIGHT {
+                    let color = if TEXTURED {
+                        let uv = unsafe { rect.texcoords.unwrap_unchecked() };
+                        let u = if self.draw_mode.texture_rectangle_x_flip() {
+                            uv.u.wrapping_sub(i as u8)
+                        } else {
+                            uv.u.wrapping_add(i as u8)
+                        };
+
+                        let v = if self.draw_mode.texture_rectangle_y_flip() {
+                            uv.v.wrapping_sub(j as u8)
+                        } else {
+                            uv.v.wrapping_add(j as u8)
+                        };
+
+                        let Some(texel) = self.sample_texture(rect.clut, u, v) else {
+                            continue;
+                        };
+
+                        if RAW_TEXTURE {
+                            texel
+                        } else {
+                            modulate_bgr555(texel, r, g, b)
+                        }
+                    } else {
+                        rgb888_to_bgr555(r, g, b)
+                    };
+
+                    unsafe {
+                        *self.vram.get_unchecked_mut(y * VRAM_WIDTH + x) = color;
+                    }
                 }
             }
         }
     }
+
+    #[inline(always)]
+    fn sample_texture(&self, clut: Option<Position>, u: u8, v: u8) -> Option<u16> {
+        let (base_x, base_y) = (
+            self.draw_mode.tex_page().texture_page_x_base() as usize * 64,
+            self.draw_mode.tex_page().texture_page_y_base() as usize * 256,
+        );
+        let (u, v) = self.apply_texture_window(u, v);
+        let color = match (self.draw_mode.tex_page().texture_depth(), clut) {
+            (TextureDepth::Bpp4, Some(clut)) => {
+                self.fetch_clut_color(clut, self.fetch_index::<4>(base_x, base_y, u, v))
+            }
+            (TextureDepth::Bpp8, Some(clut)) => {
+                self.fetch_clut_color(clut, self.fetch_index::<8>(base_x, base_y, u, v))
+            }
+            (TextureDepth::Bpp15, _) => self.fetch_15bpp(base_x, base_y, u, v),
+            _ => {
+                return None;
+            }
+        };
+
+        // color=0 means transparent for textured rendering.
+        if color.trailing_zeros() >= 15 {
+            None
+        } else {
+            Some(color)
+        }
+    }
+
+    #[inline(always)]
+    fn apply_texture_window(&self, u: u8, v: u8) -> (u8, u8) {
+        fn apply_texture_window_coord(coord: u8, mask: u8, offset: u8) -> u8 {
+            (coord & !(mask << 3)) | ((offset & mask) << 3)
+        }
+        (
+            apply_texture_window_coord(
+                u,
+                self.texture_window.mask_x(),
+                self.texture_window.offset_x(),
+            ),
+            apply_texture_window_coord(
+                v,
+                self.texture_window.mask_y(),
+                self.texture_window.offset_y(),
+            ),
+        )
+    }
+
+    #[inline(always)]
+    fn fetch_index<const BPP: usize>(&self, base_x: usize, base_y: usize, u: u8, v: u8) -> u8 {
+        let texels_per_pixel = 16 / BPP;
+        let x = (base_x + (u as usize / texels_per_pixel)).clamp(0, VRAM_WIDTH - 1);
+        let y = (base_y + v as usize).clamp(0, VRAM_HEIGHT - 1);
+
+        let word = unsafe { *self.vram.get_unchecked(y * VRAM_WIDTH + x) };
+
+        let shift = (u as usize % texels_per_pixel) * BPP;
+        ((word >> shift) & ((1 << BPP) - 1)) as u8
+    }
+
+    #[inline(always)]
+    fn fetch_15bpp(&self, base_x: usize, base_y: usize, u: u8, v: u8) -> u16 {
+        let x = (base_x + u as usize).clamp(0, VRAM_WIDTH - 1);
+        let y = (base_y + v as usize).clamp(0, VRAM_HEIGHT - 1);
+
+        unsafe { *self.vram.get_unchecked(y * VRAM_WIDTH + x) }
+    }
+
+    #[inline(always)]
+    fn fetch_clut_color(&self, clut: Position, index: u8) -> u16 {
+        let x = (clut.x + index as usize).clamp(0, VRAM_WIDTH - 1);
+        let y = clut.y.clamp(0, VRAM_HEIGHT - 1);
+
+        unsafe { *self.vram.get_unchecked(y * VRAM_WIDTH + x) }
+    }
 }
 
 fn cross2(a: Location, b: Location, p: Location) -> i32 {
-    (p.x as i32 - a.x as i32) * (b.y as i32 - a.y as i32)
-        - (p.y as i32 - a.y as i32) * (b.x as i32 - a.x as i32)
+    (p.x - a.x) * (b.y - a.y) - (p.y - a.y) * (b.x - a.x)
 }
 
 fn rgb888_to_bgr555(r: u8, g: u8, b: u8) -> u16 {
@@ -395,4 +566,17 @@ fn rgb888_to_bgr555(r: u8, g: u8, b: u8) -> u16 {
     let b5 = (b >> 3) as u16;
 
     r5 | (g5 << 5) | (b5 << 10)
+}
+
+fn modulate_bgr555(texel: u16, r: u8, g: u8, b: u8) -> u16 {
+    let tr = (texel & 0x1f) as u32;
+    let tg = ((texel >> 5) & 0x1f) as u32;
+    let tb = ((texel >> 10) & 0x1f) as u32;
+    let mask = texel & 0x8000;
+
+    let r = ((tr * r as u32) >> 7).min(31) as u16;
+    let g = ((tg * g as u32) >> 7).min(31) as u16;
+    let b = ((tb * b as u32) >> 7).min(31) as u16;
+
+    mask | r | (g << 5) | (b << 10)
 }

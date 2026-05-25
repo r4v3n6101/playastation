@@ -22,6 +22,40 @@ pub struct RenderState {
 }
 
 #[derive(Debug, Clone)]
+pub struct Polygon {
+    pub vertices: SmallVec<[Vertex; POLYGON_STACK_LIMIT]>,
+    pub raw_texture: bool,
+    pub semi_transparent: bool,
+    pub flat_color: Option<Color>,
+    pub clut: Option<Position>,
+    pub tpage: Option<TexturePage>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Polyline {
+    pub vertices: SmallVec<[Vertex; POLYLINE_STACK_LIMIT]>,
+    pub flat_color: Option<Color>,
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct Rect {
+    pub location: Location,
+    pub size: Size,
+    pub raw_texture: bool,
+    pub semi_transparent: bool,
+    pub flat_color: Color,
+    pub texcoords: Option<UV>,
+    pub clut: Option<Position>,
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct Vertex {
+    pub location: Location,
+    pub color: Option<Color>,
+    pub texcords: Option<UV>,
+}
+
+#[derive(Debug, Clone)]
 pub enum EnvParameter {
     DrawMode(DrawMode),
     TextureWindow(TextureWindow),
@@ -34,15 +68,21 @@ pub enum EnvParameter {
 #[bitfield(bits = 14)]
 #[derive(Debug, Copy, Clone)]
 pub struct DrawMode {
-    pub texture_page_x_base: B4,
-    pub texture_page_y_base: B1,
-    pub semi_transparency: SemiTransparency,
-    pub texture_depth: TextureDepth,
+    pub tex_page: TexturePage,
     pub dither_24_to_15: bool,
     pub draw_to_display_area: bool,
     pub texture_disable: bool,
     pub texture_rectangle_x_flip: bool,
     pub texture_rectangle_y_flip: bool,
+}
+
+#[bitfield(bits = 9)]
+#[derive(Specifier, Debug, Copy, Clone)]
+pub struct TexturePage {
+    pub texture_page_x_base: B4,
+    pub texture_page_y_base: B1,
+    pub semi_transparency: SemiTransparency,
+    pub texture_depth: TextureDepth,
 }
 
 #[bitfield(bits = 20)]
@@ -118,48 +158,20 @@ pub enum DmaDirection {
     VramToCpu = 3,
 }
 
-#[derive(Debug, Clone)]
-pub struct Polygon {
-    pub vertices: SmallVec<[Vertex; POLYGON_STACK_LIMIT]>,
-    pub flat_color: Option<Color>,
-    pub clut: Option<Position>,
-    pub tpage: Option<Position>,
-}
-
-#[derive(Debug, Clone)]
-pub struct Polyline {
-    pub vertices: SmallVec<[Vertex; POLYLINE_STACK_LIMIT]>,
-    pub flat_color: Option<Color>,
-}
-
-#[derive(Debug, Copy, Clone)]
-pub struct Rect {
-    pub location: Location,
-    pub size: Size,
-    pub flat_color: Color,
-    pub texcoords: Option<UV>,
-    pub clut: Option<Position>,
-}
-
-#[derive(Debug, Copy, Clone)]
-pub struct Vertex {
-    pub location: Location,
-    pub color: Option<Color>,
-    pub texcords: Option<UV>,
-}
-
 /// Position somewhere at space.
+/// Types are extended, because of possible multiplication.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct Location {
-    pub x: i16,
-    pub y: i16,
+    pub x: i32,
+    pub y: i32,
 }
 
 /// Position in VRAM space. Must not exceed VRAM size.
+/// Casted into [`usize`], because it indexes VRAM directly.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct Position {
-    pub x: u16,
-    pub y: u16,
+    pub x: usize,
+    pub y: usize,
 }
 
 /// Size of rectangle.
