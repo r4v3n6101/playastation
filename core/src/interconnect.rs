@@ -1,4 +1,4 @@
-use alloc::vec::Vec;
+use alloc::boxed::Box;
 use core::ops::Range;
 
 use crate::{
@@ -40,9 +40,10 @@ pub enum Region {
 }
 
 pub struct Bus {
-    pub bios: Vec<u8>,
-    pub ram: Vec<u8>,
-    pub scratchpad: Vec<u8>,
+    // FIXME: I'd like to size into array, like Box<[T; N]>
+    pub bios: Box<[u8]>,
+    pub ram: Box<[u8]>,
+    pub scratchpad: Box<[u8]>,
 
     // Devices
     pub int_ctrl: InterruptController,
@@ -53,9 +54,9 @@ pub struct Bus {
 
 impl Default for Bus {
     fn default() -> Self {
-        let bios = alloc::vec![0; BIOS_SIZE];
-        let ram = alloc::vec![0; RAM_SIZE];
-        let scratchpad = alloc::vec![0; SCRATCHPAD.len()];
+        let bios = alloc::vec![0; BIOS_SIZE].into_boxed_slice();
+        let ram = alloc::vec![0; RAM_SIZE].into_boxed_slice();
+        let scratchpad = alloc::vec![0; SCRATCHPAD.len()].into_boxed_slice();
 
         Self {
             bios,

@@ -1,4 +1,4 @@
-use crate::interconnect::Bus;
+use crate::{globals::RAM_SIZE, interconnect::Bus};
 
 use super::{CHANNELS, Channel, Direction, Step};
 
@@ -134,6 +134,11 @@ pub fn do_linked_list(bus: &mut Bus, ch: usize, chan: &mut Channel) -> u64 {
 }
 
 unsafe fn load_direct_ram(bus: &mut Bus, paddr: u32) -> u32 {
+    debug_assert!(
+        paddr <= RAM_SIZE as u32 && paddr.is_multiple_of(4),
+        "unaligned RAM address"
+    );
+
     let mut buf = [0; 4];
     unsafe { buf.copy_from_slice(bus.ram.get_unchecked(paddr as usize..).get_unchecked(..4)) }
     u32::from_le_bytes(buf)
@@ -145,6 +150,11 @@ unsafe fn store_direct_ram(
     value: u32,
     ram_touched: &mut impl FnMut(u32),
 ) {
+    debug_assert!(
+        paddr <= RAM_SIZE as u32 && paddr.is_multiple_of(4),
+        "unaligned RAM address"
+    );
+
     unsafe {
         bus.ram
             .get_unchecked_mut(paddr as usize..)

@@ -168,14 +168,10 @@ impl Dicr {
 }
 
 impl DmaController {
-    #[inline(always)]
     fn pick_highest_priority_chan(&self) -> Option<usize> {
-        #[inline(always)]
         fn dma_prio(dpcr: u32, ch: usize) -> u8 {
             ((dpcr >> (ch * 4)) & 0x7) as u8
         }
-
-        #[inline(always)]
         fn dma_enabled(dpcr: u32, ch: usize) -> bool {
             ((dpcr >> (ch * 4 + 3)) & 1) != 0
         }
