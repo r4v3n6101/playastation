@@ -12,6 +12,6 @@ pkgs.writeShellApplication {
   text = ''
     mkdir -p output
 
-    ${test-rom-runner}/bin/test-rom-runner "${bios}" "${test-rom}"
+    ${test-rom-runner}/bin/test-rom-runner --bios "${bios}" --rom "${test-rom}" --window
   '';
 }

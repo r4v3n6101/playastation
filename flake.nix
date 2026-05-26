@@ -81,7 +81,13 @@
             inherit (craneLib.crateNameFromCargoToml { cargoToml = ./Cargo.toml; }) version;
 
             inherit src strictDeps;
+
+            MACOSX_DEPLOYMENT_TARGET = 14.0;
+            CFLAGS = "-mmacosx-version-min=14.0";
           };
+
+          MACOSX_DEPLOYMENT_TARGET = 14.0;
+          CFLAGS = "-mmacosx-version-min=14.0";
         };
       in
       {
@@ -136,6 +142,9 @@
             cargo-show-asm
             samply
           ];
+
+          MACOSX_DEPLOYMENT_TARGET = 14.0;
+          CFLAGS = "-mmacosx-version-min=14.0";
         };
       }
     );

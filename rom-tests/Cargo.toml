@@ -9,5 +9,6 @@ tracing-subscriber = "0.3.23"
 
 playastation = { path = "../core" }
 
-image = { version = "0.25.10", default-features = false, features = ["png"] }
-clap = { version = "4.6.1", default-features = false, features = ["std", "help", "usage", "derive"] }
+image = { version = "0.25.10", default-features = false, features = ["bmp"] }
+clap = { version = "4.6.1", features = ["derive"] }
+minifb = "0.28.0"

@@ -634,24 +634,24 @@ impl SoftwareRenderer {
         }
 
         for y in min_y..=max_y {
-            let j = (y - pos.y) as u16;
+            let j = (y - pos.y) as u8;
 
             for x in min_x..=max_x {
-                let i = (x - pos.x) as u16;
+                let i = (x - pos.x) as u8;
 
                 let color = if DEPTH != 0 {
                     let uv = unsafe { rect.texcoords.unwrap_unchecked() };
 
                     let u = if self.draw_mode.texture_rectangle_x_flip() {
-                        uv.u.wrapping_sub(i as u8)
+                        uv.u.wrapping_sub(i)
                     } else {
-                        uv.u.wrapping_add(i as u8)
+                        uv.u.wrapping_add(i)
                     };
 
                     let v = if self.draw_mode.texture_rectangle_y_flip() {
-                        uv.v.wrapping_sub(j as u8)
+                        uv.v.wrapping_sub(j)
                     } else {
-                        uv.v.wrapping_add(j as u8)
+                        uv.v.wrapping_add(j)
                     };
 
                     let Some(texel) =

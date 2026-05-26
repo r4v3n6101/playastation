@@ -16,8 +16,8 @@ pkgs.writeShellApplication {
     while IFS= read -r -d "" asm; do
         exe="$(dirname "$asm")/$(basename "$asm" .asm).exe"
         ${test-rom-runner}/bin/test-rom-runner \
-          "${bios}" \
-          "$exe" &
+          --bios "${bios}" \
+          --rom "$exe" &
     done < <(find "${test-dir}" -type f -name '*.asm' -print0)
 
     wait
