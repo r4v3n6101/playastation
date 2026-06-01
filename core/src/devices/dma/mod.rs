@@ -2,7 +2,7 @@ use modular_bitfield::prelude::*;
 
 use crate::{devices::int::InterruptFlags, interconnect::Bus};
 
-use super::{Mmio, MmioExt};
+use super::{Mmio, read_part, write_part};
 
 mod handler;
 
@@ -250,39 +250,70 @@ impl DmaController {
 
 impl Mmio for DmaController {
     fn read(&mut self, dest: &mut [u8], maddr: u32) {
-        self.read_unaligned(dest, maddr, |this, addr| match addr {
+        match maddr {
             ..0x70 => {
-                let reg = addr % 0x10;
-                let chan = (addr / 0x10) as usize;
+                let reg = maddr % 0x10;
+                let chan = (maddr / 0x10) as usize;
                 match reg {
-                    0x0 => this.channels[chan].madr,
-                    0x4 => u32::from_le_bytes(this.channels[chan].bcr.into_bytes()),
-                    0x8 | 0xC => u32::from_le_bytes(this.channels[chan].chcr.into_bytes()),
+                    ..0x4 => {
+                        read_part::<4, 4>(dest, maddr, self.channels[chan].madr.to_le_bytes());
+                    }
+                    0x4..0x8 => {
+                        read_part::<4, 4>(dest, maddr, self.channels[chan].bcr.into_bytes());
+                    }
+                    0x8..0xC | 0xC..0x10 => {
+                        read_part::<4, 4>(dest, maddr, self.channels[chan].chcr.into_bytes());
+                    }
                     _ => unreachable!(),
                 }
             }
-            0x70 => u32::from_le_bytes(this.dpcr.into_bytes()),
-            0x74 => u32::from_le_bytes(this.dicr.into_bytes()),
-            _ => unreachable!(),
-        });
+            0x70..0x74 => {
+                read_part::<4, 4>(dest, maddr, self.dpcr.into_bytes());
+            }
+            0x74..0x78 => {
+                read_part::<4, 4>(dest, maddr, self.dicr.into_bytes());
+            }
+            _ => unimplemented!(),
+        }
     }
 
     fn write(&mut self, maddr: u32, value: &[u8]) {
-        let (addr, val) = self.write_unaligned(maddr, value);
-        match addr {
+        match maddr {
             ..0x70 => {
-                let reg = addr % 0x10;
-                let chan = (addr / 0x10) as usize;
+                let reg = maddr % 0x10;
+                let chan = (maddr / 0x10) as usize;
                 match reg {
-                    0x0 => self.channels[chan].madr = val,
-                    0x4 => self.channels[chan].bcr = Bcr::from_bytes(val.to_le_bytes()),
-                    0x8 | 0xC => self.channels[chan].chcr = Chcr::from_bytes(val.to_le_bytes()),
+                    0x0..0x4 => {
+                        self.channels[chan].madr = u32::from_le_bytes(write_part::<4, 4>(
+                            maddr,
+                            value,
+                            self.channels[chan].madr.to_le_bytes(),
+                        ));
+                    }
+                    0x4..0x8 => {
+                        self.channels[chan].bcr = Bcr::from_bytes(write_part::<4, 4>(
+                            maddr,
+                            value,
+                            self.channels[chan].bcr.into_bytes(),
+                        ));
+                    }
+                    0x8..0xC | 0xC..0x10 => {
+                        self.channels[chan].chcr = Chcr::from_bytes(write_part::<4, 4>(
+                            maddr,
+                            value,
+                            self.channels[chan].chcr.into_bytes(),
+                        ));
+                    }
                     _ => unreachable!(),
                 }
             }
-            0x70 => self.dpcr = Dpcr::from_bytes(val.to_le_bytes()),
-            0x74 => {
-                let new = Dicr::from_bytes(val.to_le_bytes());
+            0x70..0x74 => {
+                self.dpcr =
+                    Dpcr::from_bytes(write_part::<4, 4>(maddr, value, self.dpcr.into_bytes()));
+            }
+            0x74..0x78 => {
+                let new =
+                    Dicr::from_bytes(write_part::<4, 4>(maddr, value, self.dicr.into_bytes()));
 
                 self.dicr.set_force_irq(new.force_irq());
                 self.dicr.set_irq_enabled(new.irq_enabled());
@@ -295,7 +326,7 @@ impl Mmio for DmaController {
                 // Recalculate irq signal bit, rather than copy it
                 self.dicr.update_irq_signal();
             }
-            _ => unreachable!(),
+            _ => unimplemented!(),
         }
     }
 }

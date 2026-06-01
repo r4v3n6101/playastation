@@ -2,7 +2,7 @@ use modular_bitfield::prelude::*;
 
 use crate::interconnect::Bus;
 
-use super::{Mmio, MmioExt};
+use super::{Mmio, read_part, write_part};
 
 const TIMERS: usize = 3;
 
@@ -126,44 +126,62 @@ impl TimerController {
 
 impl Mmio for TimerController {
     fn read(&mut self, dest: &mut [u8], maddr: u32) {
-        self.read_unaligned(dest, maddr, |this, addr| {
-            let timer = (addr / 0x10) as usize;
-            let reg = addr % 0x10;
+        let timer = (maddr / 0x10) as usize;
+        let reg = maddr % 0x10;
 
-            match reg {
-                0x0 => u32::from(this.timers[timer].counter),
-                0x4 => {
-                    let timer = &mut this.timers[timer];
-                    let val = u16::from_le_bytes(timer.mode.into_bytes());
-
-                    timer.mode.set_reached_target(false);
-                    timer.mode.set_reached_overflow(false);
-
-                    u32::from(val)
-                }
-                0x8 => u32::from(this.timers[timer].target),
-                _ => unreachable!(),
+        match reg {
+            0x0..0x4 => {
+                read_part::<4, 2>(dest, maddr, self.timers[timer].counter.to_le_bytes());
             }
-        });
+            0x4..0x8 => {
+                let timer = &mut self.timers[timer];
+                let val = timer.mode.into_bytes();
+
+                timer.mode.set_reached_target(false);
+                timer.mode.set_reached_overflow(false);
+
+                read_part::<4, 2>(dest, maddr, val);
+            }
+            0x8..0xC => {
+                read_part::<4, 2>(dest, maddr, self.timers[timer].target.to_le_bytes());
+            }
+            _ => unimplemented!(),
+        }
     }
 
     fn write(&mut self, maddr: u32, value: &[u8]) {
-        let (addr, val) = self.write_unaligned(maddr, value);
-        let timer = (addr / 0x10) as usize;
-        let reg = addr % 0x10;
+        let timer = (maddr / 0x10) as usize;
+        let reg = maddr % 0x10;
 
         match reg {
-            0x0 => self.timers[timer].counter = val as u16,
+            0x0 => {
+                self.timers[timer].counter = u16::from_le_bytes(write_part::<4, 2>(
+                    maddr,
+                    value,
+                    self.timers[timer].counter.to_le_bytes(),
+                ));
+            }
             0x4 => {
                 let timer = &mut self.timers[timer];
                 timer.counter = 0;
-                timer.mode = TimerMode::from_bytes((val as u16).to_le_bytes())
-                    .with_irq_inhibit(true)
-                    .with_reached_target(false)
-                    .with_reached_overflow(false);
+
+                timer.mode = TimerMode::from_bytes(write_part::<4, 2>(
+                    maddr,
+                    value,
+                    timer.mode.into_bytes(),
+                ))
+                .with_irq_inhibit(true)
+                .with_reached_target(false)
+                .with_reached_overflow(false);
             }
-            0x8 => self.timers[timer].target = val as u16,
-            _ => unreachable!(),
+            0x8 => {
+                self.timers[timer].target = u16::from_le_bytes(write_part::<4, 2>(
+                    maddr,
+                    value,
+                    self.timers[timer].target.to_le_bytes(),
+                ));
+            }
+            _ => unimplemented!(),
         }
     }
 }

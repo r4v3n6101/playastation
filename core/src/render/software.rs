@@ -691,9 +691,7 @@ impl SoftwareRenderer {
             4 => self.fetch_clut_color(clut, self.fetch_index::<4>(base_x, base_y, u, v)),
             8 => self.fetch_clut_color(clut, self.fetch_index::<8>(base_x, base_y, u, v)),
             15 => self.fetch_15bpp(base_x, base_y, u, v),
-            _ => {
-                return None;
-            }
+            _ => unreachable!(),
         };
 
         // color=0 means transparent for textured rendering.

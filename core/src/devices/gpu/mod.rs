@@ -15,7 +15,7 @@ use crate::{
     },
 };
 
-use super::{Mmio, MmioExt};
+use super::{Mmio, read_part, write_part};
 
 mod gp0;
 mod gp1;
@@ -142,19 +142,26 @@ impl Gpu {
 
 impl Mmio for Gpu {
     fn read(&mut self, dest: &mut [u8], maddr: u32) {
-        self.read_unaligned(dest, maddr, |this, addr| match addr {
-            0x0 => gp0::read(this),
-            0x4 => u32::from_le_bytes(this.gpustat().into_bytes()),
-            _ => unreachable!(),
-        });
+        match maddr {
+            0x0..0x4 => {
+                read_part::<4, 4>(dest, maddr, gp0::read(self).to_le_bytes());
+            }
+            0x4..0x8 => {
+                read_part::<4, 4>(dest, maddr, self.gpustat().into_bytes());
+            }
+            _ => unimplemented!(),
+        }
     }
 
     fn write(&mut self, maddr: u32, value: &[u8]) {
-        let (addr, value) = self.write_unaligned(maddr, value);
-        match addr {
-            0x0 => self.dispatch_gp0(value),
-            0x4 => self.dispatch_gp1(value),
-            _ => unreachable!(),
+        match maddr {
+            0x0..0x4 => {
+                self.dispatch_gp0(u32::from_le_bytes(write_part::<4, 4>(maddr, value, [0; 4])));
+            }
+            0x4..0x8 => {
+                self.dispatch_gp1(u32::from_le_bytes(write_part::<4, 4>(maddr, value, [0; 4])));
+            }
+            _ => unimplemented!(),
         }
     }
 }
