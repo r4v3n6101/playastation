@@ -24,14 +24,14 @@ pub struct Gpu {
     pub renderer: Box<dyn Renderer>,
 
     cmdbuf: gp0::CmdBuf,
-    int_flag: bool,
     dma_direction: DmaDirection,
+    int_flag: bool,
 
     cycles_elapsed: u64,
 }
 
 #[bitfield(bits = 32)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GpuStat {
     pub texture_page_x_base: B4,
     pub texture_page_y_base: B1,
@@ -74,7 +74,7 @@ impl Default for Gpu {
 }
 
 impl Gpu {
-    pub fn gpustat(&self) -> GpuStat {
+    pub fn stat(&self) -> GpuStat {
         let RenderState {
             draw_mode,
             vram_read_active,
@@ -147,7 +147,7 @@ impl Mmio for Gpu {
                 read_part::<4, 4>(dest, maddr, gp0::read(self).to_le_bytes());
             }
             0x4..0x8 => {
-                read_part::<4, 4>(dest, maddr, self.gpustat().into_bytes());
+                read_part::<4, 4>(dest, maddr, self.stat().into_bytes());
             }
             _ => unimplemented!(),
         }

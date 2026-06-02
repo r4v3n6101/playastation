@@ -30,7 +30,7 @@ pub struct Channel {
 
 /// Block control register.
 #[bitfield(bits = 32)]
-#[derive(Specifier, Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Bcr {
     /// Word count/block size (in words), depends on [`SyncMode`]
     pub word_count: B16,
@@ -40,7 +40,7 @@ pub struct Bcr {
 
 /// Channel control register.
 #[bitfield(bits = 32)]
-#[derive(Specifier, Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Chcr {
     pub direction: Direction,
     pub step: Step,
@@ -100,7 +100,7 @@ pub enum SyncMode {
 
 /// DMA priority control register.
 #[bitfield(bits = 32)]
-#[derive(Specifier, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Dpcr {
     pub priority0: B3,
     pub enabled0: bool,
@@ -122,7 +122,7 @@ pub struct Dpcr {
 
 /// DMA interrupt controller register.
 #[bitfield(bits = 32)]
-#[derive(Specifier, Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Dicr {
     #[skip]
     reserved: B6,
@@ -261,6 +261,8 @@ impl Mmio for DmaController {
                     0x4..0x8 => {
                         read_part::<4, 4>(dest, maddr, self.channels[chan].bcr.into_bytes());
                     }
+                    // It is mirror, don't want to merge ranges for clarity
+                    #[allow(clippy::manual_range_patterns)]
                     0x8..0xC | 0xC..0x10 => {
                         read_part::<4, 4>(dest, maddr, self.channels[chan].chcr.into_bytes());
                     }
@@ -297,6 +299,8 @@ impl Mmio for DmaController {
                             self.channels[chan].bcr.into_bytes(),
                         ));
                     }
+                    // same as above
+                    #[allow(clippy::manual_range_patterns)]
                     0x8..0xC | 0xC..0x10 => {
                         self.channels[chan].chcr = Chcr::from_bytes(write_part::<4, 4>(
                             maddr,

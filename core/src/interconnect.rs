@@ -3,7 +3,8 @@ use core::ops::Range;
 
 use crate::{
     devices::{
-        Mmio, dma::DmaController, gpu::Gpu, int::InterruptController, timer::TimerController,
+        Mmio, dma::DmaController, gpu::Gpu, int::InterruptController, joy::JoyBus,
+        timer::TimerController,
     },
     globals::{BIOS_SIZE, RAM_SIZE},
 };
@@ -13,6 +14,7 @@ const RAM: Range<u32> = 0x0000_0000..0x0080_0000;
 const EXPANSION1: Range<u32> = 0x1F00_0000..0x1F80_0000;
 const SCRATCHPAD: Range<u32> = 0x1F80_0000..0x1F80_0400;
 const HW_REGS: Range<u32> = 0x1F80_1000..0x1F80_2000;
+const JOY_BUS: Range<u32> = 0x1F80_1040..0x1F80_1050;
 const INT_CTRL: Range<u32> = 0x1F80_1070..0x1F80_1078;
 const DMA_CTRL: Range<u32> = 0x1F80_1080..0x1F80_1100;
 const TIMER_CTRL: Range<u32> = 0x1F80_1100..0x1F80_1130;
@@ -29,6 +31,7 @@ pub enum Region {
     Scratchpad,
     Expansion1,
     Expansion2,
+    Joy,
     Int,
     Dma,
     Timer,
@@ -50,6 +53,7 @@ pub struct Bus {
     pub dma_ctrl: DmaController,
     pub timer_ctrl: TimerController,
     pub gpu: Gpu,
+    pub joy_bus: JoyBus,
 }
 
 impl Default for Bus {
@@ -67,6 +71,7 @@ impl Default for Bus {
             dma_ctrl: DmaController::default(),
             timer_ctrl: TimerController::default(),
             gpu: Gpu::default(),
+            joy_bus: JoyBus::default(),
         }
     }
 }
@@ -79,6 +84,7 @@ impl Bus {
 
         Gpu::run(self, sys_cycles);
         TimerController::update(self, sys_cycles);
+        JoyBus::update(self);
     }
 
     // Inlined because RAM/BIOS hot paths are needed for caller
@@ -164,6 +170,12 @@ impl Bus {
         match region_of(paddr) {
             Region::Expansion1 => {}
             Region::Expansion2 => {}
+            Region::Joy => {
+                let _guard = mmio_span.enter();
+                let mmio_addr = paddr - JOY_BUS.start;
+                tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "joy bus read");
+                self.joy_bus.read(buf, mmio_addr);
+            }
             Region::Int => {
                 let _guard = mmio_span.enter();
                 let mmio_addr = paddr - INT_CTRL.start;
@@ -222,6 +234,12 @@ impl Bus {
         match region_of(paddr) {
             Region::Expansion1 => {}
             Region::Expansion2 => {}
+            Region::Joy => {
+                let _guard = mmio_span.enter();
+                let mmio_addr = paddr - JOY_BUS.start;
+                tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "joy bus write");
+                self.joy_bus.write(mmio_addr, &value);
+            }
             Region::Int => {
                 let _guard = mmio_span.enter();
                 let mmio_addr = paddr - INT_CTRL.start;
@@ -276,6 +294,7 @@ pub fn region_of(paddr: u32) -> Region {
         x if SCRATCHPAD.contains(&x) => Region::Scratchpad,
         x if EXPANSION1.contains(&x) => Region::Expansion1,
         x if EXPANSION2.contains(&x) => Region::Expansion2,
+        x if JOY_BUS.contains(&x) => Region::Joy,
         x if INT_CTRL.contains(&x) => Region::Int,
         x if DMA_CTRL.contains(&x) => Region::Dma,
         x if TIMER_CTRL.contains(&x) => Region::Timer,

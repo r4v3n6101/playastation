@@ -1,4 +1,4 @@
-use super::Mmio;
+use super::{Mmio, read_part, write_part};
 
 bitflags::bitflags! {
     #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -10,7 +10,7 @@ bitflags::bitflags! {
         const TMR0     = 1 << 4;
         const TMR1     = 1 << 5;
         const TMR2     = 1 << 6;
-        const CTRL     = 1 << 7;
+        const JOY      = 1 << 7;
         const SIO      = 1 << 8;
         const SPU      = 1 << 9;
         const LIGHTPEN = 1 << 10;
@@ -35,52 +35,33 @@ impl InterruptController {
 
 impl Mmio for InterruptController {
     fn read(&mut self, dest: &mut [u8], maddr: u32) {
-        match (maddr, dest.len()) {
-            (0x0, 4) => {
-                dest.copy_from_slice(&u32::from(self.i_stat.bits()).to_le_bytes());
+        match maddr {
+            0x0..0x4 => {
+                read_part::<4, 2>(dest, maddr, self.i_stat.bits().to_le_bytes());
             }
-            (0x4, 4) => {
-                dest.copy_from_slice(&u32::from(self.i_mask.bits()).to_le_bytes());
+            0x4..0x8 => {
+                read_part::<4, 2>(dest, maddr, self.i_mask.bits().to_le_bytes());
             }
-
-            (0x0, 2) => {
-                dest.copy_from_slice(&self.i_stat.bits().to_le_bytes());
-            }
-            (0x4, 2) => {
-                dest.copy_from_slice(&self.i_mask.bits().to_le_bytes());
-            }
-
-            (0x0, 1) => {}
-            (0x4, 1) => {}
-
             _ => unimplemented!(),
         }
     }
 
     fn write(&mut self, maddr: u32, value: &[u8]) {
-        match (maddr, value.len()) {
-            (0x0, 4) => {
-                self.i_stat &=
-                    InterruptFlags::from_bits_truncate(u16::from_le_bytes([value[2], value[3]]));
+        match maddr {
+            0x0..0x4 => {
+                self.i_stat &= InterruptFlags::from_bits_truncate(u16::from_le_bytes(
+                    write_part::<4, 2>(maddr, value, self.i_stat.bits().to_le_bytes()),
+                ));
             }
-            (0x4, 4) => {
+            0x4..0x8 => {
                 self.i_mask =
-                    InterruptFlags::from_bits_truncate(u16::from_le_bytes([value[2], value[3]]));
+                    InterruptFlags::from_bits_truncate(u16::from_le_bytes(write_part::<4, 2>(
+                        maddr,
+                        value,
+                        self.i_mask.bits().to_le_bytes(),
+                    )));
             }
-
-            (0x0, 2) => {
-                self.i_stat &=
-                    InterruptFlags::from_bits_truncate(u16::from_le_bytes([value[0], value[1]]));
-            }
-            (0x4, 2) => {
-                self.i_mask =
-                    InterruptFlags::from_bits_truncate(u16::from_le_bytes([value[0], value[1]]));
-            }
-
-            (0x0, 1) => {}
-            (0x4, 1) => {}
-
-            _ => unreachable!(),
+            _ => unimplemented!(),
         }
     }
 }

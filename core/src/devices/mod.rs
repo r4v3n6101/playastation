@@ -1,6 +1,7 @@
 pub mod dma;
 pub mod gpu;
 pub mod int;
+pub mod joy;
 pub mod timer;
 
 pub trait Mmio {
