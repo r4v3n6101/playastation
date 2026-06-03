@@ -18,8 +18,8 @@ pub fn fetch_and_decode_block(limit: usize, cpu: &mut Cpu, bus: &mut Bus) -> Vec
             Ok(word) => u32::from_le_bytes(word),
             Err(exception) => {
                 let exception = match exception {
-                    Exception::DataBus { bad_vaddr } => Exception::InstructionBus { bad_vaddr },
-                    other => other,
+                    exc @ Exception::UnalignedLoad { .. } => exc,
+                    _ => Exception::InstructionBus { bad_vaddr: pc },
                 };
 
                 tracing::warn!(

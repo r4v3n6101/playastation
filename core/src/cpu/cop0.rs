@@ -73,6 +73,7 @@ impl Default for Cop0 {
 }
 
 impl Cop0 {
+    pub const TAR_IDX: usize = 6;
     pub const BAD_VADDR_IDX: usize = 8;
     pub const STATUS_IDX: usize = 12;
     pub const CAUSE_IDX: usize = 13;
@@ -99,16 +100,29 @@ impl Cop0 {
 
     /// Push IEc/KUc to IEp/KUp and IEp/KUp to IEo/KUo, then clear current mode
     #[inline(always)]
-    pub fn exception_enter(&mut self, exception: Exception, fault_pc: u32, in_delay_slot: bool) {
+    pub fn exception_enter(
+        &mut self,
+        exception: Exception,
+        fault_pc: u32,
+        in_delay_slot: bool,
+        jump_target: u32,
+    ) {
         self.regs[Self::EPC_IDX] = if in_delay_slot {
             fault_pc.wrapping_sub(4)
         } else {
             fault_pc
         };
 
-        let mut cause = self.cause();
-        cause.set_bd(in_delay_slot);
+        let old = self.cause();
+        let mut cause = Cause::new();
+        cause.set_ip(old.ip() & 0b0000_0011);
         cause.set_excode(exception.discriminant() as u8);
+
+        if in_delay_slot {
+            cause.set_bd(true);
+            self.regs[Self::TAR_IDX] = jump_target;
+        }
+
         self.regs[Self::CAUSE_IDX] = u32::from_le_bytes(cause.into_bytes());
 
         if let Exception::UnalignedLoad { bad_vaddr }
@@ -142,8 +156,13 @@ impl Cop0 {
 
     #[inline(always)]
     pub fn set_hw_irq(&mut self, active: bool) {
-        let mut cause = self.cause();
-        let mut ip = cause.ip();
+        let old = self.cause();
+
+        let mut cause = Cause::new();
+        cause.set_excode(old.excode());
+        cause.set_bd(old.bd());
+
+        let mut ip = old.ip();
         if active {
             // PSX supports only second HW lane (bit 2)
             ip |= 1 << 2;

@@ -2,7 +2,7 @@ use alloc::string::String;
 use core::mem;
 
 use crate::{
-    cpu::{Cpu, Exception, PendingJump},
+    cpu::{Cpu, Exception},
     formats::{BoxedExeFile, ExeHeader},
     interconnect::Bus,
 };
@@ -60,25 +60,29 @@ impl Executor {
         // Interrupt changes flow like it's an error occurred before the next op/or after delay slot.
         let execution = interrupt.unwrap_or(execution);
         if let Some(exception) = execution.exception {
-            tracing::debug!(
-                ?exception,
-                epc=%format_args!("{:#X}", execution.last_pc),
-                delay_slot=%execution.last_in_delay_slot,
-                "entering exception handler"
-            );
+            // Reset jump and save target for Cop0.TAR
+            let old_jump = mem::take(&mut self.cpu.pending_jump);
+            let jump_target = old_jump.target();
 
-            // Reset jump
-            self.cpu.pending_jump = PendingJump::default();
             // Commit pending load in a slow, but safe way
             // In case one of instruction executor will write a garbage
             let pending_load = mem::take(&mut self.cpu.pending_load);
             self.cpu.gpr[pending_load.dest as usize] = pending_load.value;
             self.cpu.gpr[0] = 0;
 
+            tracing::debug!(
+                ?exception,
+                epc=%format_args!("{:#X}", execution.last_pc),
+                delay_slot=%execution.last_in_delay_slot,
+                jump_target=%format_args!("{jump_target:#X}"),
+                "entering exception handler"
+            );
+
             self.cpu.cop0.exception_enter(
                 exception,
                 execution.last_pc,
                 execution.last_in_delay_slot,
+                jump_target,
             );
             self.cpu.pc = self.cpu.cop0.exception_handler();
         } else {

@@ -68,7 +68,7 @@ fn main() {
     });
 
     let mut window = Window::new("viewport", 800, 600, WindowOptions::default()).unwrap();
-    loop {
+    while window.is_open() {
         let mut pressed = Button::empty();
         if window.is_key_down(Key::W) {
             pressed.insert(Button::Up);

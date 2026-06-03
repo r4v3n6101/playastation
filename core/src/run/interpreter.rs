@@ -466,59 +466,66 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
 
         // Branches
         Instruction::Beq { rs, rt, imm_sext } => {
+            let branch_base = branch_base(ctx);
             pending_jump = PendingJump {
                 valid: true,
                 cond: gpr_read(ctx.cpu, rs) == gpr_read(ctx.cpu, rt),
-                then: branch_base(ctx).wrapping_add_signed(i32::from(imm_sext) << 2),
-                otherwise: branch_base(ctx).wrapping_add(4),
+                then: branch_base.wrapping_add_signed(i32::from(imm_sext) << 2),
+                otherwise: branch_base.wrapping_add(4),
             };
         }
         Instruction::Bne { rs, rt, imm_sext } => {
+            let branch_base = branch_base(ctx);
             pending_jump = PendingJump {
                 valid: true,
                 cond: gpr_read(ctx.cpu, rs) != gpr_read(ctx.cpu, rt),
-                then: branch_base(ctx).wrapping_add_signed(i32::from(imm_sext) << 2),
-                otherwise: branch_base(ctx).wrapping_add(4),
+                then: branch_base.wrapping_add_signed(i32::from(imm_sext) << 2),
+                otherwise: branch_base.wrapping_add(4),
             };
         }
         Instruction::Bgez { rs, imm_sext } => {
+            let branch_base = branch_base(ctx);
             pending_jump = PendingJump {
                 valid: true,
                 cond: gpr_read(ctx.cpu, rs).cast_signed() >= 0,
-                then: branch_base(ctx).wrapping_add_signed(i32::from(imm_sext) << 2),
-                otherwise: branch_base(ctx).wrapping_add(4),
+                then: branch_base.wrapping_add_signed(i32::from(imm_sext) << 2),
+                otherwise: branch_base.wrapping_add(4),
             };
         }
         Instruction::Blez { rs, imm_sext } => {
+            let branch_base = branch_base(ctx);
             pending_jump = PendingJump {
                 valid: true,
                 cond: gpr_read(ctx.cpu, rs).cast_signed() <= 0,
-                then: branch_base(ctx).wrapping_add_signed(i32::from(imm_sext) << 2),
-                otherwise: branch_base(ctx).wrapping_add(4),
+                then: branch_base.wrapping_add_signed(i32::from(imm_sext) << 2),
+                otherwise: branch_base.wrapping_add(4),
             };
         }
         Instruction::Bgtz { rs, imm_sext } => {
+            let branch_base = branch_base(ctx);
             pending_jump = PendingJump {
                 valid: true,
                 cond: gpr_read(ctx.cpu, rs).cast_signed() > 0,
-                then: branch_base(ctx).wrapping_add_signed(i32::from(imm_sext) << 2),
-                otherwise: branch_base(ctx).wrapping_add(4),
+                then: branch_base.wrapping_add_signed(i32::from(imm_sext) << 2),
+                otherwise: branch_base.wrapping_add(4),
             };
         }
         Instruction::Bltz { rs, imm_sext } => {
+            let branch_base = branch_base(ctx);
             pending_jump = PendingJump {
                 valid: true,
                 cond: gpr_read(ctx.cpu, rs).cast_signed() < 0,
-                then: branch_base(ctx).wrapping_add_signed(i32::from(imm_sext) << 2),
-                otherwise: branch_base(ctx).wrapping_add(4),
+                then: branch_base.wrapping_add_signed(i32::from(imm_sext) << 2),
+                otherwise: branch_base.wrapping_add(4),
             };
         }
         Instruction::Bgezal { rs, imm_sext } => {
+            let branch_base = branch_base(ctx);
             pending_jump = PendingJump {
                 valid: true,
                 cond: gpr_read(ctx.cpu, rs).cast_signed() >= 0,
-                then: branch_base(ctx).wrapping_add_signed(i32::from(imm_sext) << 2),
-                otherwise: branch_base(ctx).wrapping_add(4),
+                then: branch_base.wrapping_add_signed(i32::from(imm_sext) << 2),
+                otherwise: branch_base.wrapping_add(4),
             };
 
             gpr_write(
@@ -528,11 +535,12 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
             );
         }
         Instruction::Bltzal { rs, imm_sext } => {
+            let branch_base = branch_base(ctx);
             pending_jump = PendingJump {
                 valid: true,
                 cond: gpr_read(ctx.cpu, rs).cast_signed() < 0,
-                then: branch_base(ctx).wrapping_add_signed(i32::from(imm_sext) << 2),
-                otherwise: branch_base(ctx).wrapping_add(4),
+                then: branch_base.wrapping_add_signed(i32::from(imm_sext) << 2),
+                otherwise: branch_base.wrapping_add(4),
             };
 
             gpr_write(
@@ -544,19 +552,23 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
 
         // Jumps
         Instruction::J { target } => {
+            let branch_base = branch_base(ctx);
+            let target = (branch_base & 0xF000_0000) | (target << 2);
             pending_jump = PendingJump {
                 valid: true,
                 cond: true,
-                then: (branch_base(ctx) & 0xF000_0000) | (target << 2),
-                otherwise: (branch_base(ctx) & 0xF000_0000) | (target << 2),
+                then: target,
+                otherwise: target,
             };
         }
         Instruction::Jal { target } => {
+            let branch_base = branch_base(ctx);
+            let target = (branch_base & 0xF000_0000) | (target << 2);
             pending_jump = PendingJump {
                 valid: true,
                 cond: true,
-                then: (branch_base(ctx) & 0xF000_0000) | (target << 2),
-                otherwise: (branch_base(ctx) & 0xF000_0000) | (target << 2),
+                then: target,
+                otherwise: target,
             };
 
             gpr_write(
@@ -683,18 +695,10 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
     // Reset on akward write
     ctx.cpu.gpr[0] = 0;
 
-    let PendingJump {
-        valid: jump,
-        cond,
-        then,
-        otherwise,
-    } = mem::replace(&mut ctx.cpu.pending_jump, pending_jump);
-    if jump {
-        return Err(BreakReason::ControlFlow(if cond {
-            then
-        } else {
-            otherwise
-        }));
+    if let jump @ PendingJump { valid: true, .. } =
+        mem::replace(&mut ctx.cpu.pending_jump, pending_jump)
+    {
+        return Err(BreakReason::ControlFlow(jump.target()));
     }
 
     if invalidated {
@@ -763,11 +767,7 @@ fn pend_load(cpu: &mut Cpu, new_pending_load: PendingLoad) {
 fn branch_base(ctx: &Context) -> u32 {
     let old_jump = ctx.cpu.pending_jump;
     if old_jump.valid {
-        if old_jump.cond {
-            old_jump.then
-        } else {
-            old_jump.otherwise
-        }
+        old_jump.target()
     } else {
         ctx.result.last_pc.wrapping_add(4)
     }

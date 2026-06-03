@@ -70,6 +70,12 @@ impl Default for Cpu {
     }
 }
 
+impl PendingJump {
+    pub fn target(&self) -> u32 {
+        if self.cond { self.then } else { self.otherwise }
+    }
+}
+
 impl Cpu {
     pub const DEFAULT_LINK_REG: u8 = 31;
 
