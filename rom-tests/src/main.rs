@@ -1,21 +1,19 @@
-use std::{
-    ffi::{OsStr, OsString},
-    fs,
-    path::{Path, PathBuf},
-    sync::mpsc,
-    thread,
-    time::Duration,
-};
+use std::{fs, path::PathBuf, sync::Arc, thread};
 
 use clap::Parser;
-use image::{ImageBuffer, Rgb};
-use minifb::{Window, WindowOptions};
+use crossbeam_utils::atomic::AtomicCell;
+use minifb::{Key, Window, WindowOptions};
 use playastation::{
-    formats::BoxedExeFile, interconnect::Bus, render::software::SoftwareRenderer, run::Executor,
+    devices::joy::{
+        Slot,
+        controller::{Button, DigitalController},
+    },
+    formats::BoxedExeFile,
+    interconnect::Bus,
+    render::software::SoftwareRenderer,
+    run::Executor,
 };
 use tracing::Level;
-
-const LOOPS: usize = 400_000_000;
 
 #[derive(Parser)]
 struct Args {
@@ -23,8 +21,6 @@ struct Args {
     bios: PathBuf,
     #[arg(long)]
     rom: Option<PathBuf>,
-    #[arg(long, default_value_t = false)]
-    window: bool,
 }
 
 fn main() {
@@ -37,9 +33,11 @@ fn main() {
 
     let args = Args::parse();
 
-    let (tx, rx) = mpsc::channel();
+    let (mut img_tx, mut img_rx) = triple_buffer::triple_buffer(&(Vec::new(), 0, 0));
+    let button_state = Arc::new(AtomicCell::new(Button::empty()));
 
-    let emu_thread = thread::spawn(move || {
+    let pressed = Arc::clone(&button_state);
+    thread::spawn(move || {
         let mut bus = Bus::default();
         let mut executor = Executor::default();
 
@@ -51,74 +49,45 @@ fn main() {
             executor.pending_exe = Some(BoxedExeFile::new(rom));
         }
 
-        let mut renderer = SoftwareRenderer::default();
-        if args.window {
-            renderer.screen_fill = Box::new(move |buf, width, height| {
-                tx.send((buf.to_vec(), width, height)).unwrap();
-            });
-        } else {
-            let name = args
-                .rom
-                .and_then(|path| path.file_name().map(OsStr::to_os_string))
-                .unwrap_or_else(|| OsString::from("bios"));
-            renderer.screen_fill = Box::new(move |buf, width, height| {
-                let _ = dump_bgr555_image(
-                    buf,
-                    width as u32,
-                    height as u32,
-                    format!("output/{}.bmp", name.display()),
-                );
-            });
-        }
-        bus.gpu.renderer = Box::new(renderer);
-        for _ in 0..LOOPS {
+        bus.gpu.renderer = Box::new(SoftwareRenderer::with_screen_fill(Box::new(
+            move |buf, width, height| {
+                img_tx.write((buf.to_vec(), width, height));
+            },
+        )));
+
+        bus.joy_bus.insert_dev(
+            Slot::Controller1,
+            Box::new(DigitalController::with_poll_buttons(Box::new(move || {
+                pressed.load()
+            }))),
+        );
+
+        loop {
             executor.run(&mut bus);
         }
     });
 
-    if args.window {
-        let mut window = Window::new("viewport", 800, 600, WindowOptions::default()).unwrap();
-        while let Ok((buf, width, height)) = rx.recv() {
-            let buf32 = buf.iter().copied().map(bgr555_to_0rgb).collect::<Vec<_>>();
-            window.update_with_buffer(&buf32, width, height).unwrap();
-
-            // 60 FPS
-            thread::sleep(Duration::from_secs(1) / 60);
+    let mut window = Window::new("viewport", 800, 600, WindowOptions::default()).unwrap();
+    loop {
+        let mut pressed = Button::empty();
+        if window.is_key_down(Key::W) {
+            pressed.insert(Button::Up);
         }
-    } else {
-        emu_thread.join().unwrap();
-    }
-}
-
-fn dump_bgr555_image(
-    data: &[u16],
-    width: u32,
-    height: u32,
-    path: impl AsRef<Path>,
-) -> image::ImageResult<()> {
-    assert_eq!(data.len(), width as usize * height as usize);
-
-    let mut img = ImageBuffer::<Rgb<u8>, Vec<u8>>::new(width, height);
-    for y in 0..height {
-        for x in 0..width {
-            let idx = y as usize * width as usize + x as usize;
-            let rgb = bgr555_to_rgb888(data[idx]);
-            img.put_pixel(x, y, Rgb(rgb));
+        if window.is_key_down(Key::S) {
+            pressed.insert(Button::Down);
         }
+        if window.is_key_down(Key::X) {
+            pressed.insert(Button::Cross);
+        }
+        if window.is_key_down(Key::Enter) {
+            pressed.insert(Button::Start);
+        }
+        button_state.store(pressed);
+
+        let (buf, width, height) = img_rx.read();
+        let buf32 = buf.iter().copied().map(bgr555_to_0rgb).collect::<Vec<_>>();
+        window.update_with_buffer(&buf32, *width, *height).unwrap();
     }
-
-    img.save(path)
-}
-
-fn bgr555_to_rgb888(pixel: u16) -> [u8; 3] {
-    let r5 = (pixel & 0x1f) as u8;
-    let g5 = ((pixel >> 5) & 0x1f) as u8;
-    let b5 = ((pixel >> 10) & 0x1f) as u8;
-    let r8 = (r5 << 3) | (r5 >> 2);
-    let g8 = (g5 << 3) | (g5 >> 2);
-    let b8 = (b5 << 3) | (b5 >> 2);
-
-    [r8, g8, b8]
 }
 
 fn bgr555_to_0rgb(color: u16) -> u32 {

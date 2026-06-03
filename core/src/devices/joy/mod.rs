@@ -1,3 +1,5 @@
+use core::mem;
+
 use alloc::{boxed::Box, collections::VecDeque};
 
 use modular_bitfield::prelude::*;
@@ -7,14 +9,12 @@ use crate::{devices::int::InterruptFlags, interconnect::Bus};
 
 use super::{Mmio, read_part, write_part};
 
+pub mod controller;
+
 pub trait SerialDevice {
     fn select(&mut self);
     fn deselect(&mut self);
     fn exchange(&mut self, tx: u8) -> u8;
-
-    fn ack(&self) -> bool {
-        true
-    }
 
     fn reset(&mut self) {
         self.deselect();
@@ -25,8 +25,8 @@ pub struct JoyBus {
     pub mode: JoyMode,
     pub ctrl: JoyCtrl,
     pub baud: u16,
-    pub selected_slot: Slot,
 
+    selected_slot: Slot,
     devs: [Option<Box<dyn SerialDevice>>; Slot::COUNT],
     rx_fifo: VecDeque<u8>,
 
@@ -136,13 +136,21 @@ impl JoyBus {
             .with_irq_pending(self.irq_pending)
     }
 
+    pub fn insert_dev(&mut self, slot: Slot, dev: Box<dyn SerialDevice>) {
+        self.devs[slot as usize] = Some(dev);
+    }
+
+    pub fn remove_dev(&mut self, slot: Slot) {
+        self.devs[slot as usize] = None;
+    }
+
     pub fn update(bus: &mut Bus) {
         if bus.joy_bus.irq_pending {
             bus.int_ctrl.raise(InterruptFlags::JOY);
         }
     }
 
-    fn selected_device_mut(&mut self) -> &mut Option<Box<dyn SerialDevice>> {
+    fn selected_dev_mut(&mut self) -> &mut Option<Box<dyn SerialDevice>> {
         &mut self.devs[self.selected_slot as usize]
     }
 
@@ -151,10 +159,6 @@ impl JoyBus {
         self.irq_pending = false;
 
         for port in &mut self.devs {
-            if let Some(dev) = port.as_mut() {
-                dev.reset();
-            }
-
             if let Some(dev) = port.as_mut() {
                 dev.reset();
             }
@@ -175,7 +179,7 @@ impl Mmio for JoyBus {
                 read_part::<2, 2>(dest, maddr, self.mode.into_bytes());
             }
             0xA..0xE => {
-                read_part::<4, 2>(dest, maddr, self.ctrl.into_bytes());
+                read_part::<2, 2>(dest, maddr, self.ctrl.into_bytes());
             }
             0xE..0x10 => {
                 read_part::<2, 2>(dest, maddr, self.baud.to_le_bytes());
@@ -211,8 +215,8 @@ impl Mmio for JoyBus {
             }
             0xA..0xE => {
                 let ctrl =
-                    JoyCtrl::from_bytes(write_part::<4, 2>(maddr, value, self.ctrl.into_bytes()));
-                let old = core::mem::replace(&mut self.ctrl, ctrl);
+                    JoyCtrl::from_bytes(write_part::<2, 2>(maddr, value, self.ctrl.into_bytes()));
+                let old = mem::replace(&mut self.ctrl, ctrl);
 
                 if ctrl.reset() {
                     self.reset();
@@ -228,14 +232,14 @@ impl Mmio for JoyBus {
 
                 if !old.joy_select()
                     && ctrl.joy_select()
-                    && let Some(dev) = self.selected_device_mut()
+                    && let Some(dev) = self.selected_dev_mut()
                 {
                     dev.select();
                 }
 
                 if old.joy_select()
                     && !ctrl.joy_select()
-                    && let Some(dev) = self.selected_device_mut()
+                    && let Some(dev) = self.selected_dev_mut()
                 {
                     dev.deselect();
                 }

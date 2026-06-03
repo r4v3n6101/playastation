@@ -29,14 +29,13 @@ pub struct SoftwareRenderer {
     pop_counter: u16,
     push_counter: u16,
 
-    pub screen_fill: ScreenFillCallback,
+    screen_fill: ScreenFillCallback,
 }
 
 impl Default for SoftwareRenderer {
     fn default() -> Self {
-        let vram = alloc::vec![0; VRAM_WIDTH * VRAM_HEIGHT].into_boxed_slice();
         Self {
-            vram,
+            vram: alloc::vec![0; VRAM_WIDTH * VRAM_HEIGHT].into_boxed_slice(),
 
             draw_mode: DrawMode::new(),
             texture_window: TextureWindow::new(),
@@ -50,6 +49,15 @@ impl Default for SoftwareRenderer {
             push_counter: 0,
 
             screen_fill: Box::new(|_, _, _| {}),
+        }
+    }
+}
+
+impl SoftwareRenderer {
+    pub fn with_screen_fill(screen_fill: ScreenFillCallback) -> Self {
+        Self {
+            screen_fill,
+            ..Default::default()
         }
     }
 }
@@ -302,8 +310,8 @@ impl Renderer for SoftwareRenderer {
     }
 
     fn reset(&mut self) {
-        let mut prev = mem::take(self);
-        mem::swap(&mut prev.screen_fill, &mut self.screen_fill);
+        let prev = mem::take(self);
+        self.screen_fill = prev.screen_fill;
     }
 }
 
