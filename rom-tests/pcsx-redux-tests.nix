@@ -44,8 +44,6 @@ pkgs.writeShellApplication {
   name = "pcsx-redux-tests";
 
   text = ''
-    mkdir -p output
-
     ${test-rom-runner}/bin/test-rom-runner --bios "${bios}" --rom "${test-rom}"
   '';
 }

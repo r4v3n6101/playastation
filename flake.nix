@@ -59,15 +59,31 @@
           overlays = [ rust-overlay.overlays.default ];
         };
 
+        inherit (pkgs) lib;
         craneLib = (crane.mkLib pkgs).overrideToolchain (p: p.rust-bin.nightly.latest.default);
+
+        winit-libs = lib.makeLibraryPath (
+          with pkgs;
+          [
+            wayland
+            wayland-protocols
+
+            libxkbcommon
+            libx11
+            libxcursor
+            libxi
+            libxrandr
+            libxext
+          ]
+        );
 
         test-rom-runner = craneLib.buildPackage rec {
           inherit (craneLib.crateNameFromCargoToml { cargoToml = ./rom-tests/Cargo.toml; }) pname;
           inherit (craneLib.crateNameFromCargoToml { cargoToml = ./Cargo.toml; }) version;
 
-          src = pkgs.lib.fileset.toSource {
+          src = lib.fileset.toSource {
             root = ./.;
-            fileset = pkgs.lib.fileset.unions [
+            fileset = lib.fileset.unions [
               ./Cargo.toml
               ./Cargo.lock
               (craneLib.fileset.commonCargoSources ./core)
@@ -76,18 +92,21 @@
           };
           strictDeps = true;
 
+          nativeBuildInputs = with pkgs; [
+            makeWrapper
+          ];
+
+          postInstall = lib.optionalString pkgs.stdenv.isLinux ''
+            wrapProgram $out/bin/test-rom-runner \
+              --prefix LD_LIBRARY_PATH : ${winit-libs}
+          '';
+
           cargoArtifacts = craneLib.buildDepsOnly {
             inherit (craneLib.crateNameFromCargoToml { cargoToml = ./core/Cargo.toml; }) pname;
             inherit (craneLib.crateNameFromCargoToml { cargoToml = ./Cargo.toml; }) version;
 
             inherit src strictDeps;
-
-            MACOSX_DEPLOYMENT_TARGET = 14.0;
-            CFLAGS = "-mmacosx-version-min=14.0";
           };
-
-          MACOSX_DEPLOYMENT_TARGET = 14.0;
-          CFLAGS = "-mmacosx-version-min=14.0";
         };
       in
       {
@@ -102,6 +121,10 @@
             gpu = pkgs.callPackage ./rom-tests/peter-lemon.nix {
               inherit test-rom-runner bios;
               test-dir = "${peter-lemon-test-roms}/GPU/";
+            };
+            cube = pkgs.callPackage ./rom-tests/peter-lemon.nix {
+              inherit test-rom-runner bios;
+              test-dir = "${peter-lemon-test-roms}/Cube/";
             };
           });
 
@@ -143,8 +166,9 @@
             samply
           ];
 
-          MACOSX_DEPLOYMENT_TARGET = 14.0;
-          CFLAGS = "-mmacosx-version-min=14.0";
+          env = lib.optionalAttrs pkgs.stdenv.isLinux {
+            LD_LIBRARY_PATH = winit-libs;
+          };
         };
       }
     );

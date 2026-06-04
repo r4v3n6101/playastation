@@ -1,8 +1,7 @@
-use std::{fs, path::PathBuf, sync::Arc, thread};
+use std::{fs, num::NonZeroU32, path::PathBuf, rc::Rc, sync::Arc, thread};
 
 use clap::Parser;
 use crossbeam_utils::atomic::AtomicCell;
-use minifb::{Key, Window, WindowOptions};
 use playastation::{
     devices::joy::{
         Slot,
@@ -13,7 +12,20 @@ use playastation::{
     render::software::SoftwareRenderer,
     run::Executor,
 };
+use softbuffer::{Context, Surface};
 use tracing::Level;
+use triple_buffer::Output;
+use winit::{
+    application::ApplicationHandler,
+    dpi::PhysicalSize,
+    event::{ElementState, WindowEvent},
+    event_loop::{ActiveEventLoop, EventLoop},
+    keyboard::{KeyCode, PhysicalKey},
+    window::{Window, WindowAttributes, WindowId},
+};
+
+const WIDTH: u32 = 1200;
+const HEIGHT: u32 = 800;
 
 #[derive(Parser)]
 struct Args {
@@ -21,6 +33,146 @@ struct Args {
     bios: PathBuf,
     #[arg(long)]
     rom: Option<PathBuf>,
+}
+
+struct App {
+    window: Option<Rc<Window>>,
+    surface: Option<Surface<Rc<Window>, Rc<Window>>>,
+    button_state: Arc<AtomicCell<Button>>,
+    image_buf: Output<(Vec<u16>, usize, usize)>,
+}
+
+impl ApplicationHandler for App {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        let attrs = WindowAttributes::default()
+            .with_title("viewport")
+            .with_inner_size(PhysicalSize::new(WIDTH, HEIGHT));
+
+        let window = Rc::new(event_loop.create_window(attrs).unwrap());
+        let context = Context::new(window.clone()).unwrap();
+
+        let mut surface = Surface::new(&context, window.clone()).unwrap();
+        surface
+            .resize(
+                NonZeroU32::new(WIDTH).unwrap(),
+                NonZeroU32::new(HEIGHT).unwrap(),
+            )
+            .unwrap();
+
+        self.window = Some(window);
+        self.surface = Some(surface);
+    }
+
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
+        match event {
+            WindowEvent::CloseRequested => {
+                event_loop.exit();
+            }
+            WindowEvent::KeyboardInput { event, .. } => {
+                let fun = |old: &mut Button, btn| match event.state {
+                    ElementState::Pressed => old.insert(btn),
+                    ElementState::Released => old.remove(btn),
+                };
+                match event.physical_key {
+                    PhysicalKey::Code(KeyCode::KeyW) => {
+                        let _ = self.button_state.fetch_update(|mut old| {
+                            fun(&mut old, Button::Up);
+                            Some(old)
+                        });
+                    }
+                    PhysicalKey::Code(KeyCode::KeyA) => {
+                        let _ = self.button_state.fetch_update(|mut old| {
+                            fun(&mut old, Button::Left);
+                            Some(old)
+                        });
+                    }
+                    PhysicalKey::Code(KeyCode::KeyS) => {
+                        let _ = self.button_state.fetch_update(|mut old| {
+                            fun(&mut old, Button::Down);
+                            Some(old)
+                        });
+                    }
+                    PhysicalKey::Code(KeyCode::KeyD) => {
+                        let _ = self.button_state.fetch_update(|mut old| {
+                            fun(&mut old, Button::Right);
+                            Some(old)
+                        });
+                    }
+                    PhysicalKey::Code(KeyCode::KeyZ) => {
+                        let _ = self.button_state.fetch_update(|mut old| {
+                            fun(&mut old, Button::Square);
+                            Some(old)
+                        });
+                    }
+                    PhysicalKey::Code(KeyCode::KeyX) => {
+                        let _ = self.button_state.fetch_update(|mut old| {
+                            fun(&mut old, Button::Cross);
+                            Some(old)
+                        });
+                    }
+                    PhysicalKey::Code(KeyCode::KeyC) => {
+                        let _ = self.button_state.fetch_update(|mut old| {
+                            fun(&mut old, Button::Circle);
+                            Some(old)
+                        });
+                    }
+                    PhysicalKey::Code(KeyCode::KeyV) => {
+                        let _ = self.button_state.fetch_update(|mut old| {
+                            fun(&mut old, Button::Triangle);
+                            Some(old)
+                        });
+                    }
+                    PhysicalKey::Code(KeyCode::Enter) => {
+                        let _ = self.button_state.fetch_update(|mut old| {
+                            fun(&mut old, Button::Start);
+                            Some(old)
+                        });
+                    }
+                    PhysicalKey::Code(KeyCode::Escape) => {
+                        event_loop.exit();
+                    }
+                    _ => {}
+                }
+            }
+            WindowEvent::RedrawRequested => {
+                let Some(surface) = self.surface.as_mut() else {
+                    return;
+                };
+
+                let (buf, width, height) = self.image_buf.read();
+                let buf32 = buf.iter().copied().map(bgr555_to_0rgb).collect::<Vec<_>>();
+
+                surface
+                    .resize(
+                        NonZeroU32::new(*width as u32).unwrap(),
+                        NonZeroU32::new(*height as u32).unwrap(),
+                    )
+                    .unwrap();
+
+                let mut buffer = surface.buffer_mut().unwrap();
+                buffer.copy_from_slice(&buf32);
+                buffer.present().unwrap();
+
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
+            WindowEvent::Resized(size) => {
+                if let Some(surface) = self.surface.as_mut() {
+                    let width = NonZeroU32::new(size.width.max(1)).unwrap();
+                    let height = NonZeroU32::new(size.height.max(1)).unwrap();
+                    surface.resize(width, height).unwrap();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+    }
 }
 
 fn main() {
@@ -33,10 +185,15 @@ fn main() {
 
     let args = Args::parse();
 
-    let (mut img_tx, mut img_rx) = triple_buffer::triple_buffer(&(Vec::new(), 0, 0));
+    let (mut img_tx, img_rx) = triple_buffer::triple_buffer(&(Vec::new(), 0, 0));
     let button_state = Arc::new(AtomicCell::new(Button::empty()));
 
-    let pressed = Arc::clone(&button_state);
+    let mut app = App {
+        window: None,
+        surface: None,
+        button_state: Arc::clone(&button_state),
+        image_buf: img_rx,
+    };
     thread::spawn(move || {
         let mut bus = Bus::default();
         let mut executor = Executor::default();
@@ -58,7 +215,7 @@ fn main() {
         bus.joy_bus.insert_dev(
             Slot::Controller1,
             Box::new(DigitalController::with_poll_buttons(Box::new(move || {
-                pressed.load()
+                button_state.load()
             }))),
         );
 
@@ -67,27 +224,8 @@ fn main() {
         }
     });
 
-    let mut window = Window::new("viewport", 800, 600, WindowOptions::default()).unwrap();
-    while window.is_open() {
-        let mut pressed = Button::empty();
-        if window.is_key_down(Key::W) {
-            pressed.insert(Button::Up);
-        }
-        if window.is_key_down(Key::S) {
-            pressed.insert(Button::Down);
-        }
-        if window.is_key_down(Key::X) {
-            pressed.insert(Button::Cross);
-        }
-        if window.is_key_down(Key::Enter) {
-            pressed.insert(Button::Start);
-        }
-        button_state.store(pressed);
-
-        let (buf, width, height) = img_rx.read();
-        let buf32 = buf.iter().copied().map(bgr555_to_0rgb).collect::<Vec<_>>();
-        window.update_with_buffer(&buf32, *width, *height).unwrap();
-    }
+    let event_loop = EventLoop::new().unwrap();
+    event_loop.run_app(&mut app).unwrap();
 }
 
 fn bgr555_to_0rgb(color: u16) -> u32 {

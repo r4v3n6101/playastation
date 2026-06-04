@@ -9,17 +9,16 @@ pkgs.writeShellApplication {
   name = "peter-lemon-tests";
 
   text = ''
-    mkdir -p output
-
-    trap 'kill 0; exit 130' INT TERM
-
     while IFS= read -r -d "" asm; do
-        exe="$(dirname "$asm")/$(basename "$asm" .asm).exe"
-        ${test-rom-runner}/bin/test-rom-runner \
-          --bios "${bios}" \
-          --rom "$exe" &
-    done < <(find "${test-dir}" -type f -name '*.asm' -print0)
+        dir="$(dirname "$asm")"
+        base="$(basename "$asm" .asm)"
+        exe="$dir/$base.exe"
 
-    wait
+        if [[ -f "$exe" ]]; then
+            ${test-rom-runner}/bin/test-rom-runner \
+              --bios "${bios}" \
+              --rom "$exe"
+        fi
+    done < <(find "${test-dir}" -type f -name '*.asm' -print0)
   '';
 }
