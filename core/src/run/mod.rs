@@ -19,9 +19,10 @@ struct ExecutionResult {
     exception: Option<Exception>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct Executor {
     pub cpu: Cpu,
+    pub bus: Bus,
     pub pending_exe: Option<BoxedExeFile>,
     /// Cache for fetched & decoded blocks
     blk_cache: block::PagedCache,
@@ -30,22 +31,24 @@ pub struct Executor {
 }
 
 impl Executor {
-    pub fn run(&mut self, bus: &mut Bus) {
+    pub fn run(&mut self) {
         // Cache fetch & decode of blocks
-        let block = self.blk_cache.get_or_fetch_decode_block(&mut self.cpu, bus);
+        let block = self
+            .blk_cache
+            .get_or_fetch_decode_block(&mut self.cpu, &mut self.bus);
 
         // CPU first
-        let execution = interpreter::run(&mut self.blk_cache, &block, &mut self.cpu, bus);
+        let execution = interpreter::run(&mut self.blk_cache, &block, &mut self.cpu, &mut self.bus);
 
         // Then devices on the bus are updated
-        bus.update(execution.cycles_elapsed, |paddr| {
+        self.bus.update(execution.cycles_elapsed, |paddr| {
             self.blk_cache.invalidate_page(paddr);
         });
 
         let can_take_interrupt = !self.cpu.pending_jump.valid;
         self.cpu
             .cop0
-            .set_hw_irq(can_take_interrupt && bus.int_ctrl.pending());
+            .set_hw_irq(can_take_interrupt && self.bus.int_ctrl.pending());
         let interrupt = self
             .cpu
             .cop0
@@ -89,11 +92,11 @@ impl Executor {
             self.cpu.pc = execution.next_pc;
 
             self.handle_tty();
-            self.handle_exe(bus);
+            self.handle_exe();
         }
     }
 
-    fn handle_exe(&mut self, bus: &mut Bus) {
+    fn handle_exe(&mut self) {
         if self.cpu.pc == 0x80030000
             && let Some(exe) = self.pending_exe.take()
         {
@@ -111,7 +114,11 @@ impl Executor {
 
             for i in 0..file_size.get() {
                 self.cpu
-                    .write_bus(bus, ram_dest.get().wrapping_add(i), [prog[i as usize]])
+                    .write_bus(
+                        &mut self.bus,
+                        ram_dest.get().wrapping_add(i),
+                        [prog[i as usize]],
+                    )
                     .expect("valid ram dest in exe file");
             }
 

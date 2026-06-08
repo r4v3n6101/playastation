@@ -8,7 +8,6 @@ use playastation::{
         controller::{Button, DigitalController},
     },
     formats::BoxedExeFile,
-    interconnect::Bus,
     render::software::SoftwareRenderer,
     run::Executor,
 };
@@ -195,24 +194,23 @@ fn main() {
         image_buf: img_rx,
     };
     thread::spawn(move || {
-        let mut bus = Bus::default();
         let mut executor = Executor::default();
 
         let bios = fs::read(&args.bios).unwrap();
-        bus.bios.copy_from_slice(&bios);
+        executor.bus.bios.copy_from_slice(&bios);
 
         if let Some(rom_path) = &args.rom {
             let rom = fs::read(rom_path).unwrap().into_boxed_slice();
             executor.pending_exe = Some(BoxedExeFile::new(rom));
         }
 
-        bus.gpu.renderer = Box::new(SoftwareRenderer::with_screen_fill(Box::new(
+        executor.bus.gpu.renderer = Box::new(SoftwareRenderer::with_screen_fill(Box::new(
             move |buf, width, height| {
                 img_tx.write((buf.to_vec(), width, height));
             },
         )));
 
-        bus.joy_bus.insert_dev(
+        executor.bus.joy_bus.insert_dev(
             Slot::Controller1,
             Box::new(DigitalController::with_poll_buttons(Box::new(move || {
                 button_state.load()
@@ -220,7 +218,7 @@ fn main() {
         );
 
         loop {
-            executor.run(&mut bus);
+            executor.run();
         }
     });
 
