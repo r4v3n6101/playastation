@@ -120,7 +120,16 @@ impl Timer {
 
 impl TimerController {
     pub fn update(bus: &mut Bus, sys_cycles: u64) {
-        // TODO
+        let loops = sys_cycles / u64::from(u16::MAX);
+        let additional = sys_cycles % u64::from(u16::MAX);
+
+        for i in 0..TIMERS {
+            if loops > 0 {
+                bus.timer_ctrl.timers[i].inc_counter(u16::MAX);
+            }
+            bus.timer_ctrl.timers[i].inc_counter(additional as u16);
+        }
+        // TODO : different timers
     }
 }
 

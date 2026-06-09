@@ -7,8 +7,8 @@ use slotmap::{SlotMap, new_key_type};
 use smallvec::SmallVec;
 
 use crate::{
+    RAM_SIZE,
     cpu::{Cpu, Exception, Instruction, TranslationResult},
-    globals::RAM_SIZE,
     interconnect::{Bus, Region, region_of},
 };
 

@@ -2,11 +2,11 @@ use alloc::boxed::Box;
 use core::ops::Range;
 
 use crate::{
+    BIOS_SIZE, RAM_SIZE,
     devices::{
         Mmio, dma::DmaController, gpu::Gpu, int::InterruptController, joy::JoyBus,
         timer::TimerController,
     },
-    globals::{BIOS_SIZE, RAM_SIZE},
 };
 
 /// RAM takes 8MiB, but 3 others are mirrors to the first 2MiB

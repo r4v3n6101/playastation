@@ -1,4 +1,4 @@
-use crate::{globals::RAM_SIZE, interconnect::Bus};
+use crate::{RAM_SIZE, interconnect::Bus};
 
 use super::{CHANNELS, Channel, Direction, Step};
 
