@@ -4,8 +4,12 @@ use core::ops::Range;
 use crate::{
     BIOS_SIZE, RAM_SIZE,
     devices::{
-        Mmio, dma::DmaController, gpu::Gpu, int::InterruptController, joy::JoyBus,
-        timer::TimerController,
+        Mmio,
+        dma::DmaController,
+        gpu::Gpu,
+        int::InterruptController,
+        joy::JoyBus,
+        timer::{TimerController, TimerInput},
     },
 };
 
@@ -83,7 +87,15 @@ impl Bus {
         let sys_cycles = cpu_cycles.saturating_add(dma_cycles);
 
         Gpu::run(self, sys_cycles);
-        TimerController::update(self, sys_cycles);
+        TimerController::update(
+            self,
+            TimerInput {
+                sysclocks: sys_cycles,
+                // TODO
+                dotclocks: 0,
+                hblanks: 0,
+            },
+        );
         JoyBus::update(self);
     }
 

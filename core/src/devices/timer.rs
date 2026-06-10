@@ -1,14 +1,25 @@
+use core::cmp::Ordering;
+
 use modular_bitfield::prelude::*;
 
-use crate::interconnect::Bus;
+use crate::{devices::int::InterruptFlags, interconnect::Bus};
 
 use super::{Mmio, read_part, write_part};
 
 const TIMERS: usize = 3;
+const COUNTER_PERIOD: u64 = u16::MAX as u64 + 1;
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct TimerInput {
+    pub sysclocks: u64,
+    pub dotclocks: u64,
+    pub hblanks: u64,
+}
 
 #[derive(Debug, Default)]
 pub struct TimerController {
     pub timers: [Timer; TIMERS],
+    sysclock_8_rem: u64,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -68,6 +79,19 @@ pub enum ClockSource {
     Source3 = 3,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TimerEvent {
+    Target,
+    Overflow,
+    TargetAndOverflow,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TimerStep {
+    ticks: u64,
+    event: Option<TimerEvent>,
+}
+
 impl Default for TimerMode {
     fn default() -> Self {
         Self::new().with_irq_inhibit(true)
@@ -75,61 +99,161 @@ impl Default for TimerMode {
 }
 
 impl Timer {
-    fn inc_counter(&mut self, cnt: u16) {
-        if cnt == 0 {
-            return;
+    fn advance(&mut self, mut ticks: u64) -> bool {
+        let mut irq = false;
+
+        while ticks > 0 {
+            let step = self.next_step(ticks);
+            debug_assert!((0..=COUNTER_PERIOD).contains(&step.ticks));
+
+            irq |= self.apply_step(step);
+
+            ticks -= step.ticks;
         }
 
-        let old = self.counter;
-        let (new, overflow) = old.overflowing_add(cnt);
-        self.counter = new;
+        irq
+    }
 
-        let crossed = if overflow {
-            // target resides in (old; MAX] U [MIN; new]
-            old < self.target || self.target <= new
+    fn next_step(&self, remaining: u64) -> TimerStep {
+        let target_ticks = self.ticks_until_target();
+        let overflow_ticks = self.ticks_until_overflow();
+
+        let (event_ticks, event) = if self.mode.reset_on_target() {
+            // Target resets counter, so overflow cannot happen after target
+            // in the same counter period.
+            (target_ticks, TimerEvent::Target)
         } else {
-            // target inbetween (old; new]
-            old < self.target && self.target <= new
+            match target_ticks.cmp(&overflow_ticks) {
+                Ordering::Less => (target_ticks, TimerEvent::Target),
+                Ordering::Greater => (overflow_ticks, TimerEvent::Overflow),
+                Ordering::Equal => (target_ticks, TimerEvent::TargetAndOverflow),
+            }
         };
 
-        if crossed {
-            self.mode.set_reached_target(true);
-            if self.mode.irq_on_target() {
-                self.mode.set_irq_inhibit(false);
+        if remaining < event_ticks {
+            TimerStep {
+                ticks: remaining,
+                event: None,
             }
-            if self.mode.reset_on_target() {
-                let distance = self.target.wrapping_sub(old);
-                let exceed = cnt.wrapping_sub(distance);
-                self.counter = exceed;
-
-                // `cnt` is u16, so after reset there cannot be another overflow.
-                if old < self.target {
-                    return;
-                }
+        } else {
+            TimerStep {
+                ticks: event_ticks,
+                event: Some(event),
             }
         }
+    }
 
-        if overflow {
-            self.mode.set_reached_overflow(true);
-            if self.mode.irq_on_overflow() {
-                self.mode.set_irq_inhibit(false);
+    fn apply_step(&mut self, step: TimerStep) -> bool {
+        self.counter = self.counter.wrapping_add(step.ticks as u16);
+
+        match step.event {
+            None => false,
+            Some(TimerEvent::Target) => self.on_target(),
+            Some(TimerEvent::Overflow) => self.on_overflow(),
+            Some(TimerEvent::TargetAndOverflow) => {
+                let mut irq = false;
+                irq |= self.on_target();
+                irq |= self.on_overflow();
+                irq
             }
+        }
+    }
+
+    fn ticks_until_target(&self) -> u64 {
+        let dist = self.target.wrapping_sub(self.counter);
+
+        if dist == 0 {
+            COUNTER_PERIOD
+        } else {
+            u64::from(dist)
+        }
+    }
+
+    fn ticks_until_overflow(&self) -> u64 {
+        COUNTER_PERIOD - u64::from(self.counter)
+    }
+
+    fn on_target(&mut self) -> bool {
+        self.mode.set_reached_target(true);
+
+        if self.mode.reset_on_target() {
+            self.counter = 0;
+        }
+
+        self.mode.irq_on_target() && self.trigger_irq()
+    }
+
+    fn on_overflow(&mut self) -> bool {
+        self.mode.set_reached_overflow(true);
+
+        self.mode.irq_on_overflow() && self.trigger_irq()
+    }
+
+    fn trigger_irq(&mut self) -> bool {
+        // One-shot already fired: bit10 is already 0/requested.
+        // Further IRQs suppressed until mode write resets bit10 to 1.
+        if !self.mode.irq_repeat() && !self.mode.irq_inhibit() {
+            return false;
+        }
+
+        if self.mode.irq_toggle() {
+            self.mode.set_irq_inhibit(!self.mode.irq_inhibit());
+
+            // IRQ line active only on transition/result to 0.
+            !self.mode.irq_inhibit()
+        } else {
+            // Pulse mode: hardware pulses bit10=0 briefly.
+            self.mode.set_irq_inhibit(false);
+
+            if self.mode.irq_repeat() {
+                // Approximation: pulse ends immediately.
+                self.mode.set_irq_inhibit(true);
+            }
+
+            // Raise external IRQ immediately.
+            true
         }
     }
 }
 
 impl TimerController {
-    pub fn update(bus: &mut Bus, sys_cycles: u64) {
-        let loops = sys_cycles / u64::from(u16::MAX);
-        let additional = sys_cycles % u64::from(u16::MAX);
+    pub fn update(bus: &mut Bus, input: TimerInput) {
+        let timer2_div8 = {
+            let ctrl = &mut bus.timer_ctrl;
+            ctrl.sysclock_8_rem += input.sysclocks;
+
+            let ticks = ctrl.sysclock_8_rem / 8;
+            ctrl.sysclock_8_rem %= 8;
+
+            ticks
+        };
 
         for i in 0..TIMERS {
-            if loops > 0 {
-                bus.timer_ctrl.timers[i].inc_counter(u16::MAX);
+            let timer = &mut bus.timer_ctrl.timers[i];
+
+            let count = match (i, timer.mode.clock_source()) {
+                (0, ClockSource::Source0 | ClockSource::Source1) => input.sysclocks,
+                (0, ClockSource::Source2 | ClockSource::Source3) => input.dotclocks,
+
+                (1, ClockSource::Source0 | ClockSource::Source1) => input.sysclocks,
+                (1, ClockSource::Source2 | ClockSource::Source3) => input.hblanks,
+
+                (2, ClockSource::Source0 | ClockSource::Source1) => input.sysclocks,
+                (2, ClockSource::Source2 | ClockSource::Source3) => timer2_div8,
+
+                _ => unreachable!(),
+            };
+
+            let irq = timer.advance(count);
+            if irq {
+                bus.int_ctrl.raise(match i {
+                    0 => InterruptFlags::TMR0,
+                    1 => InterruptFlags::TMR1,
+                    2 => InterruptFlags::TMR2,
+                    _ => unreachable!(),
+                });
             }
-            bus.timer_ctrl.timers[i].inc_counter(additional as u16);
         }
-        // TODO : different timers
     }
 }
 
