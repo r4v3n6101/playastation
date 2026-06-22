@@ -6,8 +6,9 @@ pub trait Renderer: 'static {
     /// Gather inner fields into [`types::RenderState`].
     fn state(&self) -> types::RenderState;
 
-    /// Draw frame somehow, triggerred on every vblank.
-    fn draw_frame(&mut self);
+    /// Get full [`types::Vram`] slice.
+    /// FIXME : display area? 24-bit color?
+    fn framebuffer(&self) -> &[u16];
 
     /// Change inner render state.
     fn set_parameter(&mut self, param: types::EnvParameter);
