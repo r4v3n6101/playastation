@@ -1,19 +1,36 @@
 use core::cmp::Ordering;
 
+use bitflags::bitflags;
 use modular_bitfield::prelude::*;
 
-use crate::{devices::int::InterruptFlags, interconnect::Bus};
+use crate::devices::int::{InterruptController, InterruptFlags};
 
 use super::{Mmio, read_part, write_part};
 
 const TIMERS: usize = 3;
 const COUNTER_PERIOD: u64 = u16::MAX as u64 + 1;
 
-#[derive(Debug, Default, Clone, Copy)]
-pub struct TimerInput {
+bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    pub struct TimingEvent: u8 {
+        const HBLANK_ENTER = 1 << 0;
+        const HBLANK_LEAVE = 1 << 1;
+        const VBLANK_ENTER = 1 << 2;
+        const VBLANK_LEAVE = 1 << 3;
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct TimingSpan {
     pub sysclocks: u64,
     pub dotclocks: u64,
-    pub hblanks: u64,
+
+    /// State during this chunk.
+    pub hblank: bool,
+    pub vblank: bool,
+
+    /// Event(s) reached at the end of this chunk.
+    pub event: TimingEvent,
 }
 
 #[derive(Debug, Default)]
@@ -217,36 +234,20 @@ impl Timer {
 }
 
 impl TimerController {
-    pub fn update(bus: &mut Bus, input: TimerInput) {
+    pub fn update(&mut self, int_ctrl: &mut InterruptController, input: TimingSpan) {
         let timer2_div8 = {
-            let ctrl = &mut bus.timer_ctrl;
-            ctrl.sysclock_8_rem += input.sysclocks;
+            self.sysclock_8_rem += input.sysclocks;
 
-            let ticks = ctrl.sysclock_8_rem / 8;
-            ctrl.sysclock_8_rem %= 8;
+            let ticks = self.sysclock_8_rem / 8;
+            self.sysclock_8_rem %= 8;
 
             ticks
         };
 
         for i in 0..TIMERS {
-            let timer = &mut bus.timer_ctrl.timers[i];
-
-            let count = match (i, timer.mode.clock_source()) {
-                (0, ClockSource::Source0 | ClockSource::Source1) => input.sysclocks,
-                (0, ClockSource::Source2 | ClockSource::Source3) => input.dotclocks,
-
-                (1, ClockSource::Source0 | ClockSource::Source1) => input.sysclocks,
-                (1, ClockSource::Source2 | ClockSource::Source3) => input.hblanks,
-
-                (2, ClockSource::Source0 | ClockSource::Source1) => input.sysclocks,
-                (2, ClockSource::Source2 | ClockSource::Source3) => timer2_div8,
-
-                _ => unreachable!(),
-            };
-
-            let irq = timer.advance(count);
+            let irq = self.advance_timer(i, input, timer2_div8);
             if irq {
-                bus.int_ctrl.raise(match i {
+                int_ctrl.raise(match i {
                     0 => InterruptFlags::TMR0,
                     1 => InterruptFlags::TMR1,
                     2 => InterruptFlags::TMR2,
@@ -254,6 +255,116 @@ impl TimerController {
                 });
             }
         }
+
+        if input.event.contains(TimingEvent::VBLANK_ENTER) {
+            int_ctrl.raise(InterruptFlags::VBLANK);
+        }
+    }
+
+    fn advance_timer(&mut self, idx: usize, span: TimingSpan, timer2_div8: u64) -> bool {
+        let timer = &mut self.timers[idx];
+
+        // Base ticks count
+        let base = match (idx, timer.mode.clock_source()) {
+            // Timer0: sysclock or dotclock
+            (0, ClockSource::Source0 | ClockSource::Source2) => span.sysclocks,
+            (0, ClockSource::Source1 | ClockSource::Source3) => span.dotclocks,
+
+            // Timer1: sysclock or HBlank count
+            (1, ClockSource::Source0 | ClockSource::Source2) => span.sysclocks,
+            (1, ClockSource::Source1 | ClockSource::Source3) => {
+                if span.event.contains(TimingEvent::HBLANK_ENTER) {
+                    1
+                } else {
+                    0
+                }
+            }
+
+            // Timer2: sysclock or sysclock/8
+            (2, ClockSource::Source0 | ClockSource::Source1) => span.sysclocks,
+            (2, ClockSource::Source2 | ClockSource::Source3) => timer2_div8,
+
+            _ => unreachable!(),
+        };
+
+        if !timer.mode.sync_enabled() {
+            return timer.advance(base);
+        }
+
+        // Ticks count modified by sync mode (e.g. 0 when HBlank)
+        let sync_ticks = match (idx, timer.mode.sync_mode()) {
+            // Pause during HBlank
+            (0, SyncMode::Mode0) => {
+                if span.hblank {
+                    0
+                } else {
+                    base
+                }
+            }
+            // Reset at HBlank, then free-run
+            (0, SyncMode::Mode1) => base,
+            // Reset at HBlank, count only during HBlank
+            (0, SyncMode::Mode2) => {
+                if span.hblank {
+                    base
+                } else {
+                    0
+                }
+            }
+            // Pause until HBlank once, then free-run.
+            // FIXME : this is inaccurate
+            (0, SyncMode::Mode3) => base,
+
+            // Pause during VBlank
+            (1, SyncMode::Mode0) => {
+                if span.vblank {
+                    0
+                } else {
+                    base
+                }
+            }
+            // Reset at VBlank, then free-run
+            (1, SyncMode::Mode1) => base,
+            // Reset at VBlank, count only during VBlank
+            (1, SyncMode::Mode2) => {
+                if span.vblank {
+                    base
+                } else {
+                    0
+                }
+            }
+            // Pause until VBlank once, then free-run.
+            (1, SyncMode::Mode3) => base,
+
+            // Stop forever
+            (2, SyncMode::Mode0 | SyncMode::Mode3) => 0,
+            // Free run
+            (2, SyncMode::Mode1 | SyncMode::Mode2) => base,
+
+            _ => unreachable!(),
+        };
+
+        let irq = timer.advance(sync_ticks);
+
+        // Apply event of next span.
+        // For example, if current span is 0 to HBlank enter, then handle HBlankEnter event
+        match (idx, timer.mode.sync_mode()) {
+            // Timer0 sync event = HBlank
+            (0, SyncMode::Mode1 | SyncMode::Mode2)
+                if span.event.contains(TimingEvent::HBLANK_ENTER) =>
+            {
+                timer.counter = 0
+            }
+            // Timer1 sync event = VBlank
+            (1, SyncMode::Mode1 | SyncMode::Mode2)
+                if span.event.contains(TimingEvent::VBLANK_ENTER) =>
+            {
+                timer.counter = 0;
+            }
+            _ => {}
+        }
+
+        irq
     }
 }
 
