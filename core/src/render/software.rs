@@ -1,4 +1,4 @@
-use alloc::{boxed::Box, collections::VecDeque};
+use alloc::collections::VecDeque;
 use core::mem;
 
 use fixed::{FixedI64, types::extra::U32};
@@ -13,8 +13,6 @@ use super::{
 
 /// Fixed point calculation for rasterizator.
 type FP = FixedI64<U32>;
-// NB: experimental
-type ScreenFillCallback = Box<dyn FnMut(&[u16], usize, usize) + Send>;
 
 pub struct SoftwareRenderer {
     vram: Vram,
@@ -28,8 +26,6 @@ pub struct SoftwareRenderer {
     upload_area: (Position, Size),
     pop_counter: u16,
     push_counter: u16,
-
-    screen_fill: ScreenFillCallback,
 }
 
 impl Default for SoftwareRenderer {
@@ -47,17 +43,6 @@ impl Default for SoftwareRenderer {
             upload_area: (Position { x: 0, y: 0 }, Size { w: 0, h: 0 }),
             pop_counter: 0,
             push_counter: 0,
-
-            screen_fill: Box::new(|_, _, _| {}),
-        }
-    }
-}
-
-impl SoftwareRenderer {
-    pub fn with_screen_fill(screen_fill: ScreenFillCallback) -> Self {
-        Self {
-            screen_fill,
-            ..Default::default()
         }
     }
 }
@@ -72,8 +57,8 @@ impl Renderer for SoftwareRenderer {
         }
     }
 
-    fn draw_frame(&mut self) {
-        (self.screen_fill)(&self.vram, VRAM_WIDTH, VRAM_HEIGHT);
+    fn framebuffer(&self) -> &[u16] {
+        &self.vram
     }
 
     fn set_parameter(&mut self, param: EnvParameter) {
@@ -310,8 +295,7 @@ impl Renderer for SoftwareRenderer {
     }
 
     fn reset(&mut self) {
-        let prev = mem::take(self);
-        self.screen_fill = prev.screen_fill;
+        mem::take(self);
     }
 }
 

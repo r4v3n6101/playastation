@@ -130,7 +130,6 @@ impl Iterator for TimingSpanIter<'_> {
         let new_vblank = self.state.vblank();
 
         let mut event = TimingEvent::empty();
-
         if !old_hblank && new_hblank {
             event |= TimingEvent::HBLANK_ENTER;
         }

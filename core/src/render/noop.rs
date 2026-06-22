@@ -4,7 +4,7 @@ use super::{
     Renderer,
     types::{
         Color, DrawMode, EnvParameter, MaskBitSetting, Polygon, Polyline, Position, Rect,
-        RenderState, Size,
+        RenderState, Size, VRAM_HEIGHT, VRAM_WIDTH,
     },
 };
 
@@ -37,8 +37,8 @@ impl Renderer for NoopRenderer {
         }
     }
 
-    fn draw_frame(&mut self) {
-        tracing::debug!("goo-goo-guh-guh");
+    fn framebuffer(&self) -> &[u16] {
+        &[0; VRAM_WIDTH * VRAM_HEIGHT]
     }
 
     fn set_parameter(&mut self, param: EnvParameter) {

@@ -3,12 +3,18 @@ use std::{fs, num::NonZeroU32, path::PathBuf, rc::Rc, sync::Arc, thread};
 use clap::Parser;
 use crossbeam_utils::atomic::AtomicCell;
 use playastation::{
-    devices::joy::{
-        Slot,
-        controller::{Button, DigitalController},
+    devices::{
+        int::InterruptFlags,
+        joy::{
+            Slot,
+            controller::{Button, DigitalController},
+        },
     },
     formats::BoxedExeFile,
-    render::software::SoftwareRenderer,
+    render::{
+        software::SoftwareRenderer,
+        types::{VRAM_HEIGHT, VRAM_WIDTH},
+    },
     run::Executor,
 };
 use softbuffer::{Context, Surface};
@@ -38,7 +44,7 @@ struct App {
     window: Option<Rc<Window>>,
     surface: Option<Surface<Rc<Window>, Rc<Window>>>,
     button_state: Arc<AtomicCell<Button>>,
-    image_buf: Output<(Vec<u16>, usize, usize)>,
+    image_buf: Output<Vec<u16>>,
 }
 
 impl ApplicationHandler for App {
@@ -50,13 +56,7 @@ impl ApplicationHandler for App {
         let window = Rc::new(event_loop.create_window(attrs).unwrap());
         let context = Context::new(window.clone()).unwrap();
 
-        let mut surface = Surface::new(&context, window.clone()).unwrap();
-        surface
-            .resize(
-                NonZeroU32::new(WIDTH).unwrap(),
-                NonZeroU32::new(HEIGHT).unwrap(),
-            )
-            .unwrap();
+        let surface = Surface::new(&context, window.clone()).unwrap();
 
         self.window = Some(window);
         self.surface = Some(surface);
@@ -138,13 +138,13 @@ impl ApplicationHandler for App {
                     return;
                 };
 
-                let (buf, width, height) = self.image_buf.read();
+                let buf = self.image_buf.read();
                 let buf32 = buf.iter().copied().map(bgr555_to_0rgb).collect::<Vec<_>>();
 
                 surface
                     .resize(
-                        NonZeroU32::new(*width as u32).unwrap(),
-                        NonZeroU32::new(*height as u32).unwrap(),
+                        NonZeroU32::new(VRAM_WIDTH as _).unwrap(),
+                        NonZeroU32::new(VRAM_HEIGHT as _).unwrap(),
                     )
                     .unwrap();
 
@@ -154,13 +154,6 @@ impl ApplicationHandler for App {
 
                 if let Some(window) = &self.window {
                     window.request_redraw();
-                }
-            }
-            WindowEvent::Resized(size) => {
-                if let Some(surface) = self.surface.as_mut() {
-                    let width = NonZeroU32::new(size.width.max(1)).unwrap();
-                    let height = NonZeroU32::new(size.height.max(1)).unwrap();
-                    surface.resize(width, height).unwrap();
                 }
             }
             _ => {}
@@ -184,7 +177,7 @@ fn main() {
 
     let args = Args::parse();
 
-    let (mut img_tx, img_rx) = triple_buffer::triple_buffer(&(Vec::new(), 0, 0));
+    let (mut img_tx, img_rx) = triple_buffer::triple_buffer(&vec![0; VRAM_WIDTH * VRAM_HEIGHT]);
     let button_state = Arc::new(AtomicCell::new(Button::empty()));
 
     let mut app = App {
@@ -204,12 +197,7 @@ fn main() {
             executor.pending_exe = Some(BoxedExeFile::new(rom));
         }
 
-        executor.bus.gpu.renderer = Box::new(SoftwareRenderer::with_screen_fill(Box::new(
-            move |buf, width, height| {
-                img_tx.write((buf.to_vec(), width, height));
-            },
-        )));
-
+        executor.bus.gpu.renderer = Box::new(SoftwareRenderer::default());
         executor.bus.joy_bus.insert_dev(
             Slot::Controller1,
             Box::new(DigitalController::with_poll_buttons(Box::new(move || {
@@ -218,7 +206,24 @@ fn main() {
         );
 
         loop {
+            let old_vblank = executor
+                .bus
+                .int_ctrl
+                .i_stat
+                .contains(InterruptFlags::VBLANK);
+
             executor.run();
+
+            let new_vblank = executor
+                .bus
+                .int_ctrl
+                .i_stat
+                .contains(InterruptFlags::VBLANK);
+
+            if !old_vblank && new_vblank {
+                let data = executor.bus.gpu.renderer.framebuffer();
+                img_tx.write(data.to_vec());
+            }
         }
     });
 

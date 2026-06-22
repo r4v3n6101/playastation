@@ -134,8 +134,6 @@ impl Gpu {
             int_ctrl.raise(InterruptFlags::GPU);
         }
 
-        self.renderer.draw_frame();
-
         self.clock.update(sys_cycles)
     }
 }
