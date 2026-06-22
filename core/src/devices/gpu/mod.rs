@@ -3,8 +3,10 @@ use alloc::boxed::Box;
 use modular_bitfield::prelude::*;
 
 use crate::{
-    devices::int::InterruptFlags,
-    interconnect::Bus,
+    devices::{
+        int::{InterruptController, InterruptFlags},
+        timer::TimingSpan,
+    },
     render::{
         Renderer,
         noop::NoopRenderer,
@@ -17,17 +19,17 @@ use crate::{
 
 use super::{Mmio, read_part, write_part};
 
+mod clock;
 mod gp0;
 mod gp1;
 
 pub struct Gpu {
     pub renderer: Box<dyn Renderer>,
 
+    clock: clock::State,
     cmdbuf: gp0::CmdBuf,
     dma_direction: DmaDirection,
     int_flag: bool,
-
-    cycles_elapsed: u64,
 }
 
 #[bitfield(bits = 32)]
@@ -66,7 +68,7 @@ impl Default for Gpu {
             renderer: Box::new(NoopRenderer::default()),
             int_flag: false,
 
-            cycles_elapsed: 0,
+            clock: clock::State::new(clock::PAL),
             dma_direction: DmaDirection::CpuToGp0,
             cmdbuf: gp0::CmdBuf::default(),
         }
@@ -123,20 +125,18 @@ impl Gpu {
         gp1::dispatch(self, cmd);
     }
 
-    pub fn run(bus: &mut Bus, sys_cycles: u64) {
-        bus.gpu.cycles_elapsed = bus.gpu.cycles_elapsed.saturating_add(sys_cycles);
-
-        if bus.gpu.int_flag {
-            bus.int_ctrl.raise(InterruptFlags::GPU);
+    pub fn update<'a>(
+        &'a mut self,
+        int_ctrl: &mut InterruptController,
+        sys_cycles: u64,
+    ) -> impl Iterator<Item = TimingSpan> + 'a {
+        if self.int_flag {
+            int_ctrl.raise(InterruptFlags::GPU);
         }
 
-        // TODO : FPS
-        let frame_cycles = 33_000_000 / 60;
-        while bus.gpu.cycles_elapsed > frame_cycles {
-            bus.gpu.renderer.draw_frame();
-            bus.int_ctrl.raise(InterruptFlags::VBLANK);
-            bus.gpu.cycles_elapsed -= frame_cycles;
-        }
+        self.renderer.draw_frame();
+
+        self.clock.update(sys_cycles)
     }
 }
 

@@ -4,12 +4,8 @@ use core::ops::Range;
 use crate::{
     BIOS_SIZE, RAM_SIZE,
     devices::{
-        Mmio,
-        dma::DmaController,
-        gpu::Gpu,
-        int::InterruptController,
-        joy::JoyBus,
-        timer::{TimerController, TimerInput},
+        Mmio, dma::DmaController, gpu::Gpu, int::InterruptController, joy::JoyBus,
+        timer::TimerController,
     },
 };
 
@@ -86,17 +82,12 @@ impl Bus {
         let dma_cycles = DmaController::run(self, ram_touched);
         let sys_cycles = cpu_cycles.saturating_add(dma_cycles);
 
-        Gpu::run(self, sys_cycles);
-        TimerController::update(
-            self,
-            TimerInput {
-                sysclocks: sys_cycles,
-                // TODO
-                dotclocks: 0,
-                hblanks: 0,
-            },
-        );
-        JoyBus::update(self);
+        self.gpu
+            .update(&mut self.int_ctrl, sys_cycles)
+            .for_each(|span| {
+                self.timer_ctrl.update(&mut self.int_ctrl, span);
+            });
+        self.joy_bus.update(&mut self.int_ctrl);
     }
 
     // Inlined because RAM/BIOS hot paths are needed for caller

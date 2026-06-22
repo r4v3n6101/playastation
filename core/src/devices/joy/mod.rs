@@ -5,7 +5,7 @@ use alloc::{boxed::Box, collections::VecDeque};
 use modular_bitfield::prelude::*;
 use strum::EnumCount;
 
-use crate::{devices::int::InterruptFlags, interconnect::Bus};
+use crate::devices::int::{InterruptController, InterruptFlags};
 
 use super::{Mmio, read_part, write_part};
 
@@ -144,9 +144,9 @@ impl JoyBus {
         self.devs[slot as usize] = None;
     }
 
-    pub fn update(bus: &mut Bus) {
-        if bus.joy_bus.irq_pending {
-            bus.int_ctrl.raise(InterruptFlags::JOY);
+    pub fn update(&mut self, int_ctrl: &mut InterruptController) {
+        if self.irq_pending {
+            int_ctrl.raise(InterruptFlags::JOY);
         }
     }
 
