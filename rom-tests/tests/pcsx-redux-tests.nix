@@ -44,8 +44,10 @@
         pkgs.writeShellApplication {
           name = "pcsx-redux-tests";
 
+          runtimeInputs = [ self'.packages.test-rom-runner ];
+
           text = ''
-            ${self'.packages.test-rom-runner}/bin/test-rom-runner \
+            test-rom-runner \
               --bios "${inputs.bios}" \
               --rom "${(test-rom kind)}"
           '';

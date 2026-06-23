@@ -1,14 +1,19 @@
-use std::{fs, num::NonZeroU32, path::PathBuf, rc::Rc, sync::Arc, thread};
+use std::{
+    fs,
+    num::NonZeroU32,
+    path::PathBuf,
+    rc::Rc,
+    sync::Arc,
+    thread,
+    time::{Duration, Instant},
+};
 
 use clap::Parser;
 use crossbeam_utils::atomic::AtomicCell;
 use playastation::{
-    devices::{
-        int::InterruptFlags,
-        joy::{
-            Slot,
-            controller::{Button, DigitalController},
-        },
+    devices::joy::{
+        Slot,
+        controller::{Button, DigitalController},
     },
     formats::BoxedExeFile,
     render::{
@@ -56,7 +61,13 @@ impl ApplicationHandler for App {
         let window = Rc::new(event_loop.create_window(attrs).unwrap());
         let context = Context::new(window.clone()).unwrap();
 
-        let surface = Surface::new(&context, window.clone()).unwrap();
+        let mut surface = Surface::new(&context, window.clone()).unwrap();
+        surface
+            .resize(
+                NonZeroU32::new(VRAM_WIDTH as _).unwrap(),
+                NonZeroU32::new(VRAM_HEIGHT as _).unwrap(),
+            )
+            .unwrap();
 
         self.window = Some(window);
         self.surface = Some(surface);
@@ -205,24 +216,15 @@ fn main() {
             }))),
         );
 
+        let mut last_frame = Instant::now();
         loop {
-            let old_vblank = executor
-                .bus
-                .int_ctrl
-                .i_stat
-                .contains(InterruptFlags::VBLANK);
-
             executor.run();
 
-            let new_vblank = executor
-                .bus
-                .int_ctrl
-                .i_stat
-                .contains(InterruptFlags::VBLANK);
-
-            if !old_vblank && new_vblank {
-                let data = executor.bus.gpu.renderer.framebuffer();
-                img_tx.write(data.to_vec());
+            if last_frame.elapsed() > Duration::from_secs(1) / 60 {
+                img_tx
+                    .input_buffer_publisher()
+                    .copy_from_slice(executor.bus.gpu.renderer.framebuffer());
+                last_frame = Instant::now();
             }
         }
     });

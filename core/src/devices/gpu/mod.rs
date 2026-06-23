@@ -68,7 +68,7 @@ impl Default for Gpu {
             renderer: Box::new(NoopRenderer::default()),
             int_flag: false,
 
-            clock: clock::State::new(clock::PAL),
+            clock: clock::State::new(clock::NTSC),
             dma_direction: DmaDirection::CpuToGp0,
             cmdbuf: gp0::CmdBuf::default(),
         }
