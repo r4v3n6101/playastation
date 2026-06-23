@@ -35,15 +35,9 @@ pub struct PagedCache {
 
 #[derive(Debug)]
 pub struct Block {
-    pub ops: Vec<Operation>,
+    pub ops: Vec<Result<Instruction, Exception>>,
     pub pages: SmallVec<[usize; 2]>,
     phys_pc: u32,
-}
-
-#[derive(Debug)]
-pub enum Operation {
-    Instruction { pc: u32, ins: Instruction },
-    Error { pc: u32, cause: Exception },
 }
 
 impl Default for PagedCache {
@@ -107,7 +101,7 @@ impl PagedCache {
     fn insert_block(
         &mut self,
         phys_pc: u32,
-        ops: Vec<Operation>,
+        ops: Vec<Result<Instruction, Exception>>,
         page_tracking: bool,
     ) -> Rc<Block> {
         let end_pc = phys_pc

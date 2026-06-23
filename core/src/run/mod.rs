@@ -12,9 +12,6 @@ mod interpreter;
 
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
 struct ExecutionResult {
-    last_pc: u32,
-    next_pc: u32,
-    last_in_delay_slot: bool,
     cycles_elapsed: u64,
     exception: Option<Exception>,
 }
@@ -55,17 +52,16 @@ impl Executor {
             .interrupt_pending()
             .then_some(ExecutionResult {
                 exception: Some(Exception::Interrupt),
-                last_pc: execution.next_pc,
-                last_in_delay_slot: false,
                 ..Default::default()
             });
 
         // Interrupt changes flow like it's an error occurred before the next op/or after delay slot.
         let execution = interrupt.unwrap_or(execution);
         if let Some(exception) = execution.exception {
-            // Reset jump and save target for Cop0.TAR
-            let old_jump = mem::take(&mut self.cpu.pending_jump);
-            let jump_target = old_jump.target();
+            // Reset jump and take values
+            let epc = self.cpu.pc;
+            let branch_delay = self.cpu.pending_jump.valid;
+            let jump_target = self.cpu.pending_jump.target();
 
             // Commit pending load in a slow, but safe way
             // In case one of instruction executor will write a garbage
@@ -75,22 +71,17 @@ impl Executor {
 
             tracing::debug!(
                 ?exception,
-                epc=%format_args!("{:#X}", execution.last_pc),
-                delay_slot=%execution.last_in_delay_slot,
+                epc=%format_args!("{:#X}", epc),
+                %branch_delay,
                 jump_target=%format_args!("{jump_target:#X}"),
                 "entering exception handler"
             );
 
-            self.cpu.cop0.exception_enter(
-                exception,
-                execution.last_pc,
-                execution.last_in_delay_slot,
-                jump_target,
-            );
+            self.cpu
+                .cop0
+                .exception_enter(exception, epc, branch_delay, jump_target);
             self.cpu.pc = self.cpu.cop0.exception_handler();
         } else {
-            self.cpu.pc = execution.next_pc;
-
             self.handle_tty();
             self.handle_exe();
         }

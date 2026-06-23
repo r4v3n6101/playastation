@@ -5,10 +5,12 @@ use crate::{
     interconnect::Bus,
 };
 
-use super::Operation;
-
 /// Fetch instructions and decode them
-pub fn fetch_and_decode_block(limit: usize, cpu: &mut Cpu, bus: &mut Bus) -> Vec<Operation> {
+pub fn fetch_and_decode_block(
+    limit: usize,
+    cpu: &mut Cpu,
+    bus: &mut Bus,
+) -> Vec<Result<Instruction, Exception>> {
     let mut pc = cpu.pc;
     let mut pending_delay_slot = cpu.pending_jump.valid;
 
@@ -27,10 +29,7 @@ pub fn fetch_and_decode_block(limit: usize, cpu: &mut Cpu, bus: &mut Bus) -> Vec
                     pc=%format_args!("{pc:#X}"),
                     "ins fetch failed"
                 );
-                output.push(Operation::Error {
-                    pc,
-                    cause: exception,
-                });
+                output.push(Err(exception));
                 break;
             }
         };
@@ -41,14 +40,11 @@ pub fn fetch_and_decode_block(limit: usize, cpu: &mut Cpu, bus: &mut Bus) -> Vec
                 ins=%format_args!("{ins:#X}"),
                 "ins decode failed"
             );
-            output.push(Operation::Error {
-                pc,
-                cause: Exception::ReservedInstruction,
-            });
+            output.push(Err(Exception::ReservedInstruction));
             break;
         };
 
-        output.push(Operation::Instruction { pc, ins });
+        output.push(Ok(ins));
 
         // It may jump to exception handler or being interrupted
         if let Instruction::Syscall { .. } | Instruction::Break { .. } | Instruction::Rfe = ins {

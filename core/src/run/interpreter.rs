@@ -7,7 +7,7 @@ use crate::{
 
 use super::{
     ExecutionResult,
-    block::{Block, Operation, PagedCache},
+    block::{Block, PagedCache},
 };
 
 /// How many cycles need to be elapsed, so hi/lo become available after Mul op.
@@ -35,9 +35,6 @@ enum BreakReason {
 pub fn run(cache: &mut PagedCache, block: &Block, cpu: &mut Cpu, bus: &mut Bus) -> ExecutionResult {
     let mut ctx = Context {
         result: ExecutionResult {
-            last_pc: cpu.pc,
-            next_pc: cpu.pc,
-            last_in_delay_slot: cpu.pending_jump.valid,
             cycles_elapsed: 0,
             exception: None,
         },
@@ -51,24 +48,19 @@ pub fn run(cache: &mut PagedCache, block: &Block, cpu: &mut Cpu, bus: &mut Bus) 
 
     for ins in &block.ops {
         match *ins {
-            Operation::Instruction { pc, ins } => {
-                ctx.result.last_pc = pc;
-                ctx.result.last_in_delay_slot = ctx.cpu.pending_jump.valid;
-
+            Ok(ins) => {
                 let res = execute(&mut ctx, ins);
                 ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(1);
                 ctx.hi_lo_latency = ctx.hi_lo_latency.saturating_sub(1);
 
                 match res {
-                    Ok(()) => {
-                        ctx.result.next_pc = pc.wrapping_add(4);
-                    }
+                    Ok(()) => {}
                     Err(BreakReason::EarlyExit) => {
-                        ctx.result.next_pc = pc.wrapping_add(4);
+                        ctx.cpu.pc = ctx.cpu.pc.wrapping_add(4);
                         break;
                     }
                     Err(BreakReason::ControlFlow(next_pc)) => {
-                        ctx.result.next_pc = next_pc;
+                        ctx.cpu.pc = next_pc;
                         break;
                     }
                     Err(BreakReason::Exception(exc)) => {
@@ -77,9 +69,7 @@ pub fn run(cache: &mut PagedCache, block: &Block, cpu: &mut Cpu, bus: &mut Bus) 
                     }
                 }
             }
-            Operation::Error { pc, cause } => {
-                ctx.result.last_pc = pc;
-                ctx.result.last_in_delay_slot = ctx.cpu.pending_jump.valid;
+            Err(cause) => {
                 ctx.result.exception.replace(cause);
 
                 // Cycles
@@ -89,6 +79,7 @@ pub fn run(cache: &mut PagedCache, block: &Block, cpu: &mut Cpu, bus: &mut Bus) 
                 break;
             }
         }
+        ctx.cpu.pc = ctx.cpu.pc.wrapping_add(4);
     }
 
     // The next block won't wait latency before HI/LO, because we emulate it in the current one.
@@ -528,11 +519,7 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
                 otherwise: branch_base.wrapping_add(4),
             };
 
-            gpr_write(
-                ctx.cpu,
-                Cpu::DEFAULT_LINK_REG,
-                ctx.result.last_pc.wrapping_add(8),
-            );
+            gpr_write(ctx.cpu, Cpu::DEFAULT_LINK_REG, ctx.cpu.pc.wrapping_add(8));
         }
         Instruction::Bltzal { rs, imm_sext } => {
             let branch_base = branch_base(ctx);
@@ -543,11 +530,7 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
                 otherwise: branch_base.wrapping_add(4),
             };
 
-            gpr_write(
-                ctx.cpu,
-                Cpu::DEFAULT_LINK_REG,
-                ctx.result.last_pc.wrapping_add(8),
-            );
+            gpr_write(ctx.cpu, Cpu::DEFAULT_LINK_REG, ctx.cpu.pc.wrapping_add(8));
         }
 
         // Jumps
@@ -571,11 +554,7 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
                 otherwise: target,
             };
 
-            gpr_write(
-                ctx.cpu,
-                Cpu::DEFAULT_LINK_REG,
-                ctx.result.last_pc.wrapping_add(8),
-            );
+            gpr_write(ctx.cpu, Cpu::DEFAULT_LINK_REG, ctx.cpu.pc.wrapping_add(8));
         }
         Instruction::Jr { rs } => {
             pending_jump = PendingJump {
@@ -593,7 +572,7 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
                 otherwise: gpr_read(ctx.cpu, rs),
             };
 
-            gpr_write(ctx.cpu, rd, ctx.result.last_pc.wrapping_add(8));
+            gpr_write(ctx.cpu, rd, ctx.cpu.pc.wrapping_add(8));
         }
 
         // MulDiv
@@ -773,7 +752,7 @@ fn branch_base(ctx: &Context) -> u32 {
     if old_jump.valid {
         old_jump.target()
     } else {
-        ctx.result.last_pc.wrapping_add(4)
+        ctx.cpu.pc.wrapping_add(4)
     }
 }
 
