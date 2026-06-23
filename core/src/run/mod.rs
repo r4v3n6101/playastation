@@ -121,6 +121,7 @@ impl Executor {
                     )
                     .expect("valid ram dest in exe file");
             }
+            self.blk_cache.clear();
 
             self.cpu.pc = ipc.get();
             self.cpu.gpr[28] = igp.get();

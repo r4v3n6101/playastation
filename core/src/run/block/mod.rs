@@ -96,6 +96,14 @@ impl PagedCache {
         invalidated
     }
 
+    pub fn clear(&mut self) {
+        self.blocks.clear();
+        for page in self.pages.iter_mut() {
+            page.clear();
+        }
+        self.by_pc.clear();
+    }
+
     fn insert_block(
         &mut self,
         phys_pc: u32,

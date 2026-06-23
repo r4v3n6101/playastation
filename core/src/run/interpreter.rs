@@ -1,8 +1,8 @@
 use core::mem;
 
 use crate::{
-    cpu::{Cpu, Exception, Instruction, PendingJump, PendingLoad, TranslationResult},
-    interconnect::Bus,
+    cpu::{Cop0, Cpu, Exception, Instruction, PendingJump, PendingLoad, TranslationResult},
+    interconnect::{Bus, Region, region_of},
 };
 
 use super::{
@@ -28,7 +28,7 @@ struct Context<'a> {
 enum BreakReason {
     Exception(Exception),
     ControlFlow(u32),
-    SelfModified,
+    EarlyExit,
 }
 
 #[inline(never)]
@@ -63,16 +63,16 @@ pub fn run(cache: &mut PagedCache, block: &Block, cpu: &mut Cpu, bus: &mut Bus) 
                     Ok(()) => {
                         ctx.result.next_pc = pc.wrapping_add(4);
                     }
+                    Err(BreakReason::EarlyExit) => {
+                        ctx.result.next_pc = pc.wrapping_add(4);
+                        break;
+                    }
                     Err(BreakReason::ControlFlow(next_pc)) => {
                         ctx.result.next_pc = next_pc;
                         break;
                     }
                     Err(BreakReason::Exception(exc)) => {
                         ctx.result.exception.replace(exc);
-                        break;
-                    }
-                    Err(BreakReason::SelfModified) => {
-                        ctx.result.next_pc = pc.wrapping_add(4);
                         break;
                     }
                 }
@@ -101,7 +101,7 @@ pub fn run(cache: &mut PagedCache, block: &Block, cpu: &mut Cpu, bus: &mut Bus) 
 fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
     let mut pending_load = PendingLoad::default();
     let mut pending_jump = PendingJump::default();
-    let mut invalidated = false;
+    let mut early_exit = false;
     match ins {
         // ALU ops
         Instruction::Add { rs, rt, rd } => {
@@ -401,7 +401,7 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
                 .write_bus(ctx.bus, vaddr, gpr_read(ctx.cpu, rt).to_le_bytes())
                 .map_err(BreakReason::Exception)?;
 
-            invalidated = try_invalidate_page(ctx, vaddr);
+            early_exit = mem_access(ctx, vaddr);
         }
         Instruction::Sh { rs, rt, imm_sext } => {
             let vaddr = gpr_read(ctx.cpu, rs).wrapping_add_signed(i32::from(imm_sext));
@@ -409,7 +409,7 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
                 .write_bus(ctx.bus, vaddr, (gpr_read(ctx.cpu, rt) as u16).to_le_bytes())
                 .map_err(BreakReason::Exception)?;
 
-            invalidated = try_invalidate_page(ctx, vaddr);
+            early_exit = mem_access(ctx, vaddr);
         }
         Instruction::Sb { rs, rt, imm_sext } => {
             let vaddr = gpr_read(ctx.cpu, rs).wrapping_add_signed(i32::from(imm_sext));
@@ -417,7 +417,7 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
                 .write_bus(ctx.bus, vaddr, (gpr_read(ctx.cpu, rt) as u8).to_le_bytes())
                 .map_err(BreakReason::Exception)?;
 
-            invalidated = try_invalidate_page(ctx, vaddr);
+            early_exit = mem_access(ctx, vaddr);
         }
         Instruction::Swl { rs, rt, imm_sext } => {
             let vaddr = gpr_read(ctx.cpu, rs).wrapping_add_signed(i32::from(imm_sext));
@@ -439,7 +439,7 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
                 .write_bus(ctx.bus, vaddr & !3, val.to_le_bytes())
                 .map_err(BreakReason::Exception)?;
 
-            invalidated = try_invalidate_page(ctx, vaddr);
+            early_exit = mem_access(ctx, vaddr);
         }
         Instruction::Swr { rs, rt, imm_sext } => {
             let vaddr = gpr_read(ctx.cpu, rs).wrapping_add_signed(i32::from(imm_sext));
@@ -461,7 +461,7 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
                 .write_bus(ctx.bus, vaddr & !3, val.to_le_bytes())
                 .map_err(BreakReason::Exception)?;
 
-            invalidated = try_invalidate_page(ctx, vaddr);
+            early_exit = mem_access(ctx, vaddr);
         }
 
         // Branches
@@ -676,11 +676,15 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
         }
         Instruction::Mtc0 { rt, cop0_reg } => {
             cop0_write(ctx.cpu, cop0_reg, gpr_read(ctx.cpu, rt));
+            if cop0_reg == Cop0::CAUSE_IDX as u8 || cop0_reg == Cop0::STATUS_IDX as u8 {
+                early_exit = true;
+            }
         }
 
         // Return state before exception
         Instruction::Rfe => {
             ctx.cpu.cop0.exception_leave();
+            early_exit = true;
         }
 
         // Exceptions
@@ -692,7 +696,7 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
 
     pend_load(ctx.cpu, pending_load);
 
-    // Reset on akward write
+    // Reset on awkward write
     ctx.cpu.gpr[0] = 0;
 
     if let jump @ PendingJump { valid: true, .. } =
@@ -701,8 +705,8 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
         return Err(BreakReason::ControlFlow(jump.target()));
     }
 
-    if invalidated {
-        return Err(BreakReason::SelfModified);
+    if early_exit {
+        return Err(BreakReason::EarlyExit);
     }
 
     Ok(())
@@ -774,13 +778,17 @@ fn branch_base(ctx: &Context) -> u32 {
 }
 
 #[inline(always)]
-fn try_invalidate_page(ctx: &mut Context, vaddr: u32) -> bool {
-    if let TranslationResult::PhysAddr(paddr) = ctx.cpu.mmu.translate_addr(vaddr)
-        && let Some(invalidated_page) = ctx.cache.invalidate_page(paddr)
-        && ctx.block.pages.contains(&invalidated_page)
-    {
-        true
-    } else {
-        false
+fn mem_access(ctx: &mut Context, vaddr: u32) -> bool {
+    if let TranslationResult::PhysAddr(paddr) = ctx.cpu.mmu.translate_addr(vaddr) {
+        if region_of(paddr) == Region::Int {
+            return true;
+        }
+        if let Some(invalidated_page) = ctx.cache.invalidate_page(paddr)
+            && ctx.block.pages.contains(&invalidated_page)
+        {
+            return true;
+        }
     }
+
+    false
 }

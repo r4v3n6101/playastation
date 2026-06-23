@@ -50,7 +50,8 @@ pub fn fetch_and_decode_block(limit: usize, cpu: &mut Cpu, bus: &mut Bus) -> Vec
 
         output.push(Operation::Instruction { pc, ins });
 
-        if let Instruction::Syscall { .. } | Instruction::Break { .. } = ins {
+        // It may jump to exception handler or being interrupted
+        if let Instruction::Syscall { .. } | Instruction::Break { .. } | Instruction::Rfe = ins {
             break;
         }
 

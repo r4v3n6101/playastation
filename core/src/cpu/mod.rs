@@ -81,7 +81,7 @@ impl Cpu {
 
     #[inline(always)]
     pub fn read_bus<const N: usize>(
-        &mut self,
+        &self,
         bus: &mut Bus,
         vaddr: u32,
     ) -> Result<[u8; N], Exception> {
