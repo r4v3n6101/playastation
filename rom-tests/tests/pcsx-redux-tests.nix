@@ -59,6 +59,7 @@
         cop0 = test-suite "cop0";
         cpu = test-suite "cpu";
         gpu = test-suite "gpu";
+        timers = test-suite "timers";
       });
     };
 }

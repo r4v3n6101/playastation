@@ -11,15 +11,13 @@ use std::{
 use clap::Parser;
 use crossbeam_utils::atomic::AtomicCell;
 use playastation::{
+    VRAM_HEIGHT, VRAM_WIDTH,
     devices::joy::{
         Slot,
         controller::{Button, DigitalController},
     },
     formats::BoxedExeFile,
-    render::{
-        software::SoftwareRenderer,
-        types::{VRAM_HEIGHT, VRAM_WIDTH},
-    },
+    render::software::SoftwareRenderer,
     run::Executor,
 };
 use softbuffer::{Context, Surface};
@@ -180,7 +178,7 @@ impl ApplicationHandler for App {
 
 fn main() {
     tracing_subscriber::fmt()
-        .with_max_level(Level::INFO)
+        .with_max_level(Level::TRACE)
         .with_target(true)
         .with_level(true)
         .compact()

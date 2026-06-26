@@ -115,6 +115,8 @@ impl Gpu {
             .with_ready_to_send_vram(ready_to_send_vram)
             .with_ready_to_receive_dma(ready_to_receive_dma)
             .with_dma_data_request(dma_data_request)
+            // Some tests need this
+            .with_drawing_even_odd_lines(self.clock.scanline & 1 != 0)
     }
 
     pub fn dispatch_gp0(&mut self, cmd: u32) {

@@ -4,7 +4,7 @@ use core::{ops::Range, ptr};
 use crate::{
     BIOS_SIZE, RAM_SIZE,
     devices::{
-        Mmio, dma::DmaController, gpu::Gpu, int::InterruptController, joy::JoyBus,
+        Mmio, cdrom::CdRom, dma::DmaController, gpu::Gpu, int::InterruptController, joy::JoyBus,
         timer::TimerController,
     },
 };
@@ -52,6 +52,7 @@ pub struct Bus {
     pub int_ctrl: InterruptController,
     pub dma_ctrl: DmaController,
     pub timer_ctrl: TimerController,
+    pub cdrom: CdRom,
     pub gpu: Gpu,
     pub joy_bus: JoyBus,
 }
@@ -70,6 +71,7 @@ impl Default for Bus {
             int_ctrl: InterruptController::default(),
             dma_ctrl: DmaController::default(),
             timer_ctrl: TimerController::default(),
+            cdrom: CdRom::default(),
             gpu: Gpu::default(),
             joy_bus: JoyBus::default(),
         }
@@ -88,6 +90,7 @@ impl Bus {
                 self.timer_ctrl.update(&mut self.int_ctrl, span);
             });
         self.joy_bus.update(&mut self.int_ctrl);
+        self.cdrom.update(&mut self.int_ctrl);
     }
 
     // Inlined because RAM/BIOS hot paths are needed for caller
@@ -211,6 +214,7 @@ impl Bus {
                 let _guard = mmio_span.enter();
                 let mmio_addr = paddr - CDROM.start;
                 tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "cdrom read");
+                self.cdrom.read(buf, mmio_addr);
             }
             Region::Gpu => {
                 let _guard = mmio_span.enter();
@@ -275,6 +279,7 @@ impl Bus {
                 let _guard = mmio_span.enter();
                 let mmio_addr = paddr - CDROM.start;
                 tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "cdrom write");
+                self.cdrom.write(mmio_addr, &value);
             }
             Region::Gpu => {
                 let _guard = mmio_span.enter();

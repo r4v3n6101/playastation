@@ -1,10 +1,12 @@
 use core::mem;
 
+use crate::{VRAM_HEIGHT, VRAM_WIDTH};
+
 use super::{
     Renderer,
     types::{
         Color, DrawMode, EnvParameter, MaskBitSetting, Polygon, Polyline, Position, Rect,
-        RenderState, Size, VRAM_HEIGHT, VRAM_WIDTH,
+        RenderState, Size,
     },
 };
 

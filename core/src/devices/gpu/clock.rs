@@ -3,6 +3,13 @@ use crate::devices::timer::{TimingEvent, TimingSpan};
 pub const NTSC: VideoTiming = VideoTiming {
     sys_cycles_per_scanline: 2152,
     hblank_start: 1722,
+    // TODO: this is Timer0 dotclock for 256px display mode only.
+    // Real value depends on GP1 horizontal resolution:
+    // 256: NTSC 341 / PAL 340
+    // 320: NTSC 426 / PAL 426
+    // 512: NTSC 682 / PAL 681
+    // 640: NTSC 853 / PAL 851
+    // 368: NTSC 487 / PAL 486
     dots_per_scanline: 3413,
 
     visible_scanlines: 240,
@@ -30,10 +37,10 @@ pub struct VideoTiming {
 
 #[derive(Debug, Clone)]
 pub struct State {
-    line_cycle: u64,
-    scanline: u64,
-    dot_accum: u64,
-    timing: VideoTiming,
+    pub line_cycle: u64,
+    pub scanline: u64,
+    pub dot_accum: u64,
+    pub timing: VideoTiming,
 }
 
 impl State {

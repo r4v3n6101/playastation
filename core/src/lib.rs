@@ -13,3 +13,8 @@ pub mod run;
 pub const RAM_SIZE: usize = 2 * 1024 * 1024;
 /// 512KiB BIOS, ROM.
 pub const BIOS_SIZE: usize = 512 * 1024;
+
+/// Width of VRAM buffer.
+pub const VRAM_WIDTH: usize = 1024;
+/// Height of VRAM buffer.
+pub const VRAM_HEIGHT: usize = 512;

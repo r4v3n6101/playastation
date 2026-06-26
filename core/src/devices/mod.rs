@@ -1,3 +1,4 @@
+pub mod cdrom;
 pub mod dma;
 pub mod gpu;
 pub mod int;

@@ -3,11 +3,13 @@ use core::mem;
 
 use fixed::{FixedI64, types::extra::U32};
 
+use crate::{VRAM_HEIGHT, VRAM_WIDTH};
+
 use super::{
     Renderer,
     types::{
         Color, DrawMode, EnvParameter, Location, MaskBitSetting, Polygon, Polyline, Position, Rect,
-        RenderState, Size, TextureDepth, TextureWindow, VRAM_HEIGHT, VRAM_WIDTH, Vertex, Vram,
+        RenderState, Size, TextureDepth, TextureWindow, Vertex, Vram,
     },
 };
 

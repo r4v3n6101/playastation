@@ -8,9 +8,6 @@ pub const POLYGON_STACK_LIMIT: usize = 4;
 /// Points for polyline that will be stored on a stack. If more then heap alloc.
 pub const POLYLINE_STACK_LIMIT: usize = 10;
 
-pub const VRAM_WIDTH: usize = 1024;
-pub const VRAM_HEIGHT: usize = 512;
-
 /// VRAM is 2d texture actually.
 pub type Vram = Box<[u16]>;
 
