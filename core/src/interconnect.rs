@@ -1,5 +1,5 @@
 use alloc::boxed::Box;
-use core::ops::Range;
+use core::{ops::Range, ptr};
 
 use crate::{
     BIOS_SIZE, RAM_SIZE,
@@ -101,26 +101,34 @@ impl Bus {
                 // SAFETY: Hot path for RAM, `paddr` and `paddr + N` are inside of RAM, so...
                 unsafe {
                     let addr = (paddr as usize) & (RAM_SIZE - 1);
-                    buf.copy_from_slice(self.ram.get_unchecked(addr..).get_unchecked(..N));
-
-                    return buf;
+                    ptr::copy_nonoverlapping(self.ram.as_ptr().byte_add(addr), buf.as_mut_ptr(), N);
                 }
+
+                return buf;
             } else if BIOS.contains(&paddr) {
                 // SAFETY: same as above
                 unsafe {
                     let addr = (paddr - BIOS.start) as usize;
-                    buf.copy_from_slice(self.bios.get_unchecked(addr..).get_unchecked(..N));
-
-                    return buf;
+                    ptr::copy_nonoverlapping(
+                        self.bios.as_ptr().byte_add(addr),
+                        buf.as_mut_ptr(),
+                        N,
+                    );
                 }
+
+                return buf;
             } else if SCRATCHPAD.contains(&paddr) {
                 // SAFETY: same as above
                 unsafe {
                     let addr = (paddr - SCRATCHPAD.start) as usize;
-                    buf.copy_from_slice(self.scratchpad.get_unchecked(addr..).get_unchecked(..N));
-
-                    return buf;
+                    ptr::copy_nonoverlapping(
+                        self.scratchpad.as_ptr().byte_add(addr),
+                        buf.as_mut_ptr(),
+                        N,
+                    );
                 }
+
+                return buf;
             }
         }
 
@@ -138,24 +146,26 @@ impl Bus {
                 // SAFETY: Hot path for RAM, `paddr` and `paddr + N` are inside of RAM, so...
                 unsafe {
                     let addr = (paddr as usize) & (RAM_SIZE - 1);
-                    self.ram
-                        .get_unchecked_mut(addr..)
-                        .get_unchecked_mut(..N)
-                        .copy_from_slice(&value);
-
-                    return;
+                    ptr::copy_nonoverlapping(
+                        value.as_ptr(),
+                        self.ram.as_mut_ptr().byte_add(addr),
+                        N,
+                    );
                 }
+
+                return;
             } else if SCRATCHPAD.contains(&paddr) {
                 // SAFETY: as above
                 unsafe {
                     let addr = (paddr - SCRATCHPAD.start) as usize;
-                    self.scratchpad
-                        .get_unchecked_mut(addr..)
-                        .get_unchecked_mut(..N)
-                        .copy_from_slice(&value);
-
-                    return;
+                    ptr::copy_nonoverlapping(
+                        value.as_ptr(),
+                        self.scratchpad.as_mut_ptr().byte_add(addr),
+                        N,
+                    );
                 }
+
+                return;
             }
         }
 
@@ -285,7 +295,7 @@ impl Bus {
             Region::Ram => unimplemented!(),
             Region::Bios => unimplemented!(),
             Region::Scratchpad => unimplemented!(),
-            Region::Unmapped => todo!(),
+            Region::Unmapped => {}
         }
     }
 }
