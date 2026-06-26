@@ -116,45 +116,6 @@ pub enum TextureDepth {
     Reserved = 3,
 }
 
-#[derive(Specifier, Debug, Clone, Copy, PartialEq, Eq)]
-#[bits = 2]
-pub enum HorizontalResolution {
-    H256 = 0,
-    H320 = 1,
-    H512 = 2,
-    H640 = 3,
-}
-
-#[derive(Specifier, Debug, Clone, Copy, PartialEq, Eq)]
-#[bits = 1]
-pub enum VerticalResolution {
-    V240 = 0,
-    V480 = 1,
-}
-
-#[derive(Specifier, Debug, Clone, Copy, PartialEq, Eq)]
-#[bits = 1]
-pub enum VideoMode {
-    Ntsc = 0,
-    Pal = 1,
-}
-
-#[derive(Specifier, Debug, Clone, Copy, PartialEq, Eq)]
-#[bits = 1]
-pub enum DisplayDepth {
-    Bpp15 = 0,
-    Bpp24 = 1,
-}
-
-#[derive(Specifier, Debug, Clone, Copy, PartialEq, Eq)]
-#[bits = 2]
-pub enum DmaDirection {
-    Off = 0,
-    Fifo = 1,
-    CpuToGp0 = 2,
-    VramToCpu = 3,
-}
-
 /// Position somewhere at space.
 /// Types are extended, because of possible multiplication.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]

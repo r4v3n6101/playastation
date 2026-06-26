@@ -21,69 +21,71 @@ impl Default for CmdBuf {
     }
 }
 
-#[tracing::instrument(
-    target = "gpu.gp0",
-    level = "DEBUG",
-    "dispatch",
-    skip(gpu),
-    fields(cmd=%format_args!("{cmd:#X}"))
-)]
-pub fn dispatch(gpu: &mut Gpu, cmd: u32) {
-    let mut cmdbuf = mem::take(&mut gpu.cmdbuf);
+impl Gpu {
+    #[tracing::instrument(
+        target = "gpu.gp0",
+        level = "DEBUG",
+        "dispatch",
+        skip(self),
+        fields(cmd=%format_args!("{cmd:#X}"))
+    )]
+    pub fn dispatch_gp0(&mut self, cmd: u32) {
+        let mut cmdbuf = mem::take(&mut self.cmdbuf);
 
-    if cmdbuf.0.needs_more() {
-        tracing::trace!("push cmd as is");
-        cmdbuf.0.push_cmd(cmd, gpu);
-    } else {
-        let opcode = (cmd >> 24) as u8;
+        if cmdbuf.0.needs_more() {
+            tracing::trace!("push cmd as is");
+            cmdbuf.0.push_cmd(cmd, self);
+        } else {
+            let opcode = (cmd >> 24) as u8;
 
-        cmdbuf.0 = SmallBox::new(());
-        match opcode {
-            0x00 | 0x03..=0x1E => {
-                // NOP
+            cmdbuf.0 = SmallBox::new(());
+            match opcode {
+                0x00 | 0x03..=0x1E => {
+                    // NOP
+                }
+                0x01 => {
+                    // Clear CLUT AFAIK
+                }
+                0x1F => {
+                    self.int_flag = true;
+                }
+                0x02 => {
+                    cmdbuf.0 = SmallBox::new(FillVramPacket::init(cmd));
+                }
+                0x20..=0x3F => {
+                    cmdbuf.0 = SmallBox::new(PolygonPacket::init(cmd));
+                }
+                0x40..=0x5F => {
+                    cmdbuf.0 = SmallBox::new(LinePacket::init(cmd));
+                }
+                0x60..=0x7F => {
+                    cmdbuf.0 = SmallBox::new(RectPacket::init(cmd));
+                }
+                0x80 => {
+                    cmdbuf.0 = SmallBox::new(Vram2VramPacket::init(cmd));
+                }
+                0xA0 => {
+                    cmdbuf.0 = SmallBox::new(Cpu2VramPacket::init(cmd));
+                }
+                0xC0 => {
+                    cmdbuf.0 = SmallBox::new(Vram2CpuPacket::init(cmd));
+                }
+                0xE1 => set_draw_mode(self, cmd),
+                0xE2 => set_texture_window(self, cmd),
+                0xE3 => set_draw_area_top_left(self, cmd),
+                0xE4 => set_draw_area_bottom_right(self, cmd),
+                0xE5 => set_draw_offset(self, cmd),
+                0xE6 => set_mask_bit_setting(self, cmd),
+                _ => {}
             }
-            0x01 => {
-                // Clear CLUT AFAIK
-            }
-            0x1F => {
-                gpu.int_flag = true;
-            }
-            0x02 => {
-                cmdbuf.0 = SmallBox::new(FillVramPacket::init(cmd));
-            }
-            0x20..=0x3F => {
-                cmdbuf.0 = SmallBox::new(PolygonPacket::init(cmd));
-            }
-            0x40..=0x5F => {
-                cmdbuf.0 = SmallBox::new(LinePacket::init(cmd));
-            }
-            0x60..=0x7F => {
-                cmdbuf.0 = SmallBox::new(RectPacket::init(cmd));
-            }
-            0x80 => {
-                cmdbuf.0 = SmallBox::new(Vram2VramPacket::init(cmd));
-            }
-            0xA0 => {
-                cmdbuf.0 = SmallBox::new(Cpu2VramPacket::init(cmd));
-            }
-            0xC0 => {
-                cmdbuf.0 = SmallBox::new(Vram2CpuPacket::init(cmd));
-            }
-            0xE1 => set_draw_mode(gpu, cmd),
-            0xE2 => set_texture_window(gpu, cmd),
-            0xE3 => set_draw_area_top_left(gpu, cmd),
-            0xE4 => set_draw_area_bottom_right(gpu, cmd),
-            0xE5 => set_draw_offset(gpu, cmd),
-            0xE6 => set_mask_bit_setting(gpu, cmd),
-            _ => {}
         }
-    }
 
-    if !cmdbuf.0.needs_more() {
-        tracing::debug!(packet=?cmdbuf.0, "packet gathered");
-        cmdbuf.0.commit(gpu);
-    } else {
-        gpu.cmdbuf = cmdbuf;
+        if !cmdbuf.0.needs_more() {
+            tracing::debug!(packet=?cmdbuf.0, "packet gathered");
+            cmdbuf.0.commit(self);
+        } else {
+            self.cmdbuf = cmdbuf;
+        }
     }
 }
 

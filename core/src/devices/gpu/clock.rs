@@ -1,58 +1,85 @@
 use crate::devices::timer::{TimingEvent, TimingSpan};
 
-pub const NTSC: VideoTiming = VideoTiming {
+use super::{HorizontalResolution, VideoMode};
+
+const NTSC: VideoTiming = VideoTiming {
     sys_cycles_per_scanline: 2152,
     hblank_start: 1722,
-    // TODO: this is Timer0 dotclock for 256px display mode only.
-    // Real value depends on GP1 horizontal resolution:
-    // 256: NTSC 341 / PAL 340
-    // 320: NTSC 426 / PAL 426
-    // 512: NTSC 682 / PAL 681
-    // 640: NTSC 853 / PAL 851
-    // 368: NTSC 487 / PAL 486
-    dots_per_scanline: 3413,
+    dotclocks_per_scanline: [
+        341, // 256
+        426, // 320
+        682, // 512
+        853, // 640
+        487, // 368
+    ],
 
     visible_scanlines: 240,
     total_scanlines: 263,
 };
 
-pub const PAL: VideoTiming = VideoTiming {
+const PAL: VideoTiming = VideoTiming {
     sys_cycles_per_scanline: 2168,
     hblank_start: 1734,
-    dots_per_scanline: 3406,
+    dotclocks_per_scanline: [
+        340, // 256
+        426, // 320
+        681, // 512
+        851, // 640
+        486, // 368
+    ],
 
     visible_scanlines: 288,
     total_scanlines: 314,
 };
-
-#[derive(Debug, Clone, Copy)]
-pub struct VideoTiming {
-    pub sys_cycles_per_scanline: u64,
-    pub hblank_start: u64,
-    pub dots_per_scanline: u64,
-
-    pub visible_scanlines: u64,
-    pub total_scanlines: u64,
-}
 
 #[derive(Debug, Clone)]
 pub struct State {
     pub line_cycle: u64,
     pub scanline: u64,
     pub dot_accum: u64,
-    pub timing: VideoTiming,
+
+    special_hres: bool,
+    hres: HorizontalResolution,
+    timing: VideoTiming,
 }
 
-impl State {
-    pub fn new(timing: VideoTiming) -> Self {
+#[derive(Debug, Clone, Copy)]
+struct VideoTiming {
+    sys_cycles_per_scanline: u64,
+    hblank_start: u64,
+    dotclocks_per_scanline: [u64; 5],
+
+    visible_scanlines: u64,
+    total_scanlines: u64,
+}
+
+impl Default for State {
+    fn default() -> Self {
         Self {
             line_cycle: 0,
             scanline: 0,
             dot_accum: 0,
-            timing,
+
+            special_hres: false,
+            hres: HorizontalResolution::default(),
+            timing: NTSC,
         }
     }
+}
 
+impl VideoTiming {
+    fn dotclocks_per_scanline(&self, hres: HorizontalResolution, special_hres: bool) -> u64 {
+        match (special_hres, hres) {
+            (true, _) => self.dotclocks_per_scanline[4],
+            (_, HorizontalResolution::H256) => self.dotclocks_per_scanline[0],
+            (_, HorizontalResolution::H320) => self.dotclocks_per_scanline[1],
+            (_, HorizontalResolution::H512) => self.dotclocks_per_scanline[2],
+            (_, HorizontalResolution::H640) => self.dotclocks_per_scanline[3],
+        }
+    }
+}
+
+impl State {
     pub fn update(&mut self, sysclocks: u64) -> impl Iterator<Item = TimingSpan> + '_ {
         TimingSpanIter {
             state: self,
@@ -60,11 +87,49 @@ impl State {
         }
     }
 
-    fn hblank(&self) -> bool {
+    pub fn set_display_mode(
+        &mut self,
+        mode: VideoMode,
+        hres: HorizontalResolution,
+        special_hres: bool,
+    ) {
+        let old_timing = self.timing;
+        let old_dots = self
+            .timing
+            .dotclocks_per_scanline(self.hres, self.special_hres);
+
+        let new_timing = match mode {
+            VideoMode::Ntsc => NTSC,
+            VideoMode::Pal => PAL,
+        };
+
+        let new_dots = new_timing.dotclocks_per_scanline(hres, special_hres);
+
+        self.hres = hres;
+        self.special_hres = special_hres;
+
+        if old_timing.sys_cycles_per_scanline != new_timing.sys_cycles_per_scanline {
+            self.line_cycle = self.line_cycle * new_timing.sys_cycles_per_scanline
+                / old_timing.sys_cycles_per_scanline;
+        }
+
+        self.timing = new_timing;
+
+        self.line_cycle %= self.timing.sys_cycles_per_scanline;
+        self.scanline %= self.timing.total_scanlines;
+
+        if old_dots != new_dots
+            || old_timing.sys_cycles_per_scanline != new_timing.sys_cycles_per_scanline
+        {
+            self.dot_accum = 0;
+        }
+    }
+
+    pub fn hblank(&self) -> bool {
         self.line_cycle >= self.timing.hblank_start
     }
 
-    fn vblank(&self) -> bool {
+    pub fn vblank(&self) -> bool {
         self.scanline >= self.timing.visible_scanlines
     }
 
@@ -101,7 +166,10 @@ impl State {
     }
 
     fn advance_dotclock(&mut self, sysclocks: u64) -> u64 {
-        self.dot_accum += sysclocks * self.timing.dots_per_scanline;
+        self.dot_accum += sysclocks
+            * self
+                .timing
+                .dotclocks_per_scanline(self.hres, self.special_hres);
 
         let dotclocks = self.dot_accum / self.timing.sys_cycles_per_scanline;
         self.dot_accum %= self.timing.sys_cycles_per_scanline;
