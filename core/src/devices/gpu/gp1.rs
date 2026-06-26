@@ -40,7 +40,7 @@ pub fn dispatch(gpu: &mut Gpu, cmd: u32) {
             gpu.cmdbuf = Default::default();
         }
         Gp1Opcode::AcknowledgeInterrupt => {
-            gpu.int_flag = true;
+            gpu.int_flag = false;
         }
         Gp1Opcode::DisplayEnable => {}
         Gp1Opcode::DmaDirection => {

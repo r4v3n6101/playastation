@@ -45,6 +45,9 @@ pub fn dispatch(gpu: &mut Gpu, cmd: u32) {
             0x01 => {
                 // Clear CLUT AFAIK
             }
+            0x1F => {
+                gpu.int_flag = true;
+            }
             0x02 => {
                 cmdbuf.0 = SmallBox::new(FillVramPacket::init(cmd));
             }

@@ -398,14 +398,14 @@ impl Mmio for TimerController {
         let reg = maddr % 0x10;
 
         match reg {
-            0x0 => {
+            0x0..0x4 => {
                 self.timers[timer].counter = u16::from_le_bytes(write_part::<4, 2>(
                     maddr,
                     value,
                     self.timers[timer].counter.to_le_bytes(),
                 ));
             }
-            0x4 => {
+            0x4..0x8 => {
                 let timer = &mut self.timers[timer];
                 timer.counter = 0;
 
@@ -418,7 +418,7 @@ impl Mmio for TimerController {
                 .with_reached_target(false)
                 .with_reached_overflow(false);
             }
-            0x8 => {
+            0x8..0xC => {
                 self.timers[timer].target = u16::from_le_bytes(write_part::<4, 2>(
                     maddr,
                     value,
