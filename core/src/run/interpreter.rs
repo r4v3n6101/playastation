@@ -10,10 +10,10 @@ use super::{
     block::{Block, PagedCache},
 };
 
-/// How many cycles need to be elapsed, so hi/lo become available after Mul op.
-const MULT_HI_LO_LOAD_LATENCY: u64 = 5;
-/// Same as above, but for Div ops.
-const DIV_HI_LO_LOAD_LATENCY: u64 = 35;
+const MULT_LATENCY: u64 = 10;
+const DIV_LATENCY: u64 = 35;
+const LOAD_LATENCY: u64 = 3;
+const STORE_LATENCY: u64 = 2;
 
 struct Context<'a> {
     cpu: &'a mut Cpu,
@@ -22,7 +22,6 @@ struct Context<'a> {
     block: &'a Block,
 
     result: ExecutionResult,
-    hi_lo_latency: u64,
 }
 
 enum BreakReason {
@@ -38,7 +37,6 @@ pub fn run(cache: &mut PagedCache, block: &Block, cpu: &mut Cpu, bus: &mut Bus) 
             cycles_elapsed: 0,
             exception: None,
         },
-        hi_lo_latency: 0,
 
         cpu,
         bus,
@@ -51,7 +49,6 @@ pub fn run(cache: &mut PagedCache, block: &Block, cpu: &mut Cpu, bus: &mut Bus) 
             Ok(ins) => {
                 let res = execute(&mut ctx, ins);
                 ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(1);
-                ctx.hi_lo_latency = ctx.hi_lo_latency.saturating_sub(1);
 
                 match res {
                     Ok(()) => {}
@@ -74,16 +71,12 @@ pub fn run(cache: &mut PagedCache, block: &Block, cpu: &mut Cpu, bus: &mut Bus) 
 
                 // Cycles
                 ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(1);
-                ctx.hi_lo_latency = ctx.hi_lo_latency.saturating_sub(1);
 
                 break;
             }
         }
         ctx.cpu.pc = ctx.cpu.pc.wrapping_add(4);
     }
-
-    // The next block won't wait latency before HI/LO, because we emulate it in the current one.
-    ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(ctx.hi_lo_latency);
 
     ctx.result
 }
@@ -269,6 +262,8 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
                     .map(u32::from_le_bytes)
                     .map_err(BreakReason::Exception)?,
             };
+
+            ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(LOAD_LATENCY);
         }
         Instruction::Lh { rs, rt, imm_sext } => {
             pending_load = PendingLoad {
@@ -284,6 +279,8 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
                     .map(i32::cast_unsigned)
                     .map_err(BreakReason::Exception)?,
             };
+
+            ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(LOAD_LATENCY);
         }
         Instruction::Lhu { rs, rt, imm_sext } => {
             pending_load = PendingLoad {
@@ -298,6 +295,8 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
                     .map(u32::from)
                     .map_err(BreakReason::Exception)?,
             };
+
+            ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(LOAD_LATENCY);
         }
         Instruction::Lb { rs, rt, imm_sext } => {
             pending_load = PendingLoad {
@@ -313,6 +312,8 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
                     .map(i32::cast_unsigned)
                     .map_err(BreakReason::Exception)?,
             };
+
+            ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(LOAD_LATENCY);
         }
         Instruction::Lbu { rs, rt, imm_sext } => {
             pending_load = PendingLoad {
@@ -327,6 +328,8 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
                     .map(u32::from)
                     .map_err(BreakReason::Exception)?,
             };
+
+            ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(LOAD_LATENCY);
         }
         Instruction::Lwl { rs, rt, imm_sext } => {
             let addr = gpr_read(ctx.cpu, rs).wrapping_add_signed(i32::from(imm_sext));
@@ -351,6 +354,8 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
                     _ => unreachable!(),
                 },
             };
+
+            ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(LOAD_LATENCY);
         }
         Instruction::Lwr { rs, rt, imm_sext } => {
             let addr = gpr_read(ctx.cpu, rs).wrapping_add_signed(i32::from(imm_sext));
@@ -375,6 +380,8 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
                     _ => unreachable!(),
                 },
             };
+
+            ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(LOAD_LATENCY);
         }
 
         // Ignore writes if IsC=1
@@ -393,6 +400,8 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
                 .map_err(BreakReason::Exception)?;
 
             early_exit = mem_access(ctx, vaddr);
+
+            ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(STORE_LATENCY);
         }
         Instruction::Sh { rs, rt, imm_sext } => {
             let vaddr = gpr_read(ctx.cpu, rs).wrapping_add_signed(i32::from(imm_sext));
@@ -401,6 +410,8 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
                 .map_err(BreakReason::Exception)?;
 
             early_exit = mem_access(ctx, vaddr);
+
+            ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(STORE_LATENCY);
         }
         Instruction::Sb { rs, rt, imm_sext } => {
             let vaddr = gpr_read(ctx.cpu, rs).wrapping_add_signed(i32::from(imm_sext));
@@ -409,6 +420,8 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
                 .map_err(BreakReason::Exception)?;
 
             early_exit = mem_access(ctx, vaddr);
+
+            ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(STORE_LATENCY);
         }
         Instruction::Swl { rs, rt, imm_sext } => {
             let vaddr = gpr_read(ctx.cpu, rs).wrapping_add_signed(i32::from(imm_sext));
@@ -431,6 +444,8 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
                 .map_err(BreakReason::Exception)?;
 
             early_exit = mem_access(ctx, vaddr);
+
+            ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(STORE_LATENCY);
         }
         Instruction::Swr { rs, rt, imm_sext } => {
             let vaddr = gpr_read(ctx.cpu, rs).wrapping_add_signed(i32::from(imm_sext));
@@ -453,6 +468,8 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
                 .map_err(BreakReason::Exception)?;
 
             early_exit = mem_access(ctx, vaddr);
+
+            ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(STORE_LATENCY);
         }
 
         // Branches
@@ -584,7 +601,7 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
             ctx.cpu.hi = (res >> 32) as u32;
             ctx.cpu.lo = res as u32;
 
-            ctx.hi_lo_latency = MULT_HI_LO_LOAD_LATENCY;
+            ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(MULT_LATENCY);
         }
         Instruction::Multu { rs, rt } => {
             let a = u64::from(gpr_read(ctx.cpu, rs));
@@ -594,7 +611,7 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
             ctx.cpu.hi = (res >> 32) as u32;
             ctx.cpu.lo = res as u32;
 
-            ctx.hi_lo_latency = MULT_HI_LO_LOAD_LATENCY;
+            ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(MULT_LATENCY);
         }
         Instruction::Div { rs, rt } => {
             let a = gpr_read(ctx.cpu, rs).cast_signed();
@@ -611,7 +628,7 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
             ctx.cpu.hi = hi;
             ctx.cpu.lo = lo;
 
-            ctx.hi_lo_latency = DIV_HI_LO_LOAD_LATENCY;
+            ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(DIV_LATENCY);
         }
         Instruction::Divu { rs, rt } => {
             let a = gpr_read(ctx.cpu, rs);
@@ -625,21 +642,15 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
             ctx.cpu.hi = hi;
             ctx.cpu.lo = lo;
 
-            ctx.hi_lo_latency = DIV_HI_LO_LOAD_LATENCY;
+            ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(DIV_LATENCY);
         }
 
         // From/to copies
         Instruction::Mfhi { rd } => {
             gpr_write(ctx.cpu, rd, ctx.cpu.hi);
-
-            ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(ctx.hi_lo_latency);
-            ctx.hi_lo_latency = 0;
         }
         Instruction::Mflo { rd } => {
             gpr_write(ctx.cpu, rd, ctx.cpu.lo);
-
-            ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(ctx.hi_lo_latency);
-            ctx.hi_lo_latency = 0;
         }
         Instruction::Mtlo { rs } => {
             ctx.cpu.lo = gpr_read(ctx.cpu, rs);

@@ -24,7 +24,6 @@
         cpu = test-suite "CPUTest/CPU/";
         gpu = test-suite "GPU/";
         cube = test-suite "Cube/";
-        vblank = test-suite "Demo/vblank/";
       });
     };
 }

@@ -91,7 +91,18 @@ pub fn do_block(
                     }
                     _ => todo!(),
                 },
-                Direction::ToRam => todo!(),
+                Direction::ToRam => match ch {
+                    GPU => {
+                        let word = bus.gpu.gpuread();
+                        // SAFETY: addr masked above
+                        unsafe {
+                            store_direct_ram(bus, addr, word, ram_touched);
+                        }
+
+                        cycles = cycles.saturating_add(TIMINGS[GPU]);
+                    }
+                    _ => todo!(),
+                },
             }
 
             chan.madr = chan.madr.wrapping_add_signed(step);

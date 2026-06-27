@@ -38,6 +38,7 @@ impl Executor {
         let execution = interpreter::run(&mut self.blk_cache, &block, &mut self.cpu, &mut self.bus);
 
         // Then devices on the bus are updated
+        // TODO : more precise timings
         self.bus.update(execution.cycles_elapsed, |paddr| {
             self.blk_cache.invalidate_page(paddr);
         });
