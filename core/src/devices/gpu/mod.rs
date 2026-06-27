@@ -20,9 +20,27 @@ mod clock;
 mod gp0;
 mod gp1;
 
+#[derive(Default)]
+struct Display {
+    hres: HorizontalResolution,
+    vres: VerticalResolution,
+    vmode: VideoMode,
+    display_depth: DisplayDepth,
+    interlaced: bool,
+    special_368_hres: bool,
+    reversed: bool,
+    enabled: bool,
+}
+
 pub struct Gpu {
     // Renderer and all state of it (like masks, textures)
     pub renderer: Box<dyn Renderer>,
+    /// Start coordinate in VRAM.
+    pub vram_start: (u16, u16),
+    /// Horizontal range, may differ from resolution.
+    pub hrange: (u16, u16),
+    /// Same as above, but vertical.
+    pub vrange: (u16, u16),
 
     // Inner modules
     clock: clock::State,
@@ -64,25 +82,6 @@ pub struct GpuStat {
     pub ready_to_receive_dma: bool,
     pub dma_direction: DmaDirection,
     pub drawing_even_odd_lines: bool,
-}
-
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct Display {
-    /// Start coordinate in VRAM.
-    pub vram_start: (u16, u16),
-    /// Horizontal range, may differ from resolution.
-    pub hrange: (u16, u16),
-    /// Same as above, but vertical.
-    pub vrange: (u16, u16),
-
-    pub hres: HorizontalResolution,
-    pub vres: VerticalResolution,
-    pub vmode: VideoMode,
-    pub display_depth: DisplayDepth,
-    pub interlaced: bool,
-    pub special_368_hres: bool,
-    pub reversed: bool,
-    pub enabled: bool,
 }
 
 #[derive(Specifier, Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -133,6 +132,9 @@ impl Default for Gpu {
     fn default() -> Self {
         Self {
             renderer: Box::new(NoopRenderer::default()),
+            vram_start: (0, 0),
+            hrange: (0, 0),
+            vrange: (0, 0),
 
             clock: clock::State::default(),
             cmdbuf: gp0::CmdBuf::default(),

@@ -54,13 +54,15 @@ impl Gpu {
                 self.cmdbuf = gp0::CmdBuf::default();
                 self.int_flag = false;
                 self.dma_direction = DmaDirection::default();
+                self.vram_start = (0, 0);
+                self.hrange = (0, 0);
+                self.vrange = (0, 0);
+
                 self.display.enabled = false;
-                self.display.vram_start = (0, 0);
-                self.display.hrange = (0, 0);
-                self.display.vrange = (0, 0);
                 self.display.hres = HorizontalResolution::default();
                 self.display.vmode = VideoMode::default();
                 self.display.special_368_hres = false;
+
                 self.clock.set_display_mode(
                     self.display.vmode,
                     self.display.hres,
@@ -86,13 +88,13 @@ impl Gpu {
                 }
             }
             Gp1Opcode::DisplayVramStart => {
-                self.display.vram_start = ((cmd & 0x3FF) as u16, ((cmd >> 10) & 0x1FF) as u16);
+                self.vram_start = ((cmd & 0x3FF) as u16, ((cmd >> 10) & 0x1FF) as u16);
             }
             Gp1Opcode::DisplayHorizontalRange => {
-                self.display.hrange = ((cmd & 0x0FFF) as u16, ((cmd >> 12) & 0x0FFF) as u16);
+                self.hrange = ((cmd & 0x0FFF) as u16, ((cmd >> 12) & 0x0FFF) as u16);
             }
             Gp1Opcode::DisplayVerticalRange => {
-                self.display.vrange = ((cmd & 0x03FF) as u16, ((cmd >> 10) & 0x03FF) as u16);
+                self.vrange = ((cmd & 0x03FF) as u16, ((cmd >> 10) & 0x03FF) as u16);
             }
             Gp1Opcode::DisplayMode => {
                 let mode = DisplayMode::from_bytes([cmd as u8]);
