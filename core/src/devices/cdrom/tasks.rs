@@ -209,9 +209,9 @@ impl Task for SeekSecond {
     }
 }
 
-pub struct ReadN;
+pub struct Read;
 
-impl Task for ReadN {
+impl Task for Read {
     fn busy_flag(&self) -> bool {
         true
     }
@@ -266,5 +266,70 @@ impl Task for SectorReady {
         }
 
         cdrom.schedule_task(cdrom.read_sector_delay(), SmallBox::new(SectorReady));
+    }
+}
+
+pub struct PauseFirst;
+
+impl Task for PauseFirst {
+    fn busy_flag(&self) -> bool {
+        true
+    }
+
+    fn execute(&mut self, cdrom: &mut CdRom) {
+        cdrom
+            .status
+            .remove(CdRomStatus::READING | CdRomStatus::PLAYING);
+
+        cdrom.pending_sector = None;
+        cdrom.data_fifo.clear();
+
+        cdrom.push_response(&[cdrom.status.bits()]);
+        cdrom.raise_int(IrqFlag::Int3);
+
+        cdrom.schedule_task(CDROM_SECOND_DELAY, SmallBox::new(PauseSecond));
+    }
+}
+
+pub struct PauseSecond;
+
+impl Task for PauseSecond {
+    fn busy_flag(&self) -> bool {
+        false
+    }
+
+    fn execute(&mut self, cdrom: &mut CdRom) {
+        cdrom.push_response(&[cdrom.status.bits()]);
+        cdrom.raise_int(IrqFlag::Int2);
+    }
+}
+
+pub struct Mute;
+
+impl Task for Mute {
+    fn busy_flag(&self) -> bool {
+        true
+    }
+
+    fn execute(&mut self, cdrom: &mut CdRom) {
+        cdrom.mute = true;
+
+        cdrom.push_response(&[cdrom.status.bits()]);
+        cdrom.raise_int(IrqFlag::Int3);
+    }
+}
+
+pub struct Demute;
+
+impl Task for Demute {
+    fn busy_flag(&self) -> bool {
+        true
+    }
+
+    fn execute(&mut self, cdrom: &mut CdRom) {
+        cdrom.mute = false;
+
+        cdrom.push_response(&[cdrom.status.bits()]);
+        cdrom.raise_int(IrqFlag::Int3);
     }
 }

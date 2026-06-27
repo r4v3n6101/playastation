@@ -681,13 +681,16 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
         | Instruction::Mtc2 { .. }
         | Instruction::Cfc2 { .. }
         | Instruction::Ctc2 { .. }
-        | Instruction::Cop2Cmd { .. } => {}
+        | Instruction::Cop2Cmd { .. }
+        | Instruction::Lwc2 { .. }
+        | Instruction::Swc2 { .. } => {}
 
         // Exceptions
         Instruction::Break { .. } => return Err(BreakReason::Exception(Exception::Break)),
         Instruction::Syscall { .. } => return Err(BreakReason::Exception(Exception::Syscall)),
 
-        _ => unimplemented!(),
+        Instruction::Cfc0 { .. } => unimplemented!(),
+        Instruction::Ctc0 { .. } => unimplemented!(),
     }
 
     pend_load(ctx.cpu, pending_load);

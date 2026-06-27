@@ -16,7 +16,10 @@ use playastation::{
         Slot,
         controller::{Button, DigitalController},
     },
-    formats::psexe::BoxedExeFile,
+    formats::{
+        disk::{Disc, RawSector},
+        psexe::BoxedExeFile,
+    },
     render::software::SoftwareRenderer,
     run::Executor,
 };
@@ -41,6 +44,8 @@ struct Args {
     bios: PathBuf,
     #[arg(long)]
     rom: Option<PathBuf>,
+    #[arg(long)]
+    bin: Option<PathBuf>,
 }
 
 struct App {
@@ -206,6 +211,11 @@ fn main() {
             executor.pending_exe = Some(BoxedExeFile::new(rom));
         }
 
+        if let Some(bin_path) = &args.bin {
+            let bin = fs::read(bin_path).unwrap();
+            executor.bus.cdrom.disc = Some(Box::new(BinFile { data: bin }));
+        }
+
         executor.bus.gpu.renderer = Box::new(SoftwareRenderer::default());
         executor.bus.joy_bus.insert_dev(
             Slot::Controller1,
@@ -243,4 +253,16 @@ fn bgr555_to_0rgb(color: u16) -> u32 {
     let b8 = (b5 << 3) | (b5 >> 2);
 
     (r8 << 16) | (g8 << 8) | b8
+}
+
+struct BinFile {
+    data: Vec<u8>,
+}
+
+impl Disc for BinFile {
+    fn read_sector(&mut self, lba: usize) -> Option<RawSector> {
+        let chunk = self.data.get(lba * 2352 + 12..)?.get(..2340)?;
+
+        Some(chunk.try_into().unwrap())
+    }
 }

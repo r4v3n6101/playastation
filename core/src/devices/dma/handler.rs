@@ -2,7 +2,10 @@ use crate::{RAM_SIZE, interconnect::Bus};
 
 use super::{CHANNELS, Channel, Direction, Step};
 
+const MDEC_IN: usize = 0;
+const MDEC_OUT: usize = 1;
 const GPU: usize = 2;
+const CDROM: usize = 3;
 const OTC: usize = 6;
 
 /// Approximate timings of word transfer.
@@ -36,6 +39,21 @@ pub fn do_manual(
         match chan.chcr.direction() {
             Direction::FromRam => todo!(),
             Direction::ToRam => match ch {
+                CDROM => {
+                    let word = u32::from_le_bytes([
+                        bus.cdrom.pop_data().unwrap_or(0),
+                        bus.cdrom.pop_data().unwrap_or(0),
+                        bus.cdrom.pop_data().unwrap_or(0),
+                        bus.cdrom.pop_data().unwrap_or(0),
+                    ]);
+
+                    // SAFETY: addr masked above
+                    unsafe {
+                        store_direct_ram(bus, addr, word, ram_touched);
+                    }
+
+                    cycles = cycles.saturating_add(TIMINGS[CDROM]);
+                }
                 OTC => {
                     let word = if words_left == 0 {
                         // Terminator for table
@@ -51,7 +69,7 @@ pub fn do_manual(
 
                     cycles = cycles.saturating_add(TIMINGS[OTC]);
                 }
-                _ => todo!(),
+                _ => todo!("{ch}={chan:#?}"),
             },
         }
 
@@ -82,6 +100,8 @@ pub fn do_block(
 
             match chan.chcr.direction() {
                 Direction::FromRam => match ch {
+                    MDEC_IN => {}
+                    MDEC_OUT => {}
                     GPU => {
                         // SAFETY: addr masked above
                         let word = unsafe { load_direct_ram(bus, addr) };
@@ -89,9 +109,11 @@ pub fn do_block(
 
                         cycles = cycles.saturating_add(TIMINGS[GPU]);
                     }
-                    _ => todo!(),
+                    _ => todo!("{ch}={chan:#?}"),
                 },
                 Direction::ToRam => match ch {
+                    MDEC_IN => {}
+                    MDEC_OUT => {}
                     GPU => {
                         let word = bus.gpu.gpuread();
                         // SAFETY: addr masked above
@@ -101,7 +123,7 @@ pub fn do_block(
 
                         cycles = cycles.saturating_add(TIMINGS[GPU]);
                     }
-                    _ => todo!(),
+                    _ => todo!("{ch}={chan:#?}"),
                 },
             }
 
