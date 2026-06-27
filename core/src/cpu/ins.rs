@@ -32,11 +32,21 @@ pub enum Instruction {
     Bgez { rs: u8, imm_sext: i16 },
     Bltzal { rs: u8, imm_sext: i16 },
     Bgezal { rs: u8, imm_sext: i16 },
+
     Mfc0 { rt: u8, cop0_reg: u8 },
     Mtc0 { rt: u8, cop0_reg: u8 },
     Cfc0 { rt: u8, cop0_reg: u8 },
     Ctc0 { rt: u8, cop0_reg: u8 },
     Rfe,
+
+    Mfc2 { rt: u8, cop2_reg: u8 },
+    Mtc2 { rt: u8, cop2_reg: u8 },
+    Cfc2 { rt: u8, cop2_reg: u8 },
+    Ctc2 { rt: u8, cop2_reg: u8 },
+    Lwc2 { rs: u8, rt: u8, imm_sext: i16 },
+    Swc2 { rs: u8, rt: u8, imm_sext: i16 },
+    Cop2Cmd { ins: u32 },
+
     J { target: u32 },
     Jal { target: u32 },
     Beq { rs: u8, rt: u8, imm_sext: i16 },
@@ -147,6 +157,17 @@ impl Instruction {
                 _ => return None,
             },
 
+            // COP2 / GTE
+            0x12 => match (ins >> 21) & 0x1F {
+                0x00 => Self::Mfc2 { rt, cop2_reg: rd },
+                0x02 => Self::Cfc2 { rt, cop2_reg: rd },
+                0x04 => Self::Mtc2 { rt, cop2_reg: rd },
+                0x06 => Self::Ctc2 { rt, cop2_reg: rd },
+                _ if (ins & 0x0200_0000) != 0 => Self::Cop2Cmd { ins },
+
+                _ => return None,
+            },
+
             0x20 => Self::Lb { rs, rt, imm_sext },
             0x21 => Self::Lh { rs, rt, imm_sext },
             0x22 => Self::Lwl { rs, rt, imm_sext },
@@ -159,6 +180,9 @@ impl Instruction {
             0x2A => Self::Swl { rs, rt, imm_sext },
             0x2B => Self::Sw { rs, rt, imm_sext },
             0x2E => Self::Swr { rs, rt, imm_sext },
+
+            0x32 => Self::Lwc2 { rs, rt, imm_sext },
+            0x3A => Self::Swc2 { rs, rt, imm_sext },
 
             _ => return None,
         })

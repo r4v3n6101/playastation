@@ -659,12 +659,18 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
                 early_exit = true;
             }
         }
-
         // Return state before exception
         Instruction::Rfe => {
             ctx.cpu.cop0.exception_leave();
             early_exit = true;
         }
+
+        // TODO
+        Instruction::Mfc2 { .. }
+        | Instruction::Mtc2 { .. }
+        | Instruction::Cfc2 { .. }
+        | Instruction::Ctc2 { .. }
+        | Instruction::Cop2Cmd { .. } => {}
 
         // Exceptions
         Instruction::Break { .. } => return Err(BreakReason::Exception(Exception::Break)),
