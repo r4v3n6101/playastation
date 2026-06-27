@@ -42,7 +42,7 @@ impl Gpu {
         skip(self),
         fields(cmd=%format_args!("{cmd:#X}"))
     )]
-    pub fn dispatch_gp1(&mut self, cmd: u32) {
+    pub(crate) fn dispatch_gp1(&mut self, cmd: u32) {
         let opcode = (cmd >> 24) as u8;
         let Some(opcode) = Gp1Opcode::from_repr(opcode) else {
             return;

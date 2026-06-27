@@ -80,7 +80,7 @@ impl Default for Bus {
 
 impl Bus {
     #[inline(never)]
-    pub fn update(&mut self, cpu_cycles: u64, ram_touched: impl FnMut(u32)) {
+    pub(crate) fn update(&mut self, cpu_cycles: u64, ram_touched: impl FnMut(u32)) {
         let dma_cycles = DmaController::run(self, ram_touched);
         let sys_cycles = cpu_cycles.saturating_add(dma_cycles);
 
@@ -95,7 +95,7 @@ impl Bus {
 
     // Inlined because RAM/BIOS hot paths are needed for caller
     #[inline(always)]
-    pub fn load<const N: usize>(&mut self, paddr: u32) -> [u8; N] {
+    pub(crate) fn load<const N: usize>(&mut self, paddr: u32) -> [u8; N] {
         let mut buf = [0; N];
 
         // Aligned access is faster due to check of `start` only
@@ -142,7 +142,7 @@ impl Bus {
 
     // Inlining: same as above
     #[inline(always)]
-    pub fn store<const N: usize>(&mut self, paddr: u32, value: [u8; N]) {
+    pub(crate) fn store<const N: usize>(&mut self, paddr: u32, value: [u8; N]) {
         // Same as above
         if paddr.is_multiple_of(N as _) {
             if RAM.contains(&paddr) {

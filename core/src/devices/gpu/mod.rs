@@ -207,7 +207,7 @@ impl Gpu {
             })
     }
 
-    pub fn update<'a>(
+    pub(crate) fn update<'a>(
         &'a mut self,
         int_ctrl: &mut InterruptController,
         sys_cycles: u64,
@@ -228,7 +228,7 @@ impl Mmio for Gpu {
     fn read(&mut self, dest: &mut [u8], maddr: u32) {
         match maddr {
             0x0..0x4 => {
-                read_part::<4, 4>(dest, maddr, gp0::read(self).to_le_bytes());
+                read_part::<4, 4>(dest, maddr, self.gpuread().to_le_bytes());
             }
             0x4..0x8 => {
                 read_part::<4, 4>(dest, maddr, self.stat().into_bytes());

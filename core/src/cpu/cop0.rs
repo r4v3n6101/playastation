@@ -90,7 +90,7 @@ impl Cop0 {
     }
 
     #[inline(always)]
-    pub fn exception_handler(&self) -> u32 {
+    pub(crate) fn exception_handler(&self) -> u32 {
         if self.status().bev() {
             0xBFC0_0180
         } else {
@@ -100,7 +100,7 @@ impl Cop0 {
 
     /// Push IEc/KUc to IEp/KUp and IEp/KUp to IEo/KUo, then clear current mode
     #[inline(always)]
-    pub fn exception_enter(
+    pub(crate) fn exception_enter(
         &mut self,
         exception: Exception,
         fault_pc: u32,
@@ -139,14 +139,14 @@ impl Cop0 {
 
     /// Pop the status stack: restore IEc/KUc from IEp/KUp and IEp/KUp from IEo/KUo
     #[inline(always)]
-    pub fn exception_leave(&mut self) {
+    pub(crate) fn exception_leave(&mut self) {
         let sr = &mut self.regs[Self::STATUS_IDX];
         let low6 = *sr & 0b111111;
         *sr = (*sr & !0b111111) | (low6 & 0b110000) | ((low6 >> 2) & 0b1111);
     }
 
     #[inline(always)]
-    pub fn interrupt_pending(&self) -> bool {
+    pub(crate) fn interrupt_pending(&self) -> bool {
         let iec = self.status().iec();
         let ip = self.cause().ip();
         let im = self.status().im();
@@ -155,7 +155,7 @@ impl Cop0 {
     }
 
     #[inline(always)]
-    pub fn set_hw_irq(&mut self, active: bool) {
+    pub(crate) fn set_hw_irq(&mut self, active: bool) {
         let old = self.cause();
 
         let mut cause = Cause::new();

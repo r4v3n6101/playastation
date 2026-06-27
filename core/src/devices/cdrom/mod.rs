@@ -57,7 +57,7 @@ type BoxedTask = SmallBox<dyn Task, S2>;
 
 bitflags::bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub struct Status: u8 {
+    pub struct CdRomStatus: u8 {
         const ERROR      = 1 << 0;
         const MOTOR_ON   = 1 << 1;
         const SEEK_ERROR = 1 << 2;
@@ -93,14 +93,13 @@ enum ErrorCode {
 
 trait Task {
     fn busy_flag(&self) -> bool;
-
     fn execute(&mut self, cdrom: &mut CdRom);
 }
 
 pub struct CdRom {
-    pub status: Status,
+    pub status: CdRomStatus,
 
-    index: Index,
+    index: RegisterIndex,
 
     param_fifo: VecDeque<u8>,
     response_fifo: VecDeque<u8>,
@@ -119,26 +118,27 @@ pub struct CdRom {
 }
 
 #[bitfield(bits = 8)]
-struct StatReg {
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct CdRomStat {
     /// Current register index.
-    index: Index,
+    pub index: RegisterIndex,
     /// XA-ADPCM decoder busy.
-    adpcm_busy: bool,
+    pub adpcm_busy: bool,
     /// Parameter FIFO empty.
-    parameter_fifo_empty: bool,
+    pub parameter_fifo_empty: bool,
     /// Parameter FIFO can accept writes.
-    parameter_fifo_write_ready: bool,
+    pub parameter_fifo_write_ready: bool,
     /// Response FIFO has data.
-    response_fifo_not_empty: bool,
+    pub response_fifo_not_empty: bool,
     /// Data FIFO has data / DRQ.
-    data_fifo_not_empty: bool,
+    pub data_fifo_not_empty: bool,
     /// Command busy.
-    busy: bool,
+    pub busy: bool,
 }
 
-#[derive(Specifier, Copy, Clone)]
+#[derive(Specifier, Debug, Copy, Clone, PartialEq, Eq)]
 #[bits = 2]
-enum Index {
+pub enum RegisterIndex {
     Zero = 0,
     First = 1,
     Second = 2,
@@ -153,9 +153,9 @@ struct TaskEntry {
 impl Default for CdRom {
     fn default() -> Self {
         Self {
-            status: Status::empty(),
+            status: CdRomStatus::empty(),
 
-            index: Index::Zero,
+            index: RegisterIndex::Zero,
 
             param_fifo: VecDeque::with_capacity(PARAM_FIFO_CAP),
             response_fifo: VecDeque::new(),
@@ -176,7 +176,21 @@ impl Default for CdRom {
 }
 
 impl CdRom {
-    pub fn update(&mut self, int_ctrl: &mut InterruptController, sys_cycles: u64) {
+    pub fn stat(&self) -> CdRomStat {
+        let pending_tasks =
+            self.pending_task.is_some() || self.scheduled_tasks.iter().any(|x| x.task.busy_flag());
+
+        CdRomStat::new()
+            .with_index(self.index)
+            .with_adpcm_busy(false)
+            .with_parameter_fifo_empty(self.param_fifo.is_empty())
+            .with_parameter_fifo_write_ready(self.param_fifo.len() < PARAM_FIFO_CAP)
+            .with_response_fifo_not_empty(!self.response_fifo.is_empty())
+            .with_data_fifo_not_empty(!self.data_fifo.is_empty())
+            .with_busy(pending_tasks)
+    }
+
+    pub(crate) fn update(&mut self, int_ctrl: &mut InterruptController, sys_cycles: u64) {
         self.tick_scheduled(sys_cycles);
 
         // Next task needs IRQ ack
@@ -187,20 +201,6 @@ impl CdRom {
         if self.irq_enable & self.irq_flags != 0 {
             int_ctrl.raise(InterruptFlags::CDROM);
         }
-    }
-
-    fn stat(&self) -> StatReg {
-        let pending_tasks =
-            self.pending_task.is_some() || self.scheduled_tasks.iter().any(|x| x.task.busy_flag());
-
-        StatReg::new()
-            .with_index(self.index)
-            .with_adpcm_busy(false)
-            .with_parameter_fifo_empty(self.param_fifo.is_empty())
-            .with_parameter_fifo_write_ready(self.param_fifo.len() < PARAM_FIFO_CAP)
-            .with_response_fifo_not_empty(!self.response_fifo.is_empty())
-            .with_data_fifo_not_empty(!self.data_fifo.is_empty())
-            .with_busy(pending_tasks)
     }
 
     /// Create a delay before task can be executed.
@@ -232,7 +232,7 @@ impl CdRom {
     }
 
     fn raise_err(&mut self, err: ErrorCode) {
-        self.push_response(&[(self.status | Status::ERROR).bits(), err as u8]);
+        self.push_response(&[(self.status | CdRomStatus::ERROR).bits(), err as u8]);
         self.raise_int(IrqFlag::Int5);
     }
 
@@ -259,9 +259,9 @@ impl Mmio for CdRom {
             0x2 => self.data_fifo.pop_front().unwrap_or_default(),
             0x3 => match self.index {
                 // write-only reg
-                Index::Zero | Index::Second => (self.irq_enable & 0x1F) | 0xE0,
+                RegisterIndex::Zero | RegisterIndex::Second => (self.irq_enable & 0x1F) | 0xE0,
                 // same shit logic as above, 5 bits for [1; 5]
-                Index::First | Index::Third => (self.irq_flags & 0x1F) | 0xE0,
+                RegisterIndex::First | RegisterIndex::Third => (self.irq_flags & 0x1F) | 0xE0,
             },
             _ => unimplemented!(),
         };
@@ -275,15 +275,15 @@ impl Mmio for CdRom {
         match maddr & 3 {
             0x0 => {
                 self.index = match value & 0x3 {
-                    0 => Index::Zero,
-                    1 => Index::First,
-                    2 => Index::Second,
-                    3 => Index::Third,
+                    0 => RegisterIndex::Zero,
+                    1 => RegisterIndex::First,
+                    2 => RegisterIndex::Second,
+                    3 => RegisterIndex::Third,
                     _ => unreachable!(),
                 };
             }
             0x1 => match self.index {
-                Index::Zero => self.scheduled_tasks.push_back(TaskEntry {
+                RegisterIndex::Zero => self.scheduled_tasks.push_back(TaskEntry {
                     sys_cycles_left: CDROM_COMMAND_DEFAULT_DELAY,
                     task: match value {
                         // 0x01 => Command::Getstat,
@@ -304,11 +304,11 @@ impl Mmio for CdRom {
                 // TODO : Audio
                 // Index::First => self.sound_map_data_out = value,
                 // Index::Second => self.sound_map_coding_info = value,
-                Index::Third => self.volume_cd_right_to_spu_right = value,
+                RegisterIndex::Third => self.volume_cd_right_to_spu_right = value,
                 _ => {}
             },
             0x2 => match self.index {
-                Index::Zero => {
+                RegisterIndex::Zero => {
                     if self.param_fifo.len() < PARAM_FIFO_CAP {
                         self.param_fifo.push_back(value);
                     } else {
@@ -316,14 +316,14 @@ impl Mmio for CdRom {
                         self.raise_int(IrqFlag::Int5);
                     }
                 }
-                Index::First => {
+                RegisterIndex::First => {
                     self.irq_enable = value & 0x1F;
                 }
-                Index::Second => self.volume_cd_left_to_spu_left = value,
-                Index::Third => self.volume_cd_right_to_spu_left = value,
+                RegisterIndex::Second => self.volume_cd_left_to_spu_left = value,
+                RegisterIndex::Third => self.volume_cd_right_to_spu_left = value,
             },
             0x3 => match self.index {
-                Index::Zero => {
+                RegisterIndex::Zero => {
                     // bit 7: BFRD / Want Data
                     if value & 0x80 != 0 {
                         // self.load_pending_sector_to_data_fifo();
@@ -331,7 +331,7 @@ impl Mmio for CdRom {
                         self.data_fifo.clear();
                     }
                 }
-                Index::First => {
+                RegisterIndex::First => {
                     // W1C behavior
                     self.irq_flags &= !(value & 0x1F);
 
@@ -339,7 +339,7 @@ impl Mmio for CdRom {
                         self.param_fifo.clear();
                     }
                 }
-                Index::Second => self.volume_cd_left_to_spu_right = value,
+                RegisterIndex::Second => self.volume_cd_left_to_spu_right = value,
                 // TODO : Audio
                 // Index::Third => self.volume_apply(value),
                 _ => {}

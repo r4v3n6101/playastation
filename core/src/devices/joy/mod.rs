@@ -144,7 +144,7 @@ impl JoyBus {
         self.devs[slot as usize] = None;
     }
 
-    pub fn update(&mut self, int_ctrl: &mut InterruptController) {
+    pub(crate) fn update(&mut self, int_ctrl: &mut InterruptController) {
         if self.irq_pending {
             int_ctrl.raise(InterruptFlags::JOY);
         }

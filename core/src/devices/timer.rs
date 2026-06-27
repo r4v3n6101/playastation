@@ -234,7 +234,7 @@ impl Timer {
 }
 
 impl TimerController {
-    pub fn update(&mut self, int_ctrl: &mut InterruptController, input: TimingSpan) {
+    pub(crate) fn update(&mut self, int_ctrl: &mut InterruptController, input: TimingSpan) {
         let timer2_div8 = {
             self.sysclock_8_rem += input.sysclocks;
 

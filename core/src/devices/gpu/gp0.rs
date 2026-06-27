@@ -29,7 +29,7 @@ impl Gpu {
         skip(self),
         fields(cmd=%format_args!("{cmd:#X}"))
     )]
-    pub fn dispatch_gp0(&mut self, cmd: u32) {
+    pub(crate) fn dispatch_gp0(&mut self, cmd: u32) {
         let mut cmdbuf = mem::take(&mut self.cmdbuf);
 
         if cmdbuf.0.needs_more() {
@@ -87,18 +87,18 @@ impl Gpu {
             self.cmdbuf = cmdbuf;
         }
     }
-}
 
-#[tracing::instrument(target = "gpu.gp0", level = "DEBUG", "gpuread", skip(gpu))]
-pub fn read(gpu: &mut Gpu) -> u32 {
-    let mut data = [0u32; 2];
-    for pixel in &mut data {
-        if let Some(data) = gpu.renderer.pop_pixel() {
-            *pixel = u32::from(data);
+    #[tracing::instrument(target = "gpu.gp0", level = "DEBUG", "gpuread", skip(self))]
+    pub(crate) fn gpuread(&mut self) -> u32 {
+        let mut data = [0u32; 2];
+        for pixel in &mut data {
+            if let Some(data) = self.renderer.pop_pixel() {
+                *pixel = u32::from(data);
+            }
         }
-    }
 
-    data[1] << 16 | data[0]
+        data[1] << 16 | data[0]
+    }
 }
 
 trait PacketBuilder: fmt::Debug {

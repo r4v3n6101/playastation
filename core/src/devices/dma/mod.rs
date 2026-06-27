@@ -168,38 +168,7 @@ impl Dicr {
 }
 
 impl DmaController {
-    fn pick_highest_priority_chan(&self) -> Option<usize> {
-        fn dma_prio(dpcr: u32, ch: usize) -> u8 {
-            ((dpcr >> (ch * 4)) & 0x7) as u8
-        }
-        fn dma_enabled(dpcr: u32, ch: usize) -> bool {
-            ((dpcr >> (ch * 4 + 3)) & 1) != 0
-        }
-
-        let mut best = None;
-        let mut best_prio = u8::MAX;
-
-        let dpcr = u32::from_le_bytes(self.dpcr.into_bytes());
-        for ch in 0..7 {
-            if !dma_enabled(dpcr, ch) {
-                continue;
-            }
-
-            if !self.channels[ch].chcr.active() {
-                continue;
-            }
-
-            let prio = dma_prio(dpcr, ch);
-            if prio < best_prio {
-                best = Some(ch);
-                best_prio = prio;
-            }
-        }
-
-        best
-    }
-
-    pub fn run(bus: &mut Bus, mut ram_touched: impl FnMut(u32)) -> u64 {
+    pub(crate) fn run(bus: &mut Bus, mut ram_touched: impl FnMut(u32)) -> u64 {
         let mut cycles = 0u64;
 
         if let Some(ch) = bus.dma_ctrl.pick_highest_priority_chan() {
@@ -245,6 +214,37 @@ impl DmaController {
         }
 
         cycles
+    }
+
+    fn pick_highest_priority_chan(&self) -> Option<usize> {
+        fn dma_prio(dpcr: u32, ch: usize) -> u8 {
+            ((dpcr >> (ch * 4)) & 0x7) as u8
+        }
+        fn dma_enabled(dpcr: u32, ch: usize) -> bool {
+            ((dpcr >> (ch * 4 + 3)) & 1) != 0
+        }
+
+        let mut best = None;
+        let mut best_prio = u8::MAX;
+
+        let dpcr = u32::from_le_bytes(self.dpcr.into_bytes());
+        for ch in 0..7 {
+            if !dma_enabled(dpcr, ch) {
+                continue;
+            }
+
+            if !self.channels[ch].chcr.active() {
+                continue;
+            }
+
+            let prio = dma_prio(dpcr, ch);
+            if prio < best_prio {
+                best = Some(ch);
+                best_prio = prio;
+            }
+        }
+
+        best
     }
 }
 

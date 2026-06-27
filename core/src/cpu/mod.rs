@@ -80,7 +80,7 @@ impl Cpu {
     pub const DEFAULT_LINK_REG: u8 = 31;
 
     #[inline(always)]
-    pub fn read_bus<const N: usize>(
+    pub(crate) fn read_bus<const N: usize>(
         &self,
         bus: &mut Bus,
         vaddr: u32,
@@ -99,7 +99,7 @@ impl Cpu {
     }
 
     #[inline(always)]
-    pub fn write_bus<const N: usize>(
+    pub(crate) fn write_bus<const N: usize>(
         &mut self,
         bus: &mut Bus,
         vaddr: u32,
