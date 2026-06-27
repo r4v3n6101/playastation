@@ -84,55 +84,55 @@ impl ApplicationHandler for App {
                 match event.physical_key {
                     PhysicalKey::Code(KeyCode::KeyW) => {
                         let _ = self.button_state.fetch_update(|mut old| {
-                            fun(&mut old, Button::Up);
+                            fun(&mut old, Button::UP);
                             Some(old)
                         });
                     }
                     PhysicalKey::Code(KeyCode::KeyA) => {
                         let _ = self.button_state.fetch_update(|mut old| {
-                            fun(&mut old, Button::Left);
+                            fun(&mut old, Button::LEFT);
                             Some(old)
                         });
                     }
                     PhysicalKey::Code(KeyCode::KeyS) => {
                         let _ = self.button_state.fetch_update(|mut old| {
-                            fun(&mut old, Button::Down);
+                            fun(&mut old, Button::DOWN);
                             Some(old)
                         });
                     }
                     PhysicalKey::Code(KeyCode::KeyD) => {
                         let _ = self.button_state.fetch_update(|mut old| {
-                            fun(&mut old, Button::Right);
+                            fun(&mut old, Button::RIGHT);
                             Some(old)
                         });
                     }
                     PhysicalKey::Code(KeyCode::KeyZ) => {
                         let _ = self.button_state.fetch_update(|mut old| {
-                            fun(&mut old, Button::Square);
+                            fun(&mut old, Button::SQUARE);
                             Some(old)
                         });
                     }
                     PhysicalKey::Code(KeyCode::KeyX) => {
                         let _ = self.button_state.fetch_update(|mut old| {
-                            fun(&mut old, Button::Cross);
+                            fun(&mut old, Button::CROSS);
                             Some(old)
                         });
                     }
                     PhysicalKey::Code(KeyCode::KeyC) => {
                         let _ = self.button_state.fetch_update(|mut old| {
-                            fun(&mut old, Button::Circle);
+                            fun(&mut old, Button::CIRCLE);
                             Some(old)
                         });
                     }
                     PhysicalKey::Code(KeyCode::KeyV) => {
                         let _ = self.button_state.fetch_update(|mut old| {
-                            fun(&mut old, Button::Triangle);
+                            fun(&mut old, Button::TRIANGLE);
                             Some(old)
                         });
                     }
                     PhysicalKey::Code(KeyCode::Enter) => {
                         let _ = self.button_state.fetch_update(|mut old| {
-                            fun(&mut old, Button::Start);
+                            fun(&mut old, Button::START);
                             Some(old)
                         });
                     }

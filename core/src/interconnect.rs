@@ -89,8 +89,8 @@ impl Bus {
             .for_each(|span| {
                 self.timer_ctrl.update(&mut self.int_ctrl, span);
             });
+        self.cdrom.update(&mut self.int_ctrl, sys_cycles);
         self.joy_bus.update(&mut self.int_ctrl);
-        self.cdrom.update(&mut self.int_ctrl);
     }
 
     // Inlined because RAM/BIOS hot paths are needed for caller

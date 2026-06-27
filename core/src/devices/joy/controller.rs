@@ -8,22 +8,22 @@ type ButtonPressedCallback = Box<dyn FnMut() -> Button>;
 bitflags::bitflags! {
     #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
     pub struct Button: u16 {
-        const Select   = 1 << 0;
+        const SELECT   = 1 << 0;
         const L3       = 1 << 1;
         const R3       = 1 << 2;
-        const Start    = 1 << 3;
-        const Up       = 1 << 4;
-        const Right    = 1 << 5;
-        const Down     = 1 << 6;
-        const Left     = 1 << 7;
+        const START    = 1 << 3;
+        const UP       = 1 << 4;
+        const RIGHT    = 1 << 5;
+        const DOWN     = 1 << 6;
+        const LEFT     = 1 << 7;
         const L2       = 1 << 8;
         const R2       = 1 << 9;
         const L1       = 1 << 10;
         const R1       = 1 << 11;
-        const Triangle = 1 << 12;
-        const Circle   = 1 << 13;
-        const Cross    = 1 << 14;
-        const Square   = 1 << 15;
+        const TRIANGLE = 1 << 12;
+        const CIRCLE   = 1 << 13;
+        const CROSS    = 1 << 14;
+        const SQUARE   = 1 << 15;
     }
 }
 

@@ -39,17 +39,38 @@
 use alloc::collections::vec_deque::VecDeque;
 
 use modular_bitfield::*;
+use smallbox::{SmallBox, space::S2};
 
 use crate::devices::int::{InterruptController, InterruptFlags};
 
 use super::Mmio;
 
-mod cmd;
+mod tasks;
 
 const PARAM_FIFO_CAP: usize = 16;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CdRomInt {
+const CDROM_COMMAND_DEFAULT_DELAY: u64 = 0x1100;
+/// https://github.com/Amjad50/Trapezoid/blob/b2411afe405a4c1d33586338b0768b3343f8353f/trapezoid-core/src/cdrom.rs#L22
+const CDROM_READ_PLAY_DELAY: u64 = 0x6E400 - 0x100;
+
+type BoxedTask = SmallBox<dyn Task, S2>;
+
+bitflags::bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct Status: u8 {
+        const ERROR      = 1 << 0;
+        const MOTOR_ON   = 1 << 1;
+        const SEEK_ERROR = 1 << 2;
+        const ID_ERROR   = 1 << 3;
+        const SHELL_OPEN = 1 << 4;
+        const READING    = 1 << 5;
+        const SEEKING    = 1 << 6;
+        const PLAYING    = 1 << 7;
+    }
+}
+
+#[derive(Copy, Clone)]
+enum IrqFlag {
     /// DataReady
     Int1 = 1,
     /// Complete / second response
@@ -62,18 +83,34 @@ enum CdRomInt {
     Int5 = 5,
 }
 
+#[repr(u8)]
+enum ErrorCode {
+    BadSubFunction = 0x10,
+    BadParameter = 0x20,
+    BadCommand = 0x40,
+    NoDisc = 0x80,
+}
+
+trait Task {
+    fn busy_flag(&self) -> bool;
+
+    fn execute(&mut self, cdrom: &mut CdRom);
+}
+
 pub struct CdRom {
+    pub status: Status,
+
     index: Index,
 
     param_fifo: VecDeque<u8>,
     response_fifo: VecDeque<u8>,
     data_fifo: VecDeque<u8>,
 
+    scheduled_tasks: VecDeque<TaskEntry>,
+    pending_task: Option<BoxedTask>,
+
     irq_enable: u8,
     irq_flags: u8,
-    irq_check_pending: bool,
-
-    busy: bool,
 
     volume_cd_left_to_spu_left: u8,
     volume_cd_left_to_spu_right: u8,
@@ -82,8 +119,7 @@ pub struct CdRom {
 }
 
 #[bitfield(bits = 8)]
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-struct Status {
+struct StatReg {
     /// Current register index.
     index: Index,
     /// XA-ADPCM decoder busy.
@@ -100,7 +136,7 @@ struct Status {
     busy: bool,
 }
 
-#[derive(Specifier, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Specifier, Copy, Clone)]
 #[bits = 2]
 enum Index {
     Zero = 0,
@@ -109,20 +145,27 @@ enum Index {
     Third = 3,
 }
 
+struct TaskEntry {
+    sys_cycles_left: u64,
+    task: BoxedTask,
+}
+
 impl Default for CdRom {
     fn default() -> Self {
         Self {
+            status: Status::empty(),
+
             index: Index::Zero,
 
             param_fifo: VecDeque::with_capacity(PARAM_FIFO_CAP),
             response_fifo: VecDeque::new(),
             data_fifo: VecDeque::new(),
 
+            scheduled_tasks: VecDeque::new(),
+            pending_task: None,
+
             irq_enable: 0,
             irq_flags: 0,
-            irq_check_pending: false,
-
-            busy: false,
 
             volume_cd_left_to_spu_left: 0,
             volume_cd_left_to_spu_right: 0,
@@ -133,27 +176,73 @@ impl Default for CdRom {
 }
 
 impl CdRom {
-    pub fn update(&mut self, int_ctrl: &mut InterruptController) {
-        if self.irq_check_pending && self.irq_enable & self.irq_flags != 0 {
+    pub fn update(&mut self, int_ctrl: &mut InterruptController, sys_cycles: u64) {
+        self.tick_scheduled(sys_cycles);
+
+        // Next task needs IRQ ack
+        if self.irq_flags == 0 {
+            self.handle_ready_task();
+        }
+
+        if self.irq_enable & self.irq_flags != 0 {
             int_ctrl.raise(InterruptFlags::CDROM);
-            self.irq_check_pending = false;
         }
     }
 
-    fn stat(&self) -> Status {
-        Status::new()
+    fn stat(&self) -> StatReg {
+        let pending_tasks =
+            self.pending_task.is_some() || self.scheduled_tasks.iter().any(|x| x.task.busy_flag());
+
+        StatReg::new()
             .with_index(self.index)
             .with_adpcm_busy(false)
             .with_parameter_fifo_empty(self.param_fifo.is_empty())
             .with_parameter_fifo_write_ready(self.param_fifo.len() < PARAM_FIFO_CAP)
             .with_response_fifo_not_empty(!self.response_fifo.is_empty())
             .with_data_fifo_not_empty(!self.data_fifo.is_empty())
-            .with_busy(self.busy)
+            .with_busy(pending_tasks)
     }
 
-    fn raise_int(&mut self, int: CdRomInt) {
+    /// Create a delay before task can be executed.
+    fn tick_scheduled(&mut self, cycles: u64) {
+        if self.pending_task.is_some() {
+            return;
+        }
+
+        let Some(entry) = self.scheduled_tasks.front_mut() else {
+            return;
+        };
+
+        if entry.sys_cycles_left > cycles {
+            entry.sys_cycles_left -= cycles;
+            return;
+        }
+
+        let entry = self.scheduled_tasks.pop_front().unwrap();
+        self.pending_task = Some(entry.task);
+    }
+
+    /// Handle command or other event in queue, but only if IRQ flag is not set.
+    fn handle_ready_task(&mut self) {
+        let Some(mut task) = self.pending_task.take() else {
+            return;
+        };
+
+        task.execute(self);
+    }
+
+    fn raise_err(&mut self, err: ErrorCode) {
+        self.push_response(&[(self.status | Status::ERROR).bits(), err as u8]);
+        self.raise_int(IrqFlag::Int5);
+    }
+
+    fn push_response(&mut self, data: &[u8]) {
+        self.response_fifo.clear();
+        self.response_fifo.extend(data);
+    }
+
+    fn raise_int(&mut self, int: IrqFlag) {
         self.irq_flags = int as u8;
-        self.irq_check_pending = true;
     }
 }
 
@@ -166,18 +255,14 @@ impl Mmio for CdRom {
                 let [stat] = self.stat().into_bytes();
                 stat
             }
-
             0x1 => self.response_fifo.pop_front().unwrap_or_default(),
-
             0x2 => self.data_fifo.pop_front().unwrap_or_default(),
-
             0x3 => match self.index {
                 // write-only reg
                 Index::Zero | Index::Second => (self.irq_enable & 0x1F) | 0xE0,
                 // same shit logic as above, 5 bits for [1; 5]
                 Index::First | Index::Third => (self.irq_flags & 0x1F) | 0xE0,
             },
-
             _ => unimplemented!(),
         };
     }
@@ -197,33 +282,46 @@ impl Mmio for CdRom {
                     _ => unreachable!(),
                 };
             }
-
             0x1 => match self.index {
-                Index::Zero => self.command(value),
+                Index::Zero => self.scheduled_tasks.push_back(TaskEntry {
+                    sys_cycles_left: CDROM_COMMAND_DEFAULT_DELAY,
+                    task: match value {
+                        // 0x01 => Command::Getstat,
+                        // 0x0A => Command::Init,
+                        // 0x1A => Command::GetId,
+                        // 0x0E => Command::Setmode,
+                        // 0x02 => Command::Setloc,
+                        // 0x15 => Command::SeekL,
+                        // 0x16 => Command::SeekP,
+                        // 0x06 => Command::ReadN,
+                        // 0x09 => Command::Pause,
+                        // 0x08 => Command::Stop,
+                        // other => Command::Bad(other),
+                        0x19 => SmallBox::new(tasks::Test),
+                        other => SmallBox::new(tasks::BadCommand { command: other }),
+                    },
+                }),
                 // TODO : Audio
                 // Index::First => self.sound_map_data_out = value,
                 // Index::Second => self.sound_map_coding_info = value,
                 Index::Third => self.volume_cd_right_to_spu_right = value,
                 _ => {}
             },
-
             0x2 => match self.index {
                 Index::Zero => {
                     if self.param_fifo.len() < PARAM_FIFO_CAP {
                         self.param_fifo.push_back(value);
                     } else {
                         tracing::warn!(cap=%PARAM_FIFO_CAP, "cdrom parameter fifo overflow");
-                        self.raise_int(CdRomInt::Int5);
+                        self.raise_int(IrqFlag::Int5);
                     }
                 }
                 Index::First => {
                     self.irq_enable = value & 0x1F;
-                    self.irq_check_pending = true;
                 }
                 Index::Second => self.volume_cd_left_to_spu_left = value,
                 Index::Third => self.volume_cd_right_to_spu_left = value,
             },
-
             0x3 => match self.index {
                 Index::Zero => {
                     // bit 7: BFRD / Want Data
@@ -236,7 +334,6 @@ impl Mmio for CdRom {
                 Index::First => {
                     // W1C behavior
                     self.irq_flags &= !(value & 0x1F);
-                    self.irq_check_pending = true;
 
                     if value & 0x40 != 0 {
                         self.param_fifo.clear();
@@ -247,7 +344,6 @@ impl Mmio for CdRom {
                 // Index::Third => self.volume_apply(value),
                 _ => {}
             },
-
             _ => unreachable!(),
         }
     }
