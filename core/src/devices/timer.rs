@@ -273,11 +273,7 @@ impl TimerController {
             // Timer1: sysclock or HBlank count
             (1, ClockSource::Source0 | ClockSource::Source2) => span.sysclocks,
             (1, ClockSource::Source1 | ClockSource::Source3) => {
-                if span.event.contains(TimingEvent::HBLANK_ENTER) {
-                    1
-                } else {
-                    0
-                }
+                u64::from(span.event.contains(TimingEvent::HBLANK_ENTER))
             }
 
             // Timer2: sysclock or sysclock/8
@@ -353,7 +349,7 @@ impl TimerController {
             (0, SyncMode::Mode1 | SyncMode::Mode2)
                 if span.event.contains(TimingEvent::HBLANK_ENTER) =>
             {
-                timer.counter = 0
+                timer.counter = 0;
             }
             // Timer1 sync event = VBlank
             (1, SyncMode::Mode1 | SyncMode::Mode2)

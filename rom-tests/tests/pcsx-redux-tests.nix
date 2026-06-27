@@ -9,8 +9,6 @@
 
         crossSystem = {
           config = "mipsel-none-elf";
-          libc = "newlib";
-
           gcc = {
             arch = "mips1";
             tune = "r3000";

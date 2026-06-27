@@ -9,6 +9,9 @@ pub mod interconnect;
 pub mod render;
 pub mod run;
 
+/// CPU Frequency (ticks per second).
+pub const CPU_FREQ: u64 = 33_868_800;
+
 /// 2MiB of mapped RAM.
 pub const RAM_SIZE: usize = 2 * 1024 * 1024;
 /// 512KiB BIOS, ROM.

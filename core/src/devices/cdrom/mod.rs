@@ -36,12 +36,16 @@
 //! +------------+-------+------------------------------+--------------------------------------+
 //! ```
 //! Source: [PSX-SPX CDROM Controller I/O Ports](https://problemkaputt.de/psxspx-cdrom-controller-i-o-ports.htm).
-use alloc::collections::vec_deque::VecDeque;
+use alloc::{boxed::Box, collections::vec_deque::VecDeque};
 
 use modular_bitfield::*;
-use smallbox::{SmallBox, space::S2};
+use smallbox::SmallBox;
 
-use crate::devices::int::{InterruptController, InterruptFlags};
+use crate::{
+    CPU_FREQ,
+    devices::int::{InterruptController, InterruptFlags},
+    formats::disk::{Disc, RawSector},
+};
 
 use super::Mmio;
 
@@ -50,10 +54,10 @@ mod tasks;
 const PARAM_FIFO_CAP: usize = 16;
 
 const CDROM_COMMAND_DEFAULT_DELAY: u64 = 0x1100;
-/// https://github.com/Amjad50/Trapezoid/blob/b2411afe405a4c1d33586338b0768b3343f8353f/trapezoid-core/src/cdrom.rs#L22
-const CDROM_READ_PLAY_DELAY: u64 = 0x6E400 - 0x100;
-
-type BoxedTask = SmallBox<dyn Task, S2>;
+const CDROM_SECOND_DELAY: u64 = 0x3000;
+const CDROM_SEEK_DELAY: u64 = 0x30000;
+// https://github.com/Amjad50/Trapezoid/blob/b2411afe405a4c1d33586338b0768b3343f8353f/trapezoid-core/src/cdrom.rs#L22
+const CDROM_READ_PLAY_DELAY: u64 = CPU_FREQ / 75 - 0x100;
 
 bitflags::bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,6 +70,20 @@ bitflags::bitflags! {
         const READING    = 1 << 5;
         const SEEKING    = 1 << 6;
         const PLAYING    = 1 << 7;
+    }
+}
+
+bitflags::bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct CdRomMode: u8 {
+        const CDDA         = 1 << 0;
+        const AUTOPAUSE    = 1 << 1;
+        const REPORT_INTS  = 1 << 2;
+        const XA_FILTER    = 1 << 3;
+        const IGNORE_BIT   = 1 << 4;
+        const WHOLE_SECTOR = 1 << 5;
+        const XA_ADPCM     = 1 << 6;
+        const DOUBLE_SPEED = 1 << 7;
     }
 }
 
@@ -91,13 +109,10 @@ enum ErrorCode {
     NoDisc = 0x80,
 }
 
-trait Task {
-    fn busy_flag(&self) -> bool;
-    fn execute(&mut self, cdrom: &mut CdRom);
-}
-
 pub struct CdRom {
+    pub disc: Option<Box<dyn Disc>>,
     pub status: CdRomStatus,
+    pub mode: CdRomMode,
 
     index: RegisterIndex,
 
@@ -105,11 +120,15 @@ pub struct CdRom {
     response_fifo: VecDeque<u8>,
     data_fifo: VecDeque<u8>,
 
-    scheduled_tasks: VecDeque<TaskEntry>,
-    pending_task: Option<BoxedTask>,
+    scheduled_tasks: VecDeque<tasks::ScheduledTask>,
+    pending_task: Option<tasks::BoxedTask>,
 
     irq_enable: u8,
     irq_flags: u8,
+
+    msf_loc: Option<[u8; 3]>,
+    cursor_lba: usize,
+    pending_sector: Option<RawSector>,
 
     volume_cd_left_to_spu_left: u8,
     volume_cd_left_to_spu_right: u8,
@@ -145,15 +164,12 @@ pub enum RegisterIndex {
     Third = 3,
 }
 
-struct TaskEntry {
-    sys_cycles_left: u64,
-    task: BoxedTask,
-}
-
 impl Default for CdRom {
     fn default() -> Self {
         Self {
+            disc: None,
             status: CdRomStatus::empty(),
+            mode: CdRomMode::empty(),
 
             index: RegisterIndex::Zero,
 
@@ -167,6 +183,10 @@ impl Default for CdRom {
             irq_enable: 0,
             irq_flags: 0,
 
+            msf_loc: None,
+            cursor_lba: 0,
+            pending_sector: None,
+
             volume_cd_left_to_spu_left: 0,
             volume_cd_left_to_spu_right: 0,
             volume_cd_right_to_spu_left: 0,
@@ -177,8 +197,8 @@ impl Default for CdRom {
 
 impl CdRom {
     pub fn stat(&self) -> CdRomStat {
-        let pending_tasks =
-            self.pending_task.is_some() || self.scheduled_tasks.iter().any(|x| x.task.busy_flag());
+        let busy = self.pending_task.iter().any(|x| x.busy_flag())
+            || self.scheduled_tasks.iter().any(|x| x.task.busy_flag());
 
         CdRomStat::new()
             .with_index(self.index)
@@ -187,7 +207,7 @@ impl CdRom {
             .with_parameter_fifo_write_ready(self.param_fifo.len() < PARAM_FIFO_CAP)
             .with_response_fifo_not_empty(!self.response_fifo.is_empty())
             .with_data_fifo_not_empty(!self.data_fifo.is_empty())
-            .with_busy(pending_tasks)
+            .with_busy(busy)
     }
 
     pub(crate) fn update(&mut self, int_ctrl: &mut InterruptController, sys_cycles: u64) {
@@ -209,17 +229,17 @@ impl CdRom {
             return;
         }
 
-        let Some(entry) = self.scheduled_tasks.front_mut() else {
+        let Some(scheduled) = self.scheduled_tasks.front_mut() else {
             return;
         };
 
-        if entry.sys_cycles_left > cycles {
-            entry.sys_cycles_left -= cycles;
+        if scheduled.sys_cycles_left > cycles {
+            scheduled.sys_cycles_left -= cycles;
             return;
         }
 
-        let entry = self.scheduled_tasks.pop_front().unwrap();
-        self.pending_task = Some(entry.task);
+        let scheduled = self.scheduled_tasks.pop_front().unwrap();
+        self.pending_task = Some(scheduled.task);
     }
 
     /// Handle command or other event in queue, but only if IRQ flag is not set.
@@ -229,6 +249,39 @@ impl CdRom {
         };
 
         task.execute(self);
+    }
+
+    fn schedule_task(&mut self, sys_cycles: u64, task: tasks::BoxedTask) {
+        self.scheduled_tasks.push_back(tasks::ScheduledTask {
+            sys_cycles_left: sys_cycles,
+            task,
+        });
+    }
+
+    fn read_sector_delay(&self) -> u64 {
+        if self.mode.contains(CdRomMode::DOUBLE_SPEED) {
+            CDROM_READ_PLAY_DELAY / 2
+        } else {
+            CDROM_READ_PLAY_DELAY
+        }
+    }
+
+    fn apply_setloc(&mut self) {
+        fn bcd_to_bin(value: u8) -> u8 {
+            ((value >> 4) * 10) + (value & 0x0F)
+        }
+
+        let Some([mm, ss, ff]) = self.msf_loc.take() else {
+            return;
+        };
+
+        let minutes = bcd_to_bin(mm) as i32;
+        let seconds = bcd_to_bin(ss) as i32;
+        let frames = bcd_to_bin(ff) as i32;
+
+        let lba = ((minutes * 60) + seconds) * 75 + frames - 150;
+
+        self.cursor_lba = lba.max(0) as usize;
     }
 
     fn raise_err(&mut self, err: ErrorCode) {
@@ -283,24 +336,24 @@ impl Mmio for CdRom {
                 };
             }
             0x1 => match self.index {
-                RegisterIndex::Zero => self.scheduled_tasks.push_back(TaskEntry {
-                    sys_cycles_left: CDROM_COMMAND_DEFAULT_DELAY,
-                    task: match value {
-                        // 0x01 => Command::Getstat,
-                        // 0x0A => Command::Init,
-                        // 0x1A => Command::GetId,
-                        // 0x0E => Command::Setmode,
-                        // 0x02 => Command::Setloc,
-                        // 0x15 => Command::SeekL,
-                        // 0x16 => Command::SeekP,
-                        // 0x06 => Command::ReadN,
-                        // 0x09 => Command::Pause,
-                        // 0x08 => Command::Stop,
-                        // other => Command::Bad(other),
-                        0x19 => SmallBox::new(tasks::Test),
-                        other => SmallBox::new(tasks::BadCommand { command: other }),
-                    },
-                }),
+                RegisterIndex::Zero => {
+                    self.schedule_task(
+                        CDROM_COMMAND_DEFAULT_DELAY,
+                        match value {
+                            0x01 => SmallBox::new(tasks::Getstat),
+                            0x0A => SmallBox::new(tasks::InitFirst),
+                            0x1A => SmallBox::new(tasks::GetIdFirst),
+                            0x0E => SmallBox::new(tasks::Setmode),
+                            0x02 => SmallBox::new(tasks::Setloc),
+                            0x15 | 0x16 => SmallBox::new(tasks::SeekFirst),
+                            0x06 => SmallBox::new(tasks::ReadN),
+                            // 0x09 => Command::Pause,
+                            // 0x08 => Command::Stop,
+                            0x19 => SmallBox::new(tasks::Test),
+                            cmd => SmallBox::new(tasks::BadCommand { cmd }),
+                        },
+                    );
+                }
                 // TODO : Audio
                 // Index::First => self.sound_map_data_out = value,
                 // Index::Second => self.sound_map_coding_info = value,
@@ -326,7 +379,12 @@ impl Mmio for CdRom {
                 RegisterIndex::Zero => {
                     // bit 7: BFRD / Want Data
                     if value & 0x80 != 0 {
-                        // self.load_pending_sector_to_data_fifo();
+                        let Some(data) = self.pending_sector.take() else {
+                            return;
+                        };
+
+                        self.data_fifo.clear();
+                        self.data_fifo.extend(data);
                     } else {
                         self.data_fifo.clear();
                     }

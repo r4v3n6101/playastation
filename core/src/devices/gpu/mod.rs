@@ -25,7 +25,7 @@ struct Display {
     hres: HorizontalResolution,
     vres: VerticalResolution,
     vmode: VideoMode,
-    display_depth: DisplayDepth,
+    depth: DisplayDepth,
     interlaced: bool,
     special_368_hres: bool,
     reversed: bool,
@@ -179,7 +179,7 @@ impl Gpu {
             .with_hres(self.display.hres)
             .with_vres(self.display.vres)
             .with_vmode(self.display.vmode)
-            .with_display_depth(self.display.display_depth)
+            .with_display_depth(self.display.depth)
             .with_interlace_field(self.display.interlaced)
             .with_special_hres_368(self.display.special_368_hres)
             .with_reverse_flag(self.display.reversed)
@@ -198,12 +198,10 @@ impl Gpu {
             // Some tests need this
             .with_drawing_even_odd_lines(if self.clock.vblank() {
                 false
+            } else if self.display.interlaced {
+                self.draw_odd_even_frame
             } else {
-                if self.display.interlaced {
-                    self.draw_odd_even_frame
-                } else {
-                    self.clock.scanline & 1 != 0
-                }
+                self.clock.scanline & 1 != 0
             })
     }
 

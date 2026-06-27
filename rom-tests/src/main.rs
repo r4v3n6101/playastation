@@ -16,7 +16,7 @@ use playastation::{
         Slot,
         controller::{Button, DigitalController},
     },
-    formats::BoxedExeFile,
+    formats::psexe::BoxedExeFile,
     render::software::SoftwareRenderer,
     run::Executor,
 };

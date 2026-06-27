@@ -102,7 +102,7 @@ impl Gpu {
                 self.display.hres = mode.hres();
                 self.display.vres = mode.vres();
                 self.display.vmode = mode.vmode();
-                self.display.display_depth = mode.depth();
+                self.display.depth = mode.depth();
                 self.display.interlaced = mode.interlace();
                 self.display.special_368_hres = mode.special_hres();
                 self.display.reversed = mode.reverse();

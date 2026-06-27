@@ -3,7 +3,7 @@ use core::mem;
 
 use crate::{
     cpu::{Cpu, Exception},
-    formats::{BoxedExeFile, ExeHeader},
+    formats::psexe::{BoxedExeFile, ExeHeader},
     interconnect::Bus,
 };
 
