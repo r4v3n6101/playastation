@@ -19,8 +19,7 @@
       test-rom =
         kind:
         mipselPkgs.stdenv.mkDerivation {
-          pname = "psx-redux-test-rom";
-          version = "unstable";
+          name = "pcsx-redux-test-rom";
 
           src = inputs.pcsx-redux;
 

@@ -6,6 +6,7 @@ const MDEC_IN: usize = 0;
 const MDEC_OUT: usize = 1;
 const GPU: usize = 2;
 const CDROM: usize = 3;
+const SPU: usize = 4;
 const OTC: usize = 6;
 
 /// Approximate timings of word transfer.
@@ -109,6 +110,7 @@ pub fn do_block(
 
                         cycles = cycles.saturating_add(TIMINGS[GPU]);
                     }
+                    SPU => {}
                     _ => todo!("{ch}={chan:#?}"),
                 },
                 Direction::ToRam => match ch {

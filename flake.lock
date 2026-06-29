@@ -90,11 +90,11 @@
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1782446464,
-        "narHash": "sha256-P/Eg1mSMoRbv7ig4JlBw1guxT2j3vUPOVeIoeI5QgAs=",
+        "lastModified": 1782717640,
+        "narHash": "sha256-OuuzVM5qcPxwdFl7cl9ab66fYXe5IsFcUSLo348r61w=",
         "owner": "nixos",
         "repo": "nixpkgs",
-        "rev": "c5eb3665248bb692552e36fa97a2be060c5be536",
+        "rev": "d0e1b92291c61173f2dc209dbdeda9f8cd9369b5",
         "type": "github"
       },
       "original": {
@@ -102,6 +102,24 @@
         "ref": "master",
         "repo": "nixpkgs",
         "type": "github"
+      }
+    },
+    "nolibgs_hello_worlds": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1768832358,
+        "narHash": "sha256-eTdw/OtfNVzKJWQ4tQK9hfZJMlMe6QBq1OsJRPqHTWQ=",
+        "ref": "refs/heads/main",
+        "rev": "48790325a9e37923dbc8c607aa4b3304316f5451",
+        "revCount": 273,
+        "submodules": true,
+        "type": "git",
+        "url": "https://github.com/ABelliqueux/nolibgs_hello_worlds"
+      },
+      "original": {
+        "submodules": true,
+        "type": "git",
+        "url": "https://github.com/ABelliqueux/nolibgs_hello_worlds"
       }
     },
     "pcsx-redux": {
@@ -147,6 +165,7 @@
         "flake-parts": "flake-parts",
         "import-tree": "import-tree",
         "nixpkgs": "nixpkgs",
+        "nolibgs_hello_worlds": "nolibgs_hello_worlds",
         "pcsx-redux": "pcsx-redux",
         "peter-lemon-test-roms": "peter-lemon-test-roms",
         "rust-overlay": "rust-overlay"
@@ -159,11 +178,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1782443907,
-        "narHash": "sha256-P+pADLtK7qC1mz0/5Xq9uF77oahUR4zYLTaitiHsUHg=",
+        "lastModified": 1782703273,
+        "narHash": "sha256-WJPfr9EAWVIuTMyb/ilHKUYlg/RNa0xrNiWR+p1iHUg=",
         "owner": "oxalica",
         "repo": "rust-overlay",
-        "rev": "4b06ff4acf3491ff69721df852507fcc51d0a13d",
+        "rev": "5106a604b3d67cffe8eb51a8bd9f04e607f0d31d",
         "type": "github"
       },
       "original": {

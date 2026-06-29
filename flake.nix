@@ -40,6 +40,11 @@
       url = "git+https://github.com/nicolasnoble/pcsx-redux?submodules=1";
       flake = false;
     };
+
+    nolibgs_hello_worlds = {
+      url = "git+https://github.com/ABelliqueux/nolibgs_hello_worlds?submodules=1";
+      flake = false;
+    };
   };
 
   outputs =
