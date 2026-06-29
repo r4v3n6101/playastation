@@ -2,6 +2,7 @@ use smallbox::{SmallBox, space::S1};
 
 use super::{
     CDROM_SECOND_DELAY, CDROM_SEEK_DELAY, CdRom, CdRomMode, CdRomStatus, ErrorCode, IrqFlag,
+    bin_to_bcd,
 };
 
 pub type BoxedTask = SmallBox<dyn Task, S1>;
@@ -32,7 +33,9 @@ impl Task for BadCommand {
     }
 }
 
-pub struct Test;
+pub struct Test {
+    pub subcommand: u8,
+}
 
 impl Task for Test {
     fn busy_flag(&self) -> bool {
@@ -124,7 +127,9 @@ impl Task for GetIdSecond {
     }
 }
 
-pub struct Setmode;
+pub struct Setmode {
+    pub mode: u8,
+}
 
 impl Task for Setmode {
     fn busy_flag(&self) -> bool {
@@ -132,19 +137,18 @@ impl Task for Setmode {
     }
 
     fn execute(&mut self, cdrom: &mut CdRom) {
-        let Some(mode) = cdrom.param_fifo.pop_front() else {
-            cdrom.raise_err(ErrorCode::BadParameter);
-            return;
-        };
-
-        cdrom.mode = CdRomMode::from_bits_truncate(mode);
+        cdrom.mode = CdRomMode::from_bits_truncate(self.mode);
 
         cdrom.push_response(&[cdrom.status.bits()]);
         cdrom.raise_int(IrqFlag::Int3);
     }
 }
 
-pub struct Setloc;
+pub struct Setloc {
+    pub mm: u8,
+    pub ss: u8,
+    pub ff: u8,
+}
 
 impl Task for Setloc {
     fn busy_flag(&self) -> bool {
@@ -152,20 +156,7 @@ impl Task for Setloc {
     }
 
     fn execute(&mut self, cdrom: &mut CdRom) {
-        let Some(mm) = cdrom.param_fifo.pop_front() else {
-            cdrom.raise_err(ErrorCode::BadParameter);
-            return;
-        };
-        let Some(ss) = cdrom.param_fifo.pop_front() else {
-            cdrom.raise_err(ErrorCode::BadParameter);
-            return;
-        };
-        let Some(ff) = cdrom.param_fifo.pop_front() else {
-            cdrom.raise_err(ErrorCode::BadParameter);
-            return;
-        };
-
-        cdrom.msf_loc = Some([mm, ss, ff]);
+        cdrom.msf_loc = Some([self.mm, self.ss, self.ff]);
 
         cdrom.push_response(&[cdrom.status.bits()]);
         cdrom.raise_int(IrqFlag::Int3);
@@ -224,6 +215,10 @@ impl Task for Read {
             .status
             .remove(CdRomStatus::SEEKING | CdRomStatus::PLAYING);
 
+        cdrom.pending_sector = None;
+        cdrom.data_fifo.clear();
+        cdrom.read_second_delivery_attempt = false;
+
         cdrom.push_response(&[cdrom.status.bits()]);
         cdrom.raise_int(IrqFlag::Int3);
 
@@ -240,30 +235,59 @@ impl Task for SectorReady {
 
     fn execute(&mut self, cdrom: &mut CdRom) {
         if !cdrom.status.contains(CdRomStatus::READING) {
+            cdrom.read_second_delivery_attempt = false;
+            return;
+        }
+
+        if cdrom.pending_sector.is_some() && !cdrom.read_second_delivery_attempt {
+            cdrom.read_second_delivery_attempt = true;
+
+            tracing::warn!(
+                next_lba = cdrom.cursor_lba,
+                "cdrom sector pending, giving CPU second chance"
+            );
+
+            cdrom.schedule_task(cdrom.read_sector_delay(), SmallBox::new(SectorReady));
             return;
         }
 
         if cdrom.pending_sector.is_some() {
-            tracing::warn!("cdrom sector overrun: previous sector still pending");
-        } else {
-            let Some(disc) = cdrom.disc.as_mut() else {
-                cdrom.status.remove(CdRomStatus::READING);
-                cdrom.raise_err(ErrorCode::NoDisc);
-                return;
-            };
+            tracing::warn!(
+                next_lba = cdrom.cursor_lba,
+                "cdrom sector overrun: dropping previous pending sector"
+            );
 
-            let Some(raw_sector) = disc.read_sector(cdrom.cursor_lba) else {
-                cdrom.status.remove(CdRomStatus::READING);
-                cdrom.raise_err(ErrorCode::BadParameter);
-                return;
-            };
-
-            cdrom.cursor_lba = cdrom.cursor_lba.wrapping_add(1);
-            cdrom.pending_sector = Some(raw_sector);
-
-            cdrom.push_response(&[cdrom.status.bits()]);
-            cdrom.raise_int(IrqFlag::Int1);
+            cdrom.pending_sector = None;
+            cdrom.read_second_delivery_attempt = false;
         }
+
+        let Some(disc) = cdrom.disc.as_mut() else {
+            cdrom.status.remove(CdRomStatus::READING);
+            cdrom.read_second_delivery_attempt = false;
+            cdrom.raise_err(ErrorCode::NoDisc);
+            return;
+        };
+
+        let Some(raw_sector) = disc.read_sector(cdrom.cursor_lba) else {
+            cdrom.status.remove(CdRomStatus::READING);
+            cdrom.read_second_delivery_attempt = false;
+            cdrom.raise_err(ErrorCode::BadParameter);
+            return;
+        };
+
+        cdrom.cursor_lba = cdrom.cursor_lba.wrapping_add(1);
+
+        if is_xa_audio_sector(cdrom, &raw_sector) {
+            cdrom.schedule_task(cdrom.read_sector_delay(), SmallBox::new(SectorReady));
+
+            return;
+        }
+
+        cdrom.pending_sector = Some(raw_sector);
+        cdrom.read_second_delivery_attempt = false;
+
+        cdrom.push_response(&[cdrom.status.bits()]);
+        cdrom.raise_int(IrqFlag::Int1);
 
         cdrom.schedule_task(cdrom.read_sector_delay(), SmallBox::new(SectorReady));
     }
@@ -332,4 +356,75 @@ impl Task for Demute {
         cdrom.push_response(&[cdrom.status.bits()]);
         cdrom.raise_int(IrqFlag::Int3);
     }
+}
+
+pub struct GetTn;
+
+impl Task for GetTn {
+    fn busy_flag(&self) -> bool {
+        true
+    }
+
+    fn execute(&mut self, cdrom: &mut CdRom) {
+        // Single data track fallback.
+        cdrom.push_response(&[
+            cdrom.status.bits(),
+            0x01, // first track, BCD
+            0x01, // last track, BCD
+        ]);
+
+        cdrom.raise_int(IrqFlag::Int3);
+    }
+}
+
+pub struct GetTd {
+    pub track: u8,
+}
+
+impl Task for GetTd {
+    fn busy_flag(&self) -> bool {
+        true
+    }
+
+    fn execute(&mut self, cdrom: &mut CdRom) {
+        let track = ((self.track >> 4) * 10) + (self.track & 0x0F);
+
+        let (minutes, seconds) = match track {
+            // track 0 = total disc length.
+            0 => {
+                let sectors = cdrom
+                    .disc
+                    .as_ref()
+                    .map(|disc| disc.sector_count())
+                    .unwrap_or(0);
+
+                let total_seconds = sectors / 75;
+                ((total_seconds / 60) as u8, (total_seconds % 60) as u8)
+            }
+            // track 1 starts at 00:02:00 in absolute MSF.
+            1 => (0, 2),
+            _ => {
+                cdrom.raise_err(ErrorCode::BadParameter);
+                return;
+            }
+        };
+
+        cdrom.push_response(&[
+            cdrom.status.bits(),
+            bin_to_bcd(minutes),
+            bin_to_bcd(seconds),
+        ]);
+
+        cdrom.raise_int(IrqFlag::Int3);
+    }
+}
+
+fn is_xa_audio_sector(cdrom: &CdRom, raw: &[u8]) -> bool {
+    let sector_mode = raw[3];
+    let submode = raw[6];
+
+    let audio = submode & 0x04 != 0;
+    let realtime = submode & 0x40 != 0;
+
+    sector_mode == 2 && cdrom.mode.contains(CdRomMode::XA_ADPCM) && audio && realtime
 }

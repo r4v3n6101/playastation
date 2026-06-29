@@ -122,12 +122,15 @@ pub struct CdRom {
 
     scheduled_tasks: VecDeque<tasks::ScheduledTask>,
     pending_task: Option<tasks::BoxedTask>,
+    read_second_delivery_attempt: bool,
 
     irq_enable: u8,
     irq_flags: u8,
 
-    msf_loc: Option<[u8; 3]>,
     cursor_lba: usize,
+    msf_loc: Option<[u8; 3]>,
+    filter_file: u8,
+    filter_channel: u8,
     pending_sector: Option<RawSector>,
 
     volume_cd_left_to_spu_left: u8,
@@ -168,7 +171,7 @@ impl Default for CdRom {
     fn default() -> Self {
         Self {
             disc: None,
-            status: CdRomStatus::empty(),
+            status: CdRomStatus::MOTOR_ON,
             mode: CdRomMode::empty(),
             mute: false,
 
@@ -184,9 +187,12 @@ impl Default for CdRom {
             irq_enable: 0,
             irq_flags: 0,
 
-            msf_loc: None,
             cursor_lba: 0,
+            msf_loc: None,
+            filter_file: 0,
+            filter_channel: 0,
             pending_sector: None,
+            read_second_delivery_attempt: false,
 
             volume_cd_left_to_spu_left: 0,
             volume_cd_left_to_spu_right: 0,
@@ -272,10 +278,6 @@ impl CdRom {
     }
 
     fn apply_setloc(&mut self) {
-        fn bcd_to_bin(value: u8) -> u8 {
-            ((value >> 4) * 10) + (value & 0x0F)
-        }
-
         let Some([mm, ss, ff]) = self.msf_loc.take() else {
             return;
         };
@@ -342,24 +344,38 @@ impl Mmio for CdRom {
             }
             0x1 => match self.index {
                 BankIndex::Zero => {
-                    self.schedule_task(
-                        CDROM_COMMAND_DEFAULT_DELAY,
-                        match value {
-                            0x01 => SmallBox::new(tasks::Getstat),
-                            0x0A => SmallBox::new(tasks::InitFirst),
-                            0x1A => SmallBox::new(tasks::GetIdFirst),
-                            0x0E => SmallBox::new(tasks::Setmode),
-                            0x02 => SmallBox::new(tasks::Setloc),
-                            0x15 | 0x16 => SmallBox::new(tasks::SeekFirst),
-                            0x06 | 0x1B => SmallBox::new(tasks::Read),
-                            0x09 => SmallBox::new(tasks::PauseFirst),
-                            0x0B => SmallBox::new(tasks::Mute),
-                            0x0C => SmallBox::new(tasks::Demute),
-                            // 0x08 => Command::Stop,
-                            0x19 => SmallBox::new(tasks::Test),
-                            cmd => SmallBox::new(tasks::BadCommand { cmd }),
-                        },
-                    );
+                    let cmd: SmallBox<dyn tasks::Task, _> = match value {
+                        0x01 => SmallBox::new(tasks::Getstat),
+                        0x02 => {
+                            let mm = self.param_fifo.pop_front().unwrap_or(0);
+                            let ss = self.param_fifo.pop_front().unwrap_or(0);
+                            let ff = self.param_fifo.pop_front().unwrap_or(0);
+                            SmallBox::new(tasks::Setloc { mm, ss, ff })
+                        }
+                        0x06 | 0x1B => SmallBox::new(tasks::Read),
+                        0x09 => SmallBox::new(tasks::PauseFirst),
+                        0x0A => SmallBox::new(tasks::InitFirst),
+                        0x0B => SmallBox::new(tasks::Mute),
+                        0x0C => SmallBox::new(tasks::Demute),
+                        0x0E => {
+                            let mode = self.param_fifo.pop_front().unwrap_or(0);
+                            SmallBox::new(tasks::Setmode { mode })
+                        }
+                        0x13 => SmallBox::new(tasks::GetTn),
+                        0x14 => {
+                            let track = self.param_fifo.pop_front().unwrap_or(0);
+                            SmallBox::new(tasks::GetTd { track })
+                        }
+                        0x15 | 0x16 => SmallBox::new(tasks::SeekFirst),
+                        0x19 => {
+                            let subcommand = self.param_fifo.pop_front().unwrap_or(0);
+                            SmallBox::new(tasks::Test { subcommand })
+                        }
+                        0x1A => SmallBox::new(tasks::GetIdFirst),
+                        cmd => SmallBox::new(tasks::BadCommand { cmd }),
+                    };
+                    self.param_fifo.clear();
+                    self.schedule_task(CDROM_COMMAND_DEFAULT_DELAY, cmd);
                 }
                 // TODO : Audio
                 // Index::First => self.sound_map_data_out = value,
@@ -396,7 +412,7 @@ impl Mmio for CdRom {
                         } else {
                             self.data_fifo.extend(sector_data(&data));
                         }
-                    } else {
+                    } else if self.pending_sector.is_some() {
                         self.data_fifo.clear();
                     }
                 }
@@ -416,4 +432,12 @@ impl Mmio for CdRom {
             _ => unreachable!(),
         }
     }
+}
+
+fn bcd_to_bin(value: u8) -> u8 {
+    ((value >> 4) * 10) + (value & 0x0F)
+}
+
+fn bin_to_bcd(value: u8) -> u8 {
+    ((value / 10) << 4) | (value % 10)
 }

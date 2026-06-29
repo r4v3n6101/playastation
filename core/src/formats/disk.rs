@@ -3,6 +3,8 @@ pub type DataSector = [u8; 2048];
 
 pub trait Disc {
     fn read_sector(&mut self, lba: usize) -> Option<RawSector>;
+
+    fn sector_count(&self) -> usize;
 }
 
 pub fn sector_data(raw: &RawSector) -> DataSector {

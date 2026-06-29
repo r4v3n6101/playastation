@@ -173,7 +173,13 @@ unsafe fn load_direct_ram(bus: &mut Bus, paddr: u32) -> u32 {
     );
 
     let mut buf = [0; 4];
-    unsafe { buf.copy_from_slice(bus.ram.get_unchecked(paddr as usize..).get_unchecked(..4)) }
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            bus.ram.as_mut_ptr().byte_add(paddr as usize),
+            buf.as_mut_ptr(),
+            4,
+        );
+    }
     u32::from_le_bytes(buf)
 }
 
@@ -189,10 +195,12 @@ unsafe fn store_direct_ram(
     );
 
     unsafe {
-        bus.ram
-            .get_unchecked_mut(paddr as usize..)
-            .get_unchecked_mut(..4)
-            .copy_from_slice(&value.to_le_bytes());
+        let data = value.to_le_bytes();
+        core::ptr::copy_nonoverlapping(
+            data.as_ptr(),
+            bus.ram.as_mut_ptr().byte_add(paddr as usize),
+            4,
+        );
     }
     ram_touched(paddr);
 }

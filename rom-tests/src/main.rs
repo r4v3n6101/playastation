@@ -111,25 +111,25 @@ impl ApplicationHandler for App {
                             Some(old)
                         });
                     }
-                    PhysicalKey::Code(KeyCode::KeyZ) => {
+                    PhysicalKey::Code(KeyCode::KeyH) => {
                         let _ = self.button_state.fetch_update(|mut old| {
                             fun(&mut old, Button::SQUARE);
                             Some(old)
                         });
                     }
-                    PhysicalKey::Code(KeyCode::KeyX) => {
+                    PhysicalKey::Code(KeyCode::KeyJ) => {
                         let _ = self.button_state.fetch_update(|mut old| {
                             fun(&mut old, Button::CROSS);
                             Some(old)
                         });
                     }
-                    PhysicalKey::Code(KeyCode::KeyC) => {
+                    PhysicalKey::Code(KeyCode::KeyK) => {
                         let _ = self.button_state.fetch_update(|mut old| {
                             fun(&mut old, Button::CIRCLE);
                             Some(old)
                         });
                     }
-                    PhysicalKey::Code(KeyCode::KeyV) => {
+                    PhysicalKey::Code(KeyCode::KeyL) => {
                         let _ = self.button_state.fetch_update(|mut old| {
                             fun(&mut old, Button::TRIANGLE);
                             Some(old)
@@ -264,5 +264,9 @@ impl Disc for BinFile {
         let chunk = self.data.get(lba * 2352 + 12..)?.get(..2340)?;
 
         Some(chunk.try_into().unwrap())
+    }
+
+    fn sector_count(&self) -> usize {
+        self.data.len() / 2352
     }
 }
