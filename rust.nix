@@ -91,6 +91,7 @@
             inherit (craneLib.crateNameFromCargoToml { cargoToml = ./frontend-web/Cargo.toml; }) pname;
             inherit (craneLib.crateNameFromCargoToml { cargoToml = ./Cargo.toml; }) version;
 
+            trunkExtraArgs = "--public-url /playastation/";
             cargoExtraArgs = "-p ${pname} --target wasm32-unknown-unknown";
             CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
 
