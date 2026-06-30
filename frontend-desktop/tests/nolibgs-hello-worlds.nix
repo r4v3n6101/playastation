@@ -84,7 +84,13 @@
         mipselPkgs.stdenv.mkDerivation {
           name = "nolibgs-test-artifact";
 
-          src = inputs.nolibgs_hello_worlds;
+          src = pkgs.fetchFromGitHub {
+            owner = "ABelliqueux";
+            repo = "nolibgs_hello_worlds";
+            rev = "48790325a9e37923dbc8c607aa4b3304316f5451";
+            fetchSubmodules = true;
+            hash = "sha256-eTdw/OtfNVzKJWQ4tQK9hfZJMlMe6QBq1OsJRPqHTWQ=";
+          };
 
           nativeBuildInputs = [ mkpsxiso ];
 
@@ -111,10 +117,10 @@
       test-suite-cd = pkgs.writeShellApplication {
         name = "nolibgs-hello-cd-test";
 
-        runtimeInputs = [ self'.packages.test-rom-runner ];
+        runtimeInputs = [ self'.packages.frontend-desktop ];
 
         text = ''
-          test-rom-runner \
+          playastation-desktop \
             --bios "${inputs.bios}" \
             --bin "${
               test-artifact "hello_cd" [

@@ -34,7 +34,6 @@
 
         strictDeps = true;
       };
-
     in
     {
       _module.args.pkgs = import inputs.nixpkgs {
@@ -91,7 +90,6 @@
             inherit (craneLib.crateNameFromCargoToml { cargoToml = ./frontend-web/Cargo.toml; }) pname;
             inherit (craneLib.crateNameFromCargoToml { cargoToml = ./Cargo.toml; }) version;
 
-            trunkExtraArgs = "--public-url /playastation/";
             cargoExtraArgs = "-p ${pname} --target wasm32-unknown-unknown";
             CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
 
@@ -119,6 +117,7 @@
             );
           }
         );
+
         wasm-serve = pkgs.writeShellScriptBin "wasm-serve" ''
           ${pkgs.python3Minimal}/bin/python3 -m http.server --directory ${self'.packages.frontend-web} 8000
         '';

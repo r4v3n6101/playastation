@@ -3,6 +3,14 @@
   perSystem =
     { pkgs, self', ... }:
     let
+      test-roms = pkgs.fetchFromGitHub {
+        owner = "PeterLemon";
+        repo = "PSX";
+        rev = "6d20c132aba02cf387ed2224993ce9ee9a48e620";
+        fetchSubmodules = true;
+        hash = "sha256-ZZEONU0Qzh1LO0UOVugPdjyGNXT03zfgMKSj4VnKa4k=";
+      };
+
       test-suite =
         dir:
         pkgs.writeShellApplication {
@@ -15,7 +23,7 @@
               playastation-desktop \
                 --bios "${inputs.bios}" \
                 --rom "$exe"
-            done < <(find "${inputs.peter-lemon-test-roms}/${dir}" -type f \( -name '*.exe' -o -name '*.EXE' \) -print0)
+            done < <(find "${test-roms}/${dir}" -type f \( -name '*.exe' -o -name '*.EXE' \) -print0)
           '';
         };
     in

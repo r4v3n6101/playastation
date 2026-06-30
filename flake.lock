@@ -1,31 +1,5 @@
 {
   "nodes": {
-    "amidog-cpu-test-rom": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1391784307,
-        "narHash": "sha256-QuuiP4AIfDlJEb4kZlofUGxENeML9qaLaBoAT84lsAg=",
-        "type": "tarball",
-        "url": "https://psx.amidog.se/lib/exe/fetch.php?media=psx:download:psxtest_cpu.zip"
-      },
-      "original": {
-        "type": "tarball",
-        "url": "https://psx.amidog.se/lib/exe/fetch.php?media=psx:download:psxtest_cpu.zip"
-      }
-    },
-    "amidog-cpx-test-rom": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1388492877,
-        "narHash": "sha256-QgYKuo812yLyZvJ1GFTn5Je7EMUIqyLZ572HJv/fMa4=",
-        "type": "tarball",
-        "url": "https://psx.amidog.se/lib/exe/fetch.php?media=psx:download:psxtest_cpx.zip"
-      },
-      "original": {
-        "type": "tarball",
-        "url": "https://psx.amidog.se/lib/exe/fetch.php?media=psx:download:psxtest_cpx.zip"
-      }
-    },
     "bios": {
       "flake": false,
       "locked": {
@@ -104,70 +78,13 @@
         "type": "github"
       }
     },
-    "nolibgs_hello_worlds": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1768832358,
-        "narHash": "sha256-eTdw/OtfNVzKJWQ4tQK9hfZJMlMe6QBq1OsJRPqHTWQ=",
-        "ref": "refs/heads/main",
-        "rev": "48790325a9e37923dbc8c607aa4b3304316f5451",
-        "revCount": 273,
-        "submodules": true,
-        "type": "git",
-        "url": "https://github.com/ABelliqueux/nolibgs_hello_worlds"
-      },
-      "original": {
-        "submodules": true,
-        "type": "git",
-        "url": "https://github.com/ABelliqueux/nolibgs_hello_worlds"
-      }
-    },
-    "pcsx-redux": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1781579769,
-        "narHash": "sha256-v39x1l1CiLzioXPPt86lRKI+J7USaya3/vIX8Ba2p1o=",
-        "ref": "refs/heads/main",
-        "rev": "e2b4d906fd8ef9843ab237fac452e5e1ccde84e8",
-        "revCount": 7279,
-        "submodules": true,
-        "type": "git",
-        "url": "https://github.com/nicolasnoble/pcsx-redux"
-      },
-      "original": {
-        "submodules": true,
-        "type": "git",
-        "url": "https://github.com/nicolasnoble/pcsx-redux"
-      }
-    },
-    "peter-lemon-test-roms": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1768939783,
-        "narHash": "sha256-ZZEONU0Qzh1LO0UOVugPdjyGNXT03zfgMKSj4VnKa4k=",
-        "owner": "PeterLemon",
-        "repo": "PSX",
-        "rev": "6d20c132aba02cf387ed2224993ce9ee9a48e620",
-        "type": "github"
-      },
-      "original": {
-        "owner": "PeterLemon",
-        "repo": "PSX",
-        "type": "github"
-      }
-    },
     "root": {
       "inputs": {
-        "amidog-cpu-test-rom": "amidog-cpu-test-rom",
-        "amidog-cpx-test-rom": "amidog-cpx-test-rom",
         "bios": "bios",
         "crane": "crane",
         "flake-parts": "flake-parts",
         "import-tree": "import-tree",
         "nixpkgs": "nixpkgs",
-        "nolibgs_hello_worlds": "nolibgs_hello_worlds",
-        "pcsx-redux": "pcsx-redux",
-        "peter-lemon-test-roms": "peter-lemon-test-roms",
         "rust-overlay": "rust-overlay"
       }
     },

@@ -20,31 +20,6 @@
       url = "https://github.com/Abdess/retrobios/raw/refs/heads/main/bios/Sony/PlayStation/scph1001.bin";
       flake = false;
     };
-
-    peter-lemon-test-roms = {
-      url = "github:PeterLemon/PSX";
-      flake = false;
-    };
-
-    amidog-cpu-test-rom = {
-      url = "tarball+https://psx.amidog.se/lib/exe/fetch.php?media=psx:download:psxtest_cpu.zip";
-      flake = false;
-    };
-
-    amidog-cpx-test-rom = {
-      url = "tarball+https://psx.amidog.se/lib/exe/fetch.php?media=psx:download:psxtest_cpx.zip";
-      flake = false;
-    };
-
-    pcsx-redux = {
-      url = "git+https://github.com/nicolasnoble/pcsx-redux?submodules=1";
-      flake = false;
-    };
-
-    nolibgs_hello_worlds = {
-      url = "git+https://github.com/ABelliqueux/nolibgs_hello_worlds?submodules=1";
-      flake = false;
-    };
   };
 
   outputs =

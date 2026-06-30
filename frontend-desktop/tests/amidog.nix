@@ -4,6 +4,18 @@
   perSystem =
     { pkgs, self', ... }:
     let
+      test-rom-cpu = pkgs.fetchzip {
+        url = "https://psx.amidog.se/lib/exe/fetch.php?media=psx:download:psxtest_cpu.zip";
+        hash = "sha256-GRDi0PQyliMEvsxfwmtQDW4Hh6EHpSc7CCoozCBM2xA=";
+        stripRoot = false;
+      };
+
+      test-rom-cpx = pkgs.fetchzip {
+        url = "https://psx.amidog.se/lib/exe/fetch.php?media=psx:download:psxtest_cpx.zip";
+        hash = "sha256-QgYKuo812yLyZvJ1GFTn5Je7EMUIqyLZ572HJv/fMa4=";
+        stripRoot = false;
+      };
+
       test-suite =
         rom:
         pkgs.writeShellApplication {
@@ -20,8 +32,8 @@
     in
     {
       legacyPackages.amidog-tests = pkgs.lib.makeScope pkgs.newScope (_: {
-        cpu = test-suite "${inputs.amidog-cpu-test-rom}/psxtest_cpu.exe";
-        cpx = test-suite "${inputs.amidog-cpx-test-rom}/psxtest_cpx.exe";
+        cpu = test-suite "${test-rom-cpu}/psxtest_cpu.exe";
+        cpx = test-suite "${test-rom-cpx}/psxtest_cpx.exe";
       });
     };
 }

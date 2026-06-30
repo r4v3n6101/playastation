@@ -21,7 +21,13 @@
         mipselPkgs.stdenv.mkDerivation {
           name = "pcsx-redux-test-rom";
 
-          src = inputs.pcsx-redux;
+          src = pkgs.fetchFromGitHub {
+            owner = "nicolasnoble";
+            repo = "pcsx-redux";
+            rev = "221e96bdbd9bf52e7af631864aa22b9b0513581e";
+            fetchSubmodules = true;
+            hash = "sha256-hVc2jH8Nr8iA7PPm5c6t7DSVSJKRt2cr48uiYiUtpBI=";
+          };
 
           buildPhase = ''
             runHook preBuild
