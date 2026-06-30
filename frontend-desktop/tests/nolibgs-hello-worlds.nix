@@ -133,7 +133,7 @@
           runtimeInputs = [ self'.packages.frontend-desktop ];
 
           text = ''
-            frontend-desktop \
+            playastation-desktop \
               --bios "${inputs.bios}" \
               --rom "${test-artifact "${dir}" [ "${dir}.ps-exe" ]}/${dir}.ps-exe"
           '';

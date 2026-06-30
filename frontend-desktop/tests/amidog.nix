@@ -12,7 +12,7 @@
           runtimeInputs = [ self'.packages.frontend-desktop ];
 
           text = ''
-            frontend-desktop \
+            playastation-desktop \
               --bios "${inputs.bios}" \
               --rom "${rom}"
           '';

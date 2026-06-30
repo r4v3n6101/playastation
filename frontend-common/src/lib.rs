@@ -46,7 +46,7 @@ impl<H> App<H> {
     pub fn new(host: H) -> Self {
         Self {
             host,
-            draw_debug_windows: true,
+            draw_debug_windows: false,
             latest_data: None,
             texture: None,
         }

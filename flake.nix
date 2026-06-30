@@ -59,6 +59,7 @@
         (inputs.import-tree [
           ./rust.nix
           ./frontend-desktop
+          ./frontend-web
         ])
       ];
     };

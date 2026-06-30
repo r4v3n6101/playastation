@@ -12,7 +12,7 @@
 
           text = ''
             while IFS= read -r -d "" exe; do
-              frontend-desktop \
+              playastation-desktop \
                 --bios "${inputs.bios}" \
                 --rom "$exe"
             done < <(find "${inputs.peter-lemon-test-roms}/${dir}" -type f \( -name '*.exe' -o -name '*.EXE' \) -print0)

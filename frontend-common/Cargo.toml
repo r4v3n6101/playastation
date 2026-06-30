@@ -5,12 +5,5 @@ edition.workspace = true
 
 [dependencies]
 playastation = { path = "../core" }
-eframe = { version = "0.35.0", default-features = false }
-egui = { version = "0.35.0" }
-
-[features]
-default = []
-web = [
-  "eframe/glow",
-  "eframe/default_fonts",
-]
+eframe = "0.35.0"
+egui = "0.35.0"
