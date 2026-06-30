@@ -9,10 +9,10 @@
         pkgs.writeShellApplication {
           name = "amidog-tests";
 
-          runtimeInputs = [ self'.packages.test-rom-runner ];
+          runtimeInputs = [ self'.packages.frontend-desktop ];
 
           text = ''
-            test-rom-runner \
+            frontend-desktop \
               --bios "${inputs.bios}" \
               --rom "${rom}"
           '';

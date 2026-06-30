@@ -1,5 +1,5 @@
 [package]
-name = "playastation-frontend-desktop"
+name = "playastation-desktop"
 version.workspace = true
 edition.workspace = true
 

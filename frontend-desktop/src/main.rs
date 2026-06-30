@@ -129,7 +129,7 @@ fn spawn_emulator_thread(
             scaler.add_cycles(sys_cycles);
             scaler.wait();
 
-            if last_frame.elapsed() > Duration::from_secs(1) / 90 {
+            if last_frame.elapsed() > Duration::from_millis(5) {
                 data_tx.write(EmulatorData {
                     display_width: VRAM_WIDTH,
                     display_height: VRAM_HEIGHT,

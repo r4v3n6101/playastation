@@ -10,9 +10,13 @@
 
     devShells.default = pkgs.mkShell {
       buildInputs = with pkgs; [
-        rust-bin.nightly.latest.default
+        (rust-bin.nightly.latest.default.override {
+          targets = [ "wasm32-unknown-unknown" ];
+        })
         cargo-show-asm
         samply
+        trunk
+        wasm-bindgen-cli
       ];
     };
   };

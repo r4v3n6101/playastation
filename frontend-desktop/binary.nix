@@ -19,7 +19,7 @@
       );
     in
     {
-      packages.test-rom-runner = craneLib.buildPackage rec {
+      packages.frontend-desktop = craneLib.buildPackage rec {
         inherit (craneLib.crateNameFromCargoToml { cargoToml = ./Cargo.toml; }) pname;
         inherit (craneLib.crateNameFromCargoToml { cargoToml = ../Cargo.toml; }) version;
 
@@ -40,10 +40,10 @@
         ];
 
         postInstall = ''
-          mv $out/bin/playastation-frontend-desktop $out/bin/test-rom-runner
+          mv $out/bin/playastation-desktop $out/bin/frontend-desktop
         ''
         + lib.optionalString pkgs.stdenv.isLinux ''
-          wrapProgram $out/bin/test-rom-runner \
+          wrapProgram $out/bin/frontend-desktop \
             --prefix LD_LIBRARY_PATH : ${winit-libs}
         '';
 

@@ -38,6 +38,7 @@ pub struct EmulatorData {
 pub struct App<H> {
     host: H,
     draw_debug_windows: bool,
+    latest_data: Option<EmulatorData>,
     texture: Option<egui::TextureHandle>,
 }
 
@@ -45,7 +46,8 @@ impl<H> App<H> {
     pub fn new(host: H) -> Self {
         Self {
             host,
-            draw_debug_windows: false,
+            draw_debug_windows: true,
+            latest_data: None,
             texture: None,
         }
     }
@@ -135,7 +137,11 @@ impl<H> App<H> {
             });
     }
 
-    fn draw_cdrom_debug(&mut self, ui: &egui::Ui, data: &EmulatorData) {
+    fn draw_cdrom_debug(&mut self, ui: &egui::Ui) {
+        let Some(data) = &self.latest_data else {
+            return;
+        };
+
         egui::Window::new("CD-ROM Debug").show(ui, |ui| {
             ui.heading("Registers");
             ui.separator();
@@ -155,7 +161,11 @@ impl<H> App<H> {
         });
     }
 
-    fn draw_gpu_debug(&mut self, ui: &egui::Ui, data: &EmulatorData) {
+    fn draw_gpu_debug(&mut self, ui: &egui::Ui) {
+        let Some(data) = &self.latest_data else {
+            return;
+        };
+
         egui::Window::new("GPU Debug").show(ui, |ui| {
             ui.heading("Registers");
             ui.separator();
@@ -169,7 +179,11 @@ impl<H> App<H> {
         });
     }
 
-    fn draw_joy_debug(&mut self, ui: &egui::Ui, data: &EmulatorData) {
+    fn draw_joy_debug(&mut self, ui: &egui::Ui) {
+        let Some(data) = &self.latest_data else {
+            return;
+        };
+
         egui::Window::new("Joy Bus Debug").show(ui, |ui| {
             ui.heading("Registers");
             ui.separator();
@@ -198,17 +212,17 @@ impl<H: EmulatorHost> eframe::App for App<H> {
         let input = self.read_input(ui);
         self.host.send_input(input);
 
-        let Some(data) = self.host.poll_data() else {
-            return;
-        };
+        if let Some(data) = self.host.poll_data() {
+            self.upload_frame(ui, &data);
+            self.latest_data = Some(data);
+        }
 
-        self.upload_frame(ui, &data);
         self.draw_display(ui);
 
         if self.draw_debug_windows {
-            self.draw_cdrom_debug(ui, &data);
-            self.draw_gpu_debug(ui, &data);
-            self.draw_joy_debug(ui, &data);
+            self.draw_cdrom_debug(ui);
+            self.draw_gpu_debug(ui);
+            self.draw_joy_debug(ui);
         }
 
         ui.request_repaint();

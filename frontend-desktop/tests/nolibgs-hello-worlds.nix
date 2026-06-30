@@ -130,10 +130,10 @@
         pkgs.writeShellApplication {
           name = "nolibgs-hello-rom-test";
 
-          runtimeInputs = [ self'.packages.test-rom-runner ];
+          runtimeInputs = [ self'.packages.frontend-desktop ];
 
           text = ''
-            test-rom-runner \
+            frontend-desktop \
               --bios "${inputs.bios}" \
               --rom "${test-artifact "${dir}" [ "${dir}.ps-exe" ]}/${dir}.ps-exe"
           '';

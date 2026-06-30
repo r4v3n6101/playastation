@@ -8,11 +8,11 @@
         pkgs.writeShellApplication {
           name = "peter-lemon-tests";
 
-          runtimeInputs = [ self'.packages.test-rom-runner ];
+          runtimeInputs = [ self'.packages.frontend-desktop ];
 
           text = ''
             while IFS= read -r -d "" exe; do
-              test-rom-runner \
+              frontend-desktop \
                 --bios "${inputs.bios}" \
                 --rom "$exe"
             done < <(find "${inputs.peter-lemon-test-roms}/${dir}" -type f \( -name '*.exe' -o -name '*.EXE' \) -print0)
