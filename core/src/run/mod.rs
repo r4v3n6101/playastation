@@ -28,7 +28,7 @@ pub struct Executor {
 }
 
 impl Executor {
-    pub fn run(&mut self) {
+    pub fn run(&mut self) -> u64 {
         // Cache fetch & decode of blocks
         let block = self
             .blk_cache
@@ -39,7 +39,7 @@ impl Executor {
 
         // Then devices on the bus are updated
         // TODO : more precise timings
-        self.bus.update(execution.cycles_elapsed, |paddr| {
+        let sys_cycles = self.bus.update(execution.cycles_elapsed, |paddr| {
             self.blk_cache.invalidate_page(paddr);
         });
 
@@ -86,6 +86,8 @@ impl Executor {
             self.handle_tty();
             self.handle_exe();
         }
+
+        sys_cycles
     }
 
     fn handle_exe(&mut self) {

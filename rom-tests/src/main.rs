@@ -11,7 +11,7 @@ use std::{
 use clap::Parser;
 use crossbeam_utils::atomic::AtomicCell;
 use playastation::{
-    VRAM_HEIGHT, VRAM_WIDTH,
+    CPU_FREQ, VRAM_HEIGHT, VRAM_WIDTH,
     devices::joy::{
         Slot,
         controller::{Button, DigitalController},
@@ -34,6 +34,8 @@ use winit::{
     keyboard::{KeyCode, PhysicalKey},
     window::{Window, WindowAttributes, WindowId},
 };
+
+mod time;
 
 const WIDTH: u32 = 1200;
 const HEIGHT: u32 = 800;
@@ -207,13 +209,15 @@ fn main() {
         executor.bus.bios.copy_from_slice(&bios);
 
         if let Some(rom_path) = &args.rom {
-            let rom = fs::read(rom_path).unwrap().into_boxed_slice();
-            executor.pending_exe = Some(BoxedExeFile::new(rom));
+            executor.pending_exe = Some(BoxedExeFile::new(
+                fs::read(rom_path).unwrap().into_boxed_slice(),
+            ));
         }
 
         if let Some(bin_path) = &args.bin {
-            let bin = fs::read(bin_path).unwrap();
-            executor.bus.cdrom.disc = Some(Box::new(BinFile { data: bin }));
+            executor.bus.cdrom.disc = Some(Box::new(BinFile {
+                data: fs::read(bin_path).unwrap(),
+            }));
         }
 
         executor.bus.gpu.renderer = Box::new(SoftwareRenderer::default());
@@ -225,10 +229,14 @@ fn main() {
         );
 
         let mut last_frame = Instant::now();
+        let mut scaler = time::Scaler::<CPU_FREQ>::default();
         loop {
-            executor.run();
+            let sys_cycles = executor.run();
 
-            if last_frame.elapsed() > Duration::from_secs(1) / 60 {
+            scaler.add_cycles(sys_cycles);
+            scaler.wait();
+
+            if last_frame.elapsed() > Duration::from_secs(1) / 30 {
                 img_tx
                     .input_buffer_publisher()
                     .copy_from_slice(executor.bus.gpu.renderer.framebuffer());
