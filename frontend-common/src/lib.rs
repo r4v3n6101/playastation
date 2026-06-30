@@ -1,3 +1,6 @@
+pub use eframe;
+pub use egui;
+
 use playastation::devices::{
     cdrom::{CdRomMode, CdRomStat, CdRomStatus},
     gpu::GpuStat,

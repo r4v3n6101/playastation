@@ -1,5 +1,5 @@
 use std::{
-    fs, hint,
+    fs,
     path::PathBuf,
     sync::Arc,
     thread,
@@ -21,12 +21,13 @@ use playastation::{
     render::software::SoftwareRenderer,
     run::Executor,
 };
+use playastation_frontend_common::{App, EmulatorData, EmulatorHost, InputState, eframe, egui};
 use triple_buffer::{Input, Output};
 
-use crate::app::{EmulatorData, EmulatorHost, InputState};
+mod time;
 
 #[derive(Parser)]
-pub struct Args {
+struct Args {
     #[arg(long)]
     bios: PathBuf,
     #[arg(long)]
@@ -35,32 +36,9 @@ pub struct Args {
     bin: Option<PathBuf>,
 }
 
-pub struct TimeScaler<const GUEST_FREQ: u64> {
-    started_at: Instant,
-    emulated_cycles: u64,
-}
-
-pub struct Host {
+struct Host {
     button_state: Arc<AtomicCell<Button>>,
     data_rx: Output<EmulatorData>,
-}
-
-impl<const GUEST_FREQ: u64> Default for TimeScaler<GUEST_FREQ> {
-    fn default() -> Self {
-        Self {
-            started_at: Instant::now(),
-            emulated_cycles: 0,
-        }
-    }
-}
-
-impl Host {
-    pub fn new(button_state: Arc<AtomicCell<Button>>, data_rx: Output<EmulatorData>) -> Self {
-        Self {
-            button_state,
-            data_rx,
-        }
-    }
 }
 
 impl EmulatorHost for Host {
@@ -77,50 +55,39 @@ impl EmulatorHost for Host {
     }
 }
 
-impl<const GUEST_FREQ: u64> TimeScaler<GUEST_FREQ> {
-    pub fn emu_elapsed(&self) -> Duration {
-        Duration::from_secs_f64(self.emulated_cycles as f64 / GUEST_FREQ as f64)
-    }
+fn main() -> eframe::Result<()> {
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .with_target(true)
+        .with_level(true)
+        .compact()
+        .init();
 
-    pub fn host_elapsed(&self) -> Duration {
-        self.started_at.elapsed()
-    }
+    let args = Args::parse();
 
-    pub fn ahead_by(&self) -> Option<Duration> {
-        self.emu_elapsed().checked_sub(self.host_elapsed())
-    }
+    let (data_tx, data_rx) = triple_buffer::triple_buffer(&EmulatorData::default());
+    let button_state = Arc::new(AtomicCell::new(Button::empty()));
 
-    pub fn add_cycles(&mut self, cycles: u64) {
-        self.emulated_cycles = self.emulated_cycles.saturating_add(cycles);
-    }
+    spawn_emulator_thread(args, Arc::clone(&button_state), data_tx);
 
-    pub fn wait(&mut self) {
-        const SLEEP_THRESHOLD: Duration = Duration::from_millis(3);
-        const SLEEP_MARGIN: Duration = Duration::from_millis(1);
-        const YIELD_THRESHOLD: Duration = Duration::from_micros(300);
-
-        if let Some(ahead) = self.ahead_by()
-            && ahead < SLEEP_THRESHOLD
-        {
-            return;
-        }
-
-        while let Some(ahead) = self.ahead_by() {
-            if ahead > SLEEP_THRESHOLD {
-                thread::sleep(ahead - SLEEP_MARGIN);
-            } else if ahead > YIELD_THRESHOLD {
-                thread::yield_now();
-            } else {
-                hint::spin_loop();
-            }
-        }
-
-        self.started_at = Instant::now();
-        self.emulated_cycles = 0;
-    }
+    eframe::run_native(
+        "PlayaStation",
+        eframe::NativeOptions {
+            viewport: egui::ViewportBuilder::default()
+                .with_title("PlayaStation")
+                .with_inner_size([1200.0, 800.0]),
+            ..Default::default()
+        },
+        Box::new(move |_cc| {
+            Ok(Box::new(App::new(Host {
+                button_state,
+                data_rx,
+            })))
+        }),
+    )
 }
 
-pub fn spawn_emulator_thread(
+fn spawn_emulator_thread(
     args: Args,
     button_state: Arc<AtomicCell<Button>>,
     mut data_tx: Input<EmulatorData>,
@@ -154,7 +121,7 @@ pub fn spawn_emulator_thread(
             }))),
         );
 
-        let mut scaler = TimeScaler::<CPU_FREQ>::default();
+        let mut scaler = time::Scaler::<CPU_FREQ>::default();
         let mut last_frame = Instant::now();
         loop {
             let sys_cycles = executor.run();

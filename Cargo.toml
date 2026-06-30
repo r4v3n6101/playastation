@@ -3,7 +3,11 @@ version = "0.1.0"
 edition = "2024"
 
 [workspace]
-members = [ "./core", "./rom-tests" ]
+members = [
+    "./core",
+    "./frontend-common",
+    "./frontend-desktop"
+]
 resolver = "2"
 
 [profile.profiling]

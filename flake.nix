@@ -58,7 +58,7 @@
       imports = [
         (inputs.import-tree [
           ./rust.nix
-          ./rom-tests
+          ./frontend-desktop
         ])
       ];
     };

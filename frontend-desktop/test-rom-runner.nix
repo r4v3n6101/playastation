@@ -29,7 +29,8 @@
             ../Cargo.toml
             ../Cargo.lock
             (craneLib.fileset.commonCargoSources ../core)
-            (craneLib.fileset.commonCargoSources ../rom-tests)
+            (craneLib.fileset.commonCargoSources ../frontend-common)
+            (craneLib.fileset.commonCargoSources ../frontend-desktop)
           ];
         };
         strictDeps = true;
@@ -38,7 +39,10 @@
           makeWrapper
         ];
 
-        postInstall = lib.optionalString pkgs.stdenv.isLinux ''
+        postInstall = ''
+          mv $out/bin/playastation-frontend-desktop $out/bin/test-rom-runner
+        ''
+        + lib.optionalString pkgs.stdenv.isLinux ''
           wrapProgram $out/bin/test-rom-runner \
             --prefix LD_LIBRARY_PATH : ${winit-libs}
         '';
