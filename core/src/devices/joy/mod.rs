@@ -42,7 +42,7 @@ pub enum Slot {
 }
 
 #[bitfield(bits = 32)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct JoyStat {
     pub tx_ready: bool,
     pub rx_not_empty: bool,

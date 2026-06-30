@@ -23,7 +23,7 @@ use playastation::{
 };
 use triple_buffer::{Input, Output};
 
-use crate::app::{Cdrom, Display, EmulatorData, EmulatorHost, InputState};
+use crate::app::{EmulatorData, EmulatorHost, InputState};
 
 #[derive(Parser)]
 pub struct Args {
@@ -164,16 +164,20 @@ pub fn spawn_emulator_thread(
 
             if last_frame.elapsed() > Duration::from_secs(1) / 90 {
                 data_tx.write(EmulatorData {
-                    display: Display {
-                        width: VRAM_WIDTH,
-                        height: VRAM_HEIGHT,
-                        pixels: executor.bus.gpu.renderer.framebuffer().to_vec(),
-                    },
-                    cdrom: Cdrom {
-                        status: executor.bus.cdrom.status,
-                        mode: executor.bus.cdrom.mode,
-                        stat: executor.bus.cdrom.stat(),
-                    },
+                    display_width: VRAM_WIDTH,
+                    display_height: VRAM_HEIGHT,
+                    display_pixels: executor.bus.gpu.renderer.framebuffer().to_vec(),
+
+                    cdrom_status: executor.bus.cdrom.status,
+                    cdrom_mode: executor.bus.cdrom.mode,
+                    cdrom_stat: executor.bus.cdrom.stat(),
+
+                    gpu_stat: executor.bus.gpu.stat(),
+
+                    joy_baud: executor.bus.joy_bus.baud,
+                    joy_mode: executor.bus.joy_bus.mode,
+                    joy_ctrl: executor.bus.joy_bus.ctrl,
+                    joy_stat: executor.bus.joy_bus.stat(),
                 });
                 last_frame = Instant::now();
             }

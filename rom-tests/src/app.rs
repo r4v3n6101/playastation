@@ -1,6 +1,7 @@
 use playastation::devices::{
     cdrom::{CdRomMode, CdRomStat, CdRomStatus},
-    joy::controller::Button,
+    gpu::GpuStat,
+    joy::{JoyCtrl, JoyMode, JoyStat, controller::Button},
 };
 
 pub trait EmulatorHost {
@@ -15,52 +16,49 @@ pub struct InputState {
 
 #[derive(Default, Clone)]
 pub struct EmulatorData {
-    pub display: Display,
-    pub cdrom: Cdrom,
-}
+    pub display_width: usize,
+    pub display_height: usize,
+    pub display_pixels: Vec<u16>,
 
-#[derive(Default, Clone)]
-pub struct Display {
-    pub width: usize,
-    pub height: usize,
-    pub pixels: Vec<u16>,
-}
+    pub cdrom_status: CdRomStatus,
+    pub cdrom_mode: CdRomMode,
+    pub cdrom_stat: CdRomStat,
 
-#[derive(Default, Clone)]
-pub struct Cdrom {
-    pub status: CdRomStatus,
-    pub mode: CdRomMode,
-    pub stat: CdRomStat,
+    pub gpu_stat: GpuStat,
+
+    pub joy_baud: u16,
+    pub joy_mode: JoyMode,
+    pub joy_ctrl: JoyCtrl,
+    pub joy_stat: JoyStat,
 }
 
 pub struct App<H> {
     host: H,
+    draw_debug_windows: bool,
     texture: Option<egui::TextureHandle>,
-    show_cdrom_debug: bool,
 }
 
 impl<H> App<H> {
     pub fn new(host: H) -> Self {
         Self {
             host,
+            draw_debug_windows: false,
             texture: None,
-            show_cdrom_debug: true,
         }
     }
 
     fn upload_frame(&mut self, ui: &egui::Ui, data: &EmulatorData) {
-        if data.display.width == 0 || data.display.height == 0 {
+        if data.display_width == 0 || data.display_height == 0 {
             return;
         }
 
-        if data.display.pixels.len() != data.display.width * data.display.height {
+        if data.display_pixels.len() != data.display_width * data.display_height {
             return;
         }
 
         let image = egui::ColorImage::new(
-            [data.display.width, data.display.height],
-            data.display
-                .pixels
+            [data.display_width, data.display_height],
+            data.display_pixels
                 .iter()
                 .copied()
                 .map(bgr555_to_color32)
@@ -78,6 +76,48 @@ impl<H> App<H> {
         }
     }
 
+    fn read_input(&mut self, ui: &egui::Ui) -> InputState {
+        ui.input(|input| {
+            let mut buttons = Button::empty();
+
+            if input.key_down(egui::Key::W) {
+                buttons |= Button::UP;
+            }
+            if input.key_down(egui::Key::A) {
+                buttons |= Button::LEFT;
+            }
+            if input.key_down(egui::Key::S) {
+                buttons |= Button::DOWN;
+            }
+            if input.key_down(egui::Key::D) {
+                buttons |= Button::RIGHT;
+            }
+
+            if input.key_down(egui::Key::H) {
+                buttons |= Button::SQUARE;
+            }
+            if input.key_down(egui::Key::J) {
+                buttons |= Button::CROSS;
+            }
+            if input.key_down(egui::Key::K) {
+                buttons |= Button::CIRCLE;
+            }
+            if input.key_down(egui::Key::L) {
+                buttons |= Button::TRIANGLE;
+            }
+
+            if input.key_pressed(egui::Key::Enter) {
+                buttons |= Button::START;
+            }
+
+            if input.key_pressed(egui::Key::Z) {
+                self.draw_debug_windows = !self.draw_debug_windows;
+            }
+
+            InputState { buttons }
+        })
+    }
+
     fn draw_display(&mut self, ui: &mut egui::Ui) {
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
@@ -93,87 +133,83 @@ impl<H> App<H> {
     }
 
     fn draw_cdrom_debug(&mut self, ui: &egui::Ui, data: &EmulatorData) {
-        egui::Window::new("CD-ROM Debug")
-            .open(&mut self.show_cdrom_debug)
-            .default_width(360.0)
-            .show(ui, |ui| {
-                ui.heading("CD-ROM");
+        egui::Window::new("CD-ROM Debug").show(ui, |ui| {
+            ui.heading("Registers");
+            ui.separator();
+            egui::Grid::new("cdrom_debug_grid")
+                .num_columns(2)
+                .show(ui, |ui| {
+                    ui.label("Status");
+                    ui.monospace(format!("{:#?}", data.cdrom_status));
+                    ui.end_row();
+                    ui.label("Mode");
+                    ui.monospace(format!("{:#?}", data.cdrom_mode));
+                    ui.end_row();
+                    ui.label("Stat");
+                    ui.monospace(format!("{:#?}", data.cdrom_stat));
+                    ui.end_row();
+                });
+        });
+    }
 
-                ui.separator();
+    fn draw_gpu_debug(&mut self, ui: &egui::Ui, data: &EmulatorData) {
+        egui::Window::new("GPU Debug").show(ui, |ui| {
+            ui.heading("Registers");
+            ui.separator();
+            egui::Grid::new("gpu_debug_grid")
+                .num_columns(2)
+                .show(ui, |ui| {
+                    ui.label("Stat");
+                    ui.monospace(format!("{:#?}", data.gpu_stat));
+                    ui.end_row();
+                });
+        });
+    }
 
-                egui::Grid::new("cdrom_debug_grid")
-                    .num_columns(2)
-                    .spacing([16.0, 6.0])
-                    .striped(true)
-                    .show(ui, |ui| {
-                        ui.label("Status");
-                        ui.monospace(format!("{:#?}", data.cdrom.status));
-                        ui.end_row();
-                        ui.label("Mode");
-                        ui.monospace(format!("{:#?}", data.cdrom.mode));
-                        ui.end_row();
-                        ui.label("Stat");
-                        ui.monospace(format!("{:#?}", data.cdrom.stat));
-                        ui.end_row();
-                    });
-            });
+    fn draw_joy_debug(&mut self, ui: &egui::Ui, data: &EmulatorData) {
+        egui::Window::new("Joy Bus Debug").show(ui, |ui| {
+            ui.heading("Registers");
+            ui.separator();
+            egui::Grid::new("joy_debug_grid")
+                .num_columns(2)
+                .show(ui, |ui| {
+                    ui.label("Baud");
+                    ui.monospace(format!("{}", data.joy_baud));
+                    ui.end_row();
+                    ui.label("Mode");
+                    ui.monospace(format!("{:#?}", data.joy_mode));
+                    ui.end_row();
+                    ui.label("Ctrl");
+                    ui.monospace(format!("{:#?}", data.joy_ctrl));
+                    ui.end_row();
+                    ui.label("Stat");
+                    ui.monospace(format!("{:#?}", data.joy_stat));
+                    ui.end_row();
+                });
+        });
     }
 }
 
 impl<H: EmulatorHost> eframe::App for App<H> {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.host.send_input(read_input(ui));
+        let input = self.read_input(ui);
+        self.host.send_input(input);
 
         let Some(data) = self.host.poll_data() else {
             return;
         };
-        self.upload_frame(ui, &data);
 
+        self.upload_frame(ui, &data);
         self.draw_display(ui);
-        if self.show_cdrom_debug {
+
+        if self.draw_debug_windows {
             self.draw_cdrom_debug(ui, &data);
+            self.draw_gpu_debug(ui, &data);
+            self.draw_joy_debug(ui, &data);
         }
 
         ui.request_repaint();
     }
-}
-
-fn read_input(ui: &egui::Ui) -> InputState {
-    ui.input(|input| {
-        let mut buttons = Button::empty();
-
-        if input.key_down(egui::Key::W) {
-            buttons |= Button::UP;
-        }
-        if input.key_down(egui::Key::A) {
-            buttons |= Button::LEFT;
-        }
-        if input.key_down(egui::Key::S) {
-            buttons |= Button::DOWN;
-        }
-        if input.key_down(egui::Key::D) {
-            buttons |= Button::RIGHT;
-        }
-
-        if input.key_down(egui::Key::H) {
-            buttons |= Button::SQUARE;
-        }
-        if input.key_down(egui::Key::J) {
-            buttons |= Button::CROSS;
-        }
-        if input.key_down(egui::Key::K) {
-            buttons |= Button::CIRCLE;
-        }
-        if input.key_down(egui::Key::L) {
-            buttons |= Button::TRIANGLE;
-        }
-
-        if input.key_down(egui::Key::Enter) {
-            buttons |= Button::START;
-        }
-
-        InputState { buttons }
-    })
 }
 
 fn bgr555_to_color32(color: u16) -> egui::Color32 {

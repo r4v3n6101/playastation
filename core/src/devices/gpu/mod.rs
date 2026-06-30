@@ -55,7 +55,7 @@ pub struct Gpu {
 }
 
 #[bitfield(bits = 32)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct GpuStat {
     pub texture_page_x_base: B4,
     pub texture_page_y_base: B1,
