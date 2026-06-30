@@ -59,7 +59,7 @@ const CDROM_SEEK_DELAY: u64 = 0x30000;
 const CDROM_READ_PLAY_DELAY: u64 = 0x6e400 - 0x100;
 
 bitflags::bitflags! {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
     pub struct CdRomStatus: u8 {
         const ERROR      = 1 << 0;
         const MOTOR_ON   = 1 << 1;
@@ -73,7 +73,7 @@ bitflags::bitflags! {
 }
 
 bitflags::bitflags! {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
     pub struct CdRomMode: u8 {
         const CDDA         = 1 << 0;
         const AUTOPAUSE    = 1 << 1;
@@ -140,7 +140,7 @@ pub struct CdRom {
 }
 
 #[bitfield(bits = 8)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
 pub struct CdRomStat {
     /// Current register index.
     pub index: BankIndex,
