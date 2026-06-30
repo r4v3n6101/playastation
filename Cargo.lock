@@ -2622,6 +2622,7 @@ dependencies = [
  "playastation",
  "playastation-frontend-common",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "web-sys",
 ]
 

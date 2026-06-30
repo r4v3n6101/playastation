@@ -30,13 +30,16 @@ jobs:
       - name: Build frontend-web
         run: nix build .#frontend-web
 
-      - name: Add nojekyll
-        run: touch result/.nojekyll
+      - name: Prepare Pages artifact
+        run: |
+          mkdir -p public
+          cp -R result/. public/
+          touch public/.nojekyll
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: result
+          path: public
 
   deploy:
     environment:
