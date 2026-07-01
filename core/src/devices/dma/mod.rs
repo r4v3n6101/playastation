@@ -1,3 +1,4 @@
+use derive_more::Debug;
 use modular_bitfield::prelude::*;
 
 use crate::{devices::int::InterruptFlags, interconnect::Bus};
@@ -21,6 +22,7 @@ pub struct DmaController {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Channel {
     /// Memory address.
+    #[debug("{madr:#X}")]
     pub madr: u32,
     /// Block control.
     pub bcr: Bcr,

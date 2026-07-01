@@ -1,3 +1,5 @@
+use derive_more::Debug;
+
 use crate::interconnect::Bus;
 
 pub use cop0::{Cop0, Exception};
@@ -13,6 +15,7 @@ pub struct Cpu {
     /// General purpose registers.
     pub gpr: [u32; 32],
     /// Program counter.
+    #[debug("{pc:#X}")]
     pub pc: u32,
     /// High bits part for mul/div ops.
     pub hi: u32,
@@ -44,8 +47,10 @@ pub struct PendingJump {
     /// Whether to jump to target.
     pub cond: bool,
     /// Address to jump to if the branch is taken.
+    #[debug("{then:#X}")]
     pub then: u32,
     /// Address of instruction after delay slot (if no jump taken).
+    #[debug("{otherwise:#X}")]
     pub otherwise: u32,
 }
 

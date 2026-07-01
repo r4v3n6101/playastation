@@ -1,3 +1,4 @@
+use derive_more::Debug;
 use modular_bitfield::prelude::*;
 use strum::{EnumDiscriminants, IntoDiscriminant};
 
@@ -99,15 +100,15 @@ impl Cop0 {
     }
 
     /// Push IEc/KUc to IEp/KUp and IEp/KUp to IEo/KUo, then clear current mode
+    /// Jump target is set only if in branch delay slot
     #[inline(always)]
     pub(crate) fn exception_enter(
         &mut self,
         exception: Exception,
         fault_pc: u32,
-        in_delay_slot: bool,
-        jump_target: u32,
+        jump_target: Option<u32>,
     ) {
-        self.regs[Self::EPC_IDX] = if in_delay_slot {
+        self.regs[Self::EPC_IDX] = if jump_target.is_some() {
             fault_pc.wrapping_sub(4)
         } else {
             fault_pc
@@ -118,7 +119,7 @@ impl Cop0 {
         cause.set_ip(old.ip() & 0b0000_0011);
         cause.set_excode(exception.discriminant() as u8);
 
-        if in_delay_slot {
+        if let Some(jump_target) = jump_target {
             cause.set_bd(true);
             self.regs[Self::TAR_IDX] = jump_target;
         }

@@ -1,6 +1,7 @@
 use alloc::boxed::Box;
 use core::ops::Deref;
 
+use derive_more::Debug;
 use yoke::Yoke;
 use zerocopy::{SplitAt, TryFromBytes, little_endian::U32};
 use zerocopy_derive::{FromZeros, Immutable, KnownLayout};
@@ -21,24 +22,35 @@ pub struct ExeHeader {
     /// ASCII magic "PS-X EXE".
     pub magic: [u8; 16],
     /// Initial PC.
+    #[debug("{ipc:#X}")]
     pub ipc: U32,
     /// Initial GPR-28.
+    #[debug("{igp}")]
     pub igp: U32,
     /// Destination in RAM to load to.
+    #[debug("{ram_dest:#X}")]
     pub ram_dest: U32,
     /// File size aligned to 2KiB
+    #[debug("{file_size}")]
     pub file_size: U32,
+    #[debug(skip)]
     __unknown_20: U32,
+    #[debug(skip)]
     __unknown_24: U32,
     /// Memfill start address.
+    #[debug("{mem_fill_start:#X}")]
     pub mem_fill_start: U32,
     /// Memfill size.
+    #[debug("{mem_fill_size}")]
     pub mem_fill_size: U32,
     /// Initial GPR-29 aka SP.
+    #[debug("{ispb:#X}")]
     pub ispb: U32,
     /// Initial GPR-29 SP offset.
+    #[debug("{ispoff:#X}")]
     pub ispoff: U32,
     /// "Sony Computer Entertainment Inc." and so on.
+    #[debug(skip)]
     pub text: [u8; 1992],
 }
 

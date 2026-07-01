@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+derive_more = { version = "2.1.1", default-features = false, features = ["debug"] }
 tracing = { version = "0.1.44", default-features = false, features = ["attributes"] }
 
 strum = { version = "0.28.0", default-features = false, features = ["derive"] }

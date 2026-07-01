@@ -43,10 +43,9 @@ impl Executor {
             self.blk_cache.invalidate_page(paddr);
         });
 
-        let can_take_interrupt = self.cpu.pending_jump.is_none();
         self.cpu
             .cop0
-            .set_hw_irq(can_take_interrupt && self.bus.int_ctrl.pending());
+            .set_hw_irq(self.cpu.pending_jump.is_none() && self.bus.int_ctrl.pending());
         let interrupt = self
             .cpu
             .cop0
@@ -59,32 +58,18 @@ impl Executor {
         // Interrupt changes flow like it's an error occurred before the next op/or after delay slot.
         let execution = interrupt.unwrap_or(execution);
         if let Some(exception) = execution.exception {
-            // Reset jump and take values
-            let epc = self.cpu.pc;
-            let branch_delay = self.cpu.pending_jump.is_some();
-            let jump_target = self
-                .cpu
-                .pending_jump
-                .map(PendingJump::target)
-                .unwrap_or_default();
-
             // Commit pending load in a slow, but safe way
             // In case one of instruction executor will write a garbage
             let pending_load = mem::take(&mut self.cpu.pending_load);
             self.cpu.gpr[pending_load.dest as usize] = pending_load.value;
             self.cpu.gpr[0] = 0;
 
-            tracing::debug!(
-                ?exception,
-                epc=%format_args!("{:#X}", epc),
-                %branch_delay,
-                jump_target=%format_args!("{jump_target:#X}"),
-                "entering exception handler"
+            tracing::debug!(?exception, cpu=?self.cpu, "entering exception handler");
+            self.cpu.cop0.exception_enter(
+                exception,
+                self.cpu.pc,
+                self.cpu.pending_jump.map(PendingJump::target),
             );
-
-            self.cpu
-                .cop0
-                .exception_enter(exception, epc, branch_delay, jump_target);
             self.cpu.pc = self.cpu.cop0.exception_handler();
         } else {
             self.handle_tty();
@@ -98,7 +83,7 @@ impl Executor {
         if self.cpu.pc == 0x80030000
             && let Some(exe) = self.pending_exe.take()
         {
-            let ExeHeader {
+            let hdr @ ExeHeader {
                 ipc,
                 igp,
                 file_size,
@@ -134,16 +119,7 @@ impl Executor {
                 .take_while(|&c| c != 0)
                 .map(|c| c as char)
                 .collect::<String>();
-            tracing::info!(
-                initial_pc=%format_args!("{ipc:#X}"),
-                initial_gpr28=%format_args!("{igp:#X}"),
-                initial_sp_base=%format_args!("{ispb:#X}"),
-                initial_sp_offset=%format_args!("{ispoff:#X}"),
-                ram_dest=%format_args!("{ram_dest:#X}"),
-                file_size=%format_args!("{file_size:#X}",),
-                %text,
-                "PS-EXE loaded"
-            );
+            tracing::info!(?hdr, %text, "PS-EXE loaded");
         }
     }
 
