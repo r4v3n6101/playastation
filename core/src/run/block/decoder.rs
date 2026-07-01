@@ -12,7 +12,7 @@ pub fn fetch_and_decode_block(
     bus: &mut Bus,
 ) -> Vec<Result<Instruction, Exception>> {
     let mut pc = cpu.pc;
-    let mut pending_delay_slot = cpu.pending_jump.valid;
+    let mut pending_delay_slot = cpu.pending_jump.is_some();
 
     let mut output = Vec::new();
     for _ in 0..limit {

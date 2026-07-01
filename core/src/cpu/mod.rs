@@ -22,7 +22,7 @@ pub struct Cpu {
     /// Pending load from RAM (aka load-delay slot).
     pub pending_load: PendingLoad,
     /// Pending jump that occurs after branch-delay slot.
-    pub pending_jump: PendingJump,
+    pub pending_jump: Option<PendingJump>,
 
     /// MMU for address translating.
     pub mmu: Mmu,
@@ -41,8 +41,6 @@ pub struct PendingLoad {
 
 #[derive(Debug, Default, Copy, Clone)]
 pub struct PendingJump {
-    /// Whether branch/jump operation occurred.
-    pub valid: bool,
     /// Whether to jump to target.
     pub cond: bool,
     /// Address to jump to if the branch is taken.
@@ -61,7 +59,7 @@ impl Default for Cpu {
             lo: 0,
 
             pending_load: PendingLoad::default(),
-            pending_jump: PendingJump::default(),
+            pending_jump: None,
 
             mmu: Mmu,
 
@@ -71,7 +69,7 @@ impl Default for Cpu {
 }
 
 impl PendingJump {
-    pub fn target(&self) -> u32 {
+    pub fn target(self) -> u32 {
         if self.cond { self.then } else { self.otherwise }
     }
 }

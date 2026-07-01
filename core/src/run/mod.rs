@@ -2,7 +2,7 @@ use alloc::string::String;
 use core::mem;
 
 use crate::{
-    cpu::{Cpu, Exception},
+    cpu::{Cpu, Exception, PendingJump},
     formats::psexe::{BoxedExeFile, ExeHeader},
     interconnect::Bus,
 };
@@ -43,7 +43,7 @@ impl Executor {
             self.blk_cache.invalidate_page(paddr);
         });
 
-        let can_take_interrupt = !self.cpu.pending_jump.valid;
+        let can_take_interrupt = self.cpu.pending_jump.is_none();
         self.cpu
             .cop0
             .set_hw_irq(can_take_interrupt && self.bus.int_ctrl.pending());
@@ -61,8 +61,12 @@ impl Executor {
         if let Some(exception) = execution.exception {
             // Reset jump and take values
             let epc = self.cpu.pc;
-            let branch_delay = self.cpu.pending_jump.valid;
-            let jump_target = self.cpu.pending_jump.target();
+            let branch_delay = self.cpu.pending_jump.is_some();
+            let jump_target = self
+                .cpu
+                .pending_jump
+                .map(PendingJump::target)
+                .unwrap_or_default();
 
             // Commit pending load in a slow, but safe way
             // In case one of instruction executor will write a garbage
