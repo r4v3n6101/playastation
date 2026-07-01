@@ -1,10 +1,13 @@
 pub use eframe;
 pub use egui;
 
-use playastation::devices::{
-    cdrom::{CdRomMode, CdRomStat, CdRomStatus},
-    gpu::GpuStat,
-    joy::{JoyCtrl, JoyMode, JoyStat, controller::Button},
+use playastation::{
+    VRAM_HEIGHT, VRAM_WIDTH,
+    devices::{
+        cdrom::{CdRomMode, CdRomStat, CdRomStatus},
+        gpu::{Display, GpuStat, HorizontalResolution, VerticalResolution},
+        joy::{JoyCtrl, JoyMode, JoyStat, controller::Button},
+    },
 };
 
 pub trait EmulatorHost {
@@ -19,9 +22,9 @@ pub struct InputState {
 
 #[derive(Default, Clone)]
 pub struct EmulatorData {
-    pub display_width: usize,
-    pub display_height: usize,
-    pub display_pixels: Vec<u16>,
+    pub vram: Vec<u16>,
+    pub vram_start: (u16, u16),
+    pub display: Display,
 
     pub cdrom_status: CdRomStatus,
     pub cdrom_mode: CdRomMode,
@@ -37,46 +40,65 @@ pub struct EmulatorData {
 
 pub struct App<H> {
     host: H,
-    draw_debug_windows: bool,
     latest_data: Option<EmulatorData>,
-    texture: Option<egui::TextureHandle>,
+    display: Option<Textures>,
+
+    draw_debug_windows: bool,
+    draw_vram: bool,
+}
+
+struct Textures {
+    vram: egui::TextureHandle,
+    screen: egui::TextureHandle,
 }
 
 impl<H> App<H> {
     pub fn new(host: H) -> Self {
         Self {
             host,
-            draw_debug_windows: false,
             latest_data: None,
-            texture: None,
+            display: None,
+
+            draw_debug_windows: false,
+            draw_vram: false,
         }
     }
 
     fn upload_frame(&mut self, ui: &egui::Ui, data: &EmulatorData) {
-        if data.display_width == 0 || data.display_height == 0 {
+        let offset = [data.vram_start.0 as usize, data.vram_start.1 as usize];
+        let hres = match data.display.hres {
+            HorizontalResolution::H256 => 256,
+            HorizontalResolution::H320 => 320,
+            HorizontalResolution::H512 => 512,
+            HorizontalResolution::H640 => 640,
+        };
+        // TODO : this is inaccurate, because of interlace
+        // Normally I should follow vrange + 480i
+        let vres = match data.display.vres {
+            VerticalResolution::V240 => 240,
+            VerticalResolution::V480 => 480,
+        };
+
+        if offset[0] + hres >= VRAM_WIDTH || offset[1] + vres >= VRAM_HEIGHT {
             return;
         }
 
-        if data.display_pixels.len() != data.display_width * data.display_height {
-            return;
-        }
-
-        let image = egui::ColorImage::new(
-            [data.display_width, data.display_height],
-            data.display_pixels
-                .iter()
-                .copied()
-                .map(bgr555_to_color32)
-                .collect(),
+        let vram = egui::ColorImage::new(
+            [VRAM_WIDTH, VRAM_HEIGHT],
+            data.vram.iter().copied().map(bgr555_to_color32).collect(),
         );
+        let screen = vram.region_by_pixels(offset, [hres, vres]);
 
-        match &mut self.texture {
-            Some(texture) => {
-                texture.set(image, egui::TextureOptions::LINEAR);
+        match &mut self.display {
+            Some(display) => {
+                display.vram.set(vram, egui::TextureOptions::NEAREST);
+                display.screen.set(screen, egui::TextureOptions::NEAREST);
             }
             None => {
-                self.texture =
-                    Some(ui.load_texture("framebuffer", image, egui::TextureOptions::LINEAR));
+                self.display = Some(Textures {
+                    vram: ui.load_texture("vram", vram, egui::TextureOptions::NEAREST),
+                    screen: ui.load_texture("screen", screen, egui::TextureOptions::NEAREST),
+                });
             }
         }
     }
@@ -119,6 +141,10 @@ impl<H> App<H> {
                 self.draw_debug_windows = !self.draw_debug_windows;
             }
 
+            if input.key_pressed(egui::Key::V) {
+                self.draw_vram = !self.draw_vram;
+            }
+
             InputState { buttons }
         })
     }
@@ -127,8 +153,15 @@ impl<H> App<H> {
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
             .show(ui, |ui| {
-                if let Some(texture) = &self.texture {
-                    ui.image((texture.id(), ui.available_size()));
+                if let Some(Textures { vram, screen }) = &self.display {
+                    ui.image((
+                        if self.draw_vram {
+                            vram.id()
+                        } else {
+                            screen.id()
+                        },
+                        ui.available_size(),
+                    ));
                 } else {
                     ui.centered_and_justified(|ui| {
                         ui.label("waiting for the first frame");

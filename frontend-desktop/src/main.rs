@@ -131,9 +131,9 @@ fn spawn_emulator_thread(
 
             if last_frame.elapsed() > Duration::from_millis(5) {
                 data_tx.write(EmulatorData {
-                    display_width: VRAM_WIDTH,
-                    display_height: VRAM_HEIGHT,
-                    display_pixels: executor.bus.gpu.renderer.framebuffer().to_vec(),
+                    vram: executor.bus.gpu.renderer.framebuffer().to_vec(),
+                    vram_start: executor.bus.gpu.vram_start,
+                    display: executor.bus.gpu.display,
 
                     cdrom_status: executor.bus.cdrom.status,
                     cdrom_mode: executor.bus.cdrom.mode,

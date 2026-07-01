@@ -20,16 +20,16 @@ mod clock;
 mod gp0;
 mod gp1;
 
-#[derive(Default)]
-struct Display {
-    hres: HorizontalResolution,
-    vres: VerticalResolution,
-    vmode: VideoMode,
-    depth: DisplayDepth,
-    interlaced: bool,
-    special_368_hres: bool,
-    reversed: bool,
-    enabled: bool,
+#[derive(Default, Clone, Copy)]
+pub struct Display {
+    pub hres: HorizontalResolution,
+    pub vres: VerticalResolution,
+    pub vmode: VideoMode,
+    pub depth: DisplayDepth,
+    pub interlaced: bool,
+    pub special_368_hres: bool,
+    pub reversed: bool,
+    pub enabled: bool,
 }
 
 pub struct Gpu {
@@ -41,6 +41,7 @@ pub struct Gpu {
     pub hrange: (u16, u16),
     /// Same as above, but vertical.
     pub vrange: (u16, u16),
+    pub display: Display,
 
     // Inner modules
     clock: clock::State,
@@ -49,7 +50,6 @@ pub struct Gpu {
     // GPU state itself
     draw_odd_even_frame: bool,
     dma_direction: DmaDirection,
-    display: Display,
 
     int_flag: bool,
 }
@@ -135,13 +135,13 @@ impl Default for Gpu {
             vram_start: (0, 0),
             hrange: (0, 0),
             vrange: (0, 0),
+            display: Display::default(),
 
             clock: clock::State::default(),
             cmdbuf: gp0::CmdBuf::default(),
 
             draw_odd_even_frame: false,
             dma_direction: DmaDirection::default(),
-            display: Display::default(),
 
             int_flag: false,
         }

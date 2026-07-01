@@ -33,9 +33,7 @@ impl EmulatorHost for Host {
         }
 
         Some(EmulatorData {
-            display_width: WIDTH,
-            display_height: HEIGHT,
-            display_pixels: pixels,
+            vram: pixels,
 
             ..Default::default()
         })
