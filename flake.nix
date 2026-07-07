@@ -33,6 +33,7 @@
       imports = [
         (inputs.import-tree [
           ./rust.nix
+          ./core
           ./frontend-desktop
           ./frontend-web
         ])
