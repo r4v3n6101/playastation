@@ -1,11 +1,11 @@
-use smallbox::{SmallBox, space::S1};
+use smallbox::{SmallBox, space::S4};
 
 use super::{
     CDROM_SECOND_DELAY, CDROM_SEEK_DELAY, CdRom, CdRomMode, CdRomStatus, ErrorCode, IrqFlag,
     bin_to_bcd,
 };
 
-pub type BoxedTask = SmallBox<dyn Task, S1>;
+pub type BoxedTask = SmallBox<dyn Task, S4>;
 
 pub trait Task {
     fn busy_flag(&self) -> bool;
