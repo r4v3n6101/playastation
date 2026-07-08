@@ -2632,7 +2632,6 @@ dependencies = [
  "hashbrown 0.17.1",
  "mheap",
  "modular-bitfield",
- "slotmap",
  "smallbox",
  "smallvec",
  "strum",
