@@ -7,6 +7,7 @@ use crate::{
         Mmio, cdrom::CdRom, dma::DmaController, gpu::Gpu, int::InterruptController, joy::JoyBus,
         timer::TimerController,
     },
+    scheduler::{Cycle, EventKind},
 };
 
 /// RAM takes 8MiB, but 3 others are mirrors to the first 2MiB
@@ -79,6 +80,12 @@ impl Default for Bus {
 }
 
 impl Bus {
+    #[inline(never)]
+    pub(crate) fn handle_event(&mut self, _event: EventKind) {}
+
+    #[inline(never)]
+    pub(crate) fn update_until(&mut self, _now: Cycle) {}
+
     #[inline(never)]
     pub(crate) fn update(&mut self, cpu_cycles: u64, ram_touched: impl FnMut(u32)) -> u64 {
         let dma_cycles = DmaController::run(self, ram_touched);

@@ -2,12 +2,13 @@ use core::mem;
 
 use crate::{
     cpu::{Cop0, Cpu, Exception, Instruction, PendingJump, PendingLoad, TranslationResult},
-    interconnect::{Bus, Region, region_of},
+    interconnect::Bus,
 };
 
 use super::{
-    ExecutionResult,
-    block::{Block, PagedCache},
+    ExecutionResult, StopReason,
+    cache::{CodeBlock, CodeBlockHandle, CodeCache},
+    decoder,
 };
 
 const MULT_LATENCY: u64 = 10;
@@ -15,13 +16,13 @@ const DIV_LATENCY: u64 = 35;
 const LOAD_LATENCY: u64 = 3;
 const STORE_LATENCY: u64 = 2;
 
+const BLOCK_DECODER_LIMIT: usize = 1024;
+
 struct Context<'a> {
+    result: &'a mut ExecutionResult,
     cpu: &'a mut Cpu,
     bus: &'a mut Bus,
-    cache: &'a mut PagedCache,
-    block: &'a Block,
-
-    result: ExecutionResult,
+    cache: &'a mut CodeCache,
 }
 
 enum BreakReason {
@@ -30,59 +31,139 @@ enum BreakReason {
     EarlyExit,
 }
 
-#[inline(never)]
-pub fn run(cache: &mut PagedCache, block: &Block, cpu: &mut Cpu, bus: &mut Bus) -> ExecutionResult {
-    let mut ctx = Context {
-        result: ExecutionResult {
-            cycles_elapsed: 0,
-            exception: None,
-        },
+trait MemAccessObserver {
+    fn on_mem_store(&self, ctx: &mut Context, vaddr: u32) -> bool;
+}
 
+#[inline(never)]
+pub fn run_single(
+    result: &mut ExecutionResult,
+    cpu: &mut Cpu,
+    bus: &mut Bus,
+    cache: &mut CodeCache,
+) {
+    struct Observer;
+
+    impl MemAccessObserver for Observer {
+        fn on_mem_store(&self, ctx: &mut Context, vaddr: u32) -> bool {
+            if let TranslationResult::PhysAddr(paddr) = ctx.cpu.mmu.translate_addr(vaddr) {
+                ctx.cache.invalidate_addr(paddr);
+            }
+
+            false
+        }
+    }
+
+    let mut ctx = Context {
+        result,
         cpu,
         bus,
         cache,
-        block,
     };
 
-    for ins in &block.ops {
-        match *ins {
-            Ok(ins) => {
-                let res = execute(&mut ctx, ins);
-                ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(1);
+    let decoded = decoder::fetch_and_decode_single(ctx.cpu, ctx.bus);
+    let _ = step_decoded(&mut ctx, Observer, decoded);
+}
 
-                match res {
-                    Ok(()) => {}
-                    Err(BreakReason::EarlyExit) => {
-                        ctx.cpu.pc = ctx.cpu.pc.wrapping_add(4);
-                        break;
-                    }
-                    Err(BreakReason::ControlFlow(next_pc)) => {
-                        ctx.cpu.pc = next_pc;
-                        break;
-                    }
-                    Err(BreakReason::Exception(exc)) => {
-                        ctx.result.exception.replace(exc);
-                        break;
-                    }
-                }
-            }
-            Err(cause) => {
-                ctx.result.exception.replace(cause);
-
-                // Cycles
-                ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(1);
-
-                break;
-            }
-        }
-        ctx.cpu.pc = ctx.cpu.pc.wrapping_add(4);
+#[inline(never)]
+pub fn run_block(
+    result: &mut ExecutionResult,
+    cpu: &mut Cpu,
+    bus: &mut Bus,
+    cache: &mut CodeCache,
+) {
+    struct Observer<'a> {
+        block: &'a CodeBlockHandle,
     }
 
-    ctx.result
+    impl MemAccessObserver for Observer<'_> {
+        fn on_mem_store(&self, ctx: &mut Context, vaddr: u32) -> bool {
+            if let TranslationResult::PhysAddr(paddr) = ctx.cpu.mmu.translate_addr(vaddr)
+                && ctx.cache.invalidate_block(paddr, self.block)
+            {
+                return true;
+            }
+
+            false
+        }
+    }
+
+    let mut ctx = Context {
+        result,
+        cpu,
+        bus,
+        cache,
+    };
+
+    let handle = match ctx.cache.get(ctx.cpu) {
+        Some(handle) => handle,
+        None => {
+            if let TranslationResult::PhysAddr(paddr) = ctx.cpu.mmu.translate_addr(ctx.cpu.pc) {
+                ctx.cache.insert(
+                    paddr,
+                    CodeBlock {
+                        ops: decoder::fetch_and_decode_block(BLOCK_DECODER_LIMIT, ctx.cpu, ctx.bus),
+                    },
+                )
+            } else {
+                panic!("non-executable memory")
+            }
+        }
+    };
+
+    for decoded in &handle.ops {
+        let success = step_decoded(&mut ctx, Observer { block: &handle }, *decoded);
+
+        if !success {
+            break;
+        }
+    }
 }
 
 #[inline]
-fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
+fn step_decoded(
+    ctx: &mut Context,
+    observer: impl MemAccessObserver,
+    op: Result<Instruction, Exception>,
+) -> bool {
+    match op {
+        Ok(ins) => {
+            let res = execute(ctx, observer, ins);
+            ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(1);
+
+            match res {
+                Ok(()) => {
+                    ctx.cpu.pc = ctx.cpu.pc.wrapping_add(4);
+                    true
+                }
+                Err(BreakReason::EarlyExit) => {
+                    ctx.cpu.pc = ctx.cpu.pc.wrapping_add(4);
+                    false
+                }
+                Err(BreakReason::ControlFlow(next_pc)) => {
+                    ctx.cpu.pc = next_pc;
+                    false
+                }
+                Err(BreakReason::Exception(exc)) => {
+                    ctx.result.stop_reason = StopReason::Exception(exc);
+                    false
+                }
+            }
+        }
+        Err(cause) => {
+            ctx.result.stop_reason = StopReason::Exception(cause);
+            ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(1);
+            false
+        }
+    }
+}
+
+#[inline]
+fn execute(
+    ctx: &mut Context,
+    observer: impl MemAccessObserver,
+    ins: Instruction,
+) -> Result<(), BreakReason> {
     let mut pending_load = PendingLoad::default();
     let mut pending_jump = None;
     let mut early_exit = false;
@@ -399,7 +480,7 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
                 .write_bus(ctx.bus, vaddr, gpr_read(ctx.cpu, rt).to_le_bytes())
                 .map_err(BreakReason::Exception)?;
 
-            early_exit = mem_access(ctx, vaddr);
+            early_exit = observer.on_mem_store(ctx, vaddr);
 
             ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(STORE_LATENCY);
         }
@@ -409,7 +490,7 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
                 .write_bus(ctx.bus, vaddr, (gpr_read(ctx.cpu, rt) as u16).to_le_bytes())
                 .map_err(BreakReason::Exception)?;
 
-            early_exit = mem_access(ctx, vaddr);
+            early_exit = observer.on_mem_store(ctx, vaddr);
 
             ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(STORE_LATENCY);
         }
@@ -419,7 +500,7 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
                 .write_bus(ctx.bus, vaddr, (gpr_read(ctx.cpu, rt) as u8).to_le_bytes())
                 .map_err(BreakReason::Exception)?;
 
-            early_exit = mem_access(ctx, vaddr);
+            early_exit = observer.on_mem_store(ctx, vaddr);
 
             ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(STORE_LATENCY);
         }
@@ -443,7 +524,7 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
                 .write_bus(ctx.bus, vaddr & !3, val.to_le_bytes())
                 .map_err(BreakReason::Exception)?;
 
-            early_exit = mem_access(ctx, vaddr);
+            early_exit = observer.on_mem_store(ctx, vaddr);
 
             ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(STORE_LATENCY);
         }
@@ -467,14 +548,14 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
                 .write_bus(ctx.bus, vaddr & !3, val.to_le_bytes())
                 .map_err(BreakReason::Exception)?;
 
-            early_exit = mem_access(ctx, vaddr);
+            early_exit = observer.on_mem_store(ctx, vaddr);
 
             ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(STORE_LATENCY);
         }
 
         // Branches
         Instruction::Beq { rs, rt, imm_sext } => {
-            let branch_base = branch_base(ctx);
+            let branch_base = branch_base(ctx.cpu);
             pending_jump = Some(PendingJump {
                 cond: gpr_read(ctx.cpu, rs) == gpr_read(ctx.cpu, rt),
                 then: branch_base.wrapping_add_signed(i32::from(imm_sext) << 2),
@@ -482,7 +563,7 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
             });
         }
         Instruction::Bne { rs, rt, imm_sext } => {
-            let branch_base = branch_base(ctx);
+            let branch_base = branch_base(ctx.cpu);
             pending_jump = Some(PendingJump {
                 cond: gpr_read(ctx.cpu, rs) != gpr_read(ctx.cpu, rt),
                 then: branch_base.wrapping_add_signed(i32::from(imm_sext) << 2),
@@ -490,7 +571,7 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
             });
         }
         Instruction::Bgez { rs, imm_sext } => {
-            let branch_base = branch_base(ctx);
+            let branch_base = branch_base(ctx.cpu);
             pending_jump = Some(PendingJump {
                 cond: gpr_read(ctx.cpu, rs).cast_signed() >= 0,
                 then: branch_base.wrapping_add_signed(i32::from(imm_sext) << 2),
@@ -498,7 +579,7 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
             });
         }
         Instruction::Blez { rs, imm_sext } => {
-            let branch_base = branch_base(ctx);
+            let branch_base = branch_base(ctx.cpu);
             pending_jump = Some(PendingJump {
                 cond: gpr_read(ctx.cpu, rs).cast_signed() <= 0,
                 then: branch_base.wrapping_add_signed(i32::from(imm_sext) << 2),
@@ -506,7 +587,7 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
             });
         }
         Instruction::Bgtz { rs, imm_sext } => {
-            let branch_base = branch_base(ctx);
+            let branch_base = branch_base(ctx.cpu);
             pending_jump = Some(PendingJump {
                 cond: gpr_read(ctx.cpu, rs).cast_signed() > 0,
                 then: branch_base.wrapping_add_signed(i32::from(imm_sext) << 2),
@@ -514,7 +595,7 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
             });
         }
         Instruction::Bltz { rs, imm_sext } => {
-            let branch_base = branch_base(ctx);
+            let branch_base = branch_base(ctx.cpu);
             pending_jump = Some(PendingJump {
                 cond: gpr_read(ctx.cpu, rs).cast_signed() < 0,
                 then: branch_base.wrapping_add_signed(i32::from(imm_sext) << 2),
@@ -522,7 +603,7 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
             });
         }
         Instruction::Bgezal { rs, imm_sext } => {
-            let branch_base = branch_base(ctx);
+            let branch_base = branch_base(ctx.cpu);
             pending_jump = Some(PendingJump {
                 cond: gpr_read(ctx.cpu, rs).cast_signed() >= 0,
                 then: branch_base.wrapping_add_signed(i32::from(imm_sext) << 2),
@@ -532,7 +613,7 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
             gpr_write(ctx.cpu, Cpu::DEFAULT_LINK_REG, ctx.cpu.pc.wrapping_add(8));
         }
         Instruction::Bltzal { rs, imm_sext } => {
-            let branch_base = branch_base(ctx);
+            let branch_base = branch_base(ctx.cpu);
             pending_jump = Some(PendingJump {
                 cond: gpr_read(ctx.cpu, rs).cast_signed() < 0,
                 then: branch_base.wrapping_add_signed(i32::from(imm_sext) << 2),
@@ -544,7 +625,7 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
 
         // Jumps
         Instruction::J { target } => {
-            let branch_base = branch_base(ctx);
+            let branch_base = branch_base(ctx.cpu);
             let target = (branch_base & 0xF000_0000) | (target << 2);
             pending_jump = Some(PendingJump {
                 cond: true,
@@ -553,7 +634,7 @@ fn execute(ctx: &mut Context, ins: Instruction) -> Result<(), BreakReason> {
             });
         }
         Instruction::Jal { target } => {
-            let branch_base = branch_base(ctx);
+            let branch_base = branch_base(ctx.cpu);
             let target = (branch_base & 0xF000_0000) | (target << 2);
             pending_jump = Some(PendingJump {
                 cond: true,
@@ -753,26 +834,10 @@ fn pend_load(cpu: &mut Cpu, new_pending_load: PendingLoad) {
 }
 
 #[inline(always)]
-fn branch_base(ctx: &Context) -> u32 {
-    if let Some(jump) = ctx.cpu.pending_jump {
+fn branch_base(cpu: &Cpu) -> u32 {
+    if let Some(jump) = cpu.pending_jump {
         jump.target()
     } else {
-        ctx.cpu.pc.wrapping_add(4)
+        cpu.pc.wrapping_add(4)
     }
-}
-
-#[inline(always)]
-fn mem_access(ctx: &mut Context, vaddr: u32) -> bool {
-    if let TranslationResult::PhysAddr(paddr) = ctx.cpu.mmu.translate_addr(vaddr) {
-        if region_of(paddr) == Region::Int {
-            return true;
-        }
-        if let Some(invalidated_page) = ctx.cache.invalidate_page(paddr)
-            && ctx.block.pages.contains(&invalidated_page)
-        {
-            return true;
-        }
-    }
-
-    false
 }

@@ -83,6 +83,14 @@ impl Cpu {
     pub const DEFAULT_LINK_REG: u8 = 31;
 
     #[inline(always)]
+    pub(crate) fn refresh_interrupt_pending(&mut self, bus: &Bus) -> bool {
+        let can_take_interrupts = self.pending_jump.is_none();
+        self.cop0
+            .set_hw_irq(can_take_interrupts && bus.int_ctrl.pending());
+        self.cop0.interrupt_pending()
+    }
+
+    #[inline(always)]
     pub(crate) fn read_bus<const N: usize>(
         &self,
         bus: &mut Bus,

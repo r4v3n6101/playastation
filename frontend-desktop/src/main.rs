@@ -9,7 +9,7 @@ use std::{
 use clap::Parser;
 use crossbeam_utils::atomic::AtomicCell;
 use playastation::{
-    CPU_FREQ, VRAM_HEIGHT, VRAM_WIDTH,
+    CPU_FREQ,
     devices::joy::{
         Slot,
         controller::{Button, DigitalController},
@@ -19,7 +19,7 @@ use playastation::{
         psexe::BoxedExeFile,
     },
     render::software::SoftwareRenderer,
-    run::Executor,
+    run::Console,
 };
 use playastation_frontend_common::{App, EmulatorData, EmulatorHost, InputState, eframe, egui};
 use triple_buffer::{Input, Output};
@@ -93,28 +93,38 @@ fn spawn_emulator_thread(
     mut data_tx: Input<EmulatorData>,
 ) {
     thread::spawn(move || {
-        let mut executor = Executor::default();
+        let mut console = Console::default();
 
-        executor
+        let mut tty_line = String::new();
+        console.printf = Some(Box::new(move |ch| match ch {
+            '\n' => {
+                tracing::info!("{}", tty_line);
+                tty_line.clear();
+            }
+            '\r' => {}
+            other => tty_line.push(other),
+        }));
+
+        console
             .bus
             .bios
             .copy_from_slice(&fs::read(&args.bios).unwrap());
 
         if let Some(rom_path) = &args.rom {
-            executor.pending_exe = Some(BoxedExeFile::new(
+            console.pending_exe = Some(BoxedExeFile::new(
                 fs::read(rom_path).unwrap().into_boxed_slice(),
             ));
         }
 
         if let Some(bin_path) = &args.bin {
-            executor.bus.cdrom.disc = Some(Box::new(BinFile {
+            console.bus.cdrom.disc = Some(Box::new(BinFile {
                 data: fs::read(bin_path).unwrap(),
             }));
         }
 
-        executor.bus.gpu.renderer = Box::new(SoftwareRenderer::default());
+        console.bus.gpu.renderer = Box::new(SoftwareRenderer::default());
 
-        executor.bus.joy_bus.insert_dev(
+        console.bus.joy_bus.insert_dev(
             Slot::Controller1,
             Box::new(DigitalController::with_poll_buttons(Box::new(move || {
                 button_state.load()
@@ -124,27 +134,27 @@ fn spawn_emulator_thread(
         let mut scaler = time::Scaler::<CPU_FREQ>::default();
         let mut last_frame = Instant::now();
         loop {
-            let sys_cycles = executor.run();
+            let sys_cycles = console.step();
 
             scaler.add_cycles(sys_cycles);
             scaler.wait();
 
             if last_frame.elapsed() > Duration::from_millis(5) {
                 data_tx.write(EmulatorData {
-                    vram: executor.bus.gpu.renderer.framebuffer().to_vec(),
-                    vram_start: executor.bus.gpu.vram_start,
-                    display: executor.bus.gpu.display,
+                    vram: console.bus.gpu.renderer.framebuffer().to_vec(),
+                    vram_start: console.bus.gpu.vram_start,
+                    display: console.bus.gpu.display,
 
-                    cdrom_status: executor.bus.cdrom.status,
-                    cdrom_mode: executor.bus.cdrom.mode,
-                    cdrom_stat: executor.bus.cdrom.stat(),
+                    cdrom_status: console.bus.cdrom.status,
+                    cdrom_mode: console.bus.cdrom.mode,
+                    cdrom_stat: console.bus.cdrom.stat(),
 
-                    gpu_stat: executor.bus.gpu.stat(),
+                    gpu_stat: console.bus.gpu.stat(),
 
-                    joy_baud: executor.bus.joy_bus.baud,
-                    joy_mode: executor.bus.joy_bus.mode,
-                    joy_ctrl: executor.bus.joy_bus.ctrl,
-                    joy_stat: executor.bus.joy_bus.stat(),
+                    joy_baud: console.bus.joy_bus.baud,
+                    joy_mode: console.bus.joy_bus.mode,
+                    joy_ctrl: console.bus.joy_bus.ctrl,
+                    joy_stat: console.bus.joy_bus.stat(),
                 });
                 last_frame = Instant::now();
             }

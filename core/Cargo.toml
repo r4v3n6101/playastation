@@ -17,10 +17,11 @@ modular-bitfield = "0.13.1"
 smallvec = { version = "1.15.1", default-features = false }
 smallbox = { version = "0.8.8", default-features = false, features = ["coerce"] }
 
-# Just data structures
-fnv = { version = "1.0.7", default-features = false }
-hashbrown = { version = "0.17.1", default-features = false }
-slotmap = { version = "1.1.1", default-features = false }
+# Code cache (block pages)
+fnv = { version = "1.0.7", default-features = false}
+hashbrown = { version = "0.17.1", default-features = false}
+
+# Scheduler
 enum-map = { version = "2.7.3", default-features = false }
 mheap = { version = "0.1.1", default-features = false }
 
