@@ -8,6 +8,7 @@ pub mod formats;
 pub mod interconnect;
 pub mod render;
 pub mod run;
+pub(crate) mod scheduler;
 
 /// CPU Frequency (ticks per second).
 pub const CPU_FREQ: u64 = 33_868_800;

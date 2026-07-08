@@ -4,20 +4,30 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-derive_more = { version = "2.1.1", default-features = false, features = ["debug"] }
+# Traces
 tracing = { version = "0.1.44", default-features = false, features = ["attributes"] }
 
+# Boilerplate codegen macros
+derive_more = { version = "2.1.1", default-features = false, features = ["debug"] }
 strum = { version = "0.28.0", default-features = false, features = ["derive"] }
 bitflags = { version = "2.11.0", default-features = false }
 modular-bitfield = "0.13.1"
 
+# Optimization of allocations
+smallvec = { version = "1.15.1", default-features = false }
+smallbox = { version = "0.8.8", default-features = false, features = ["coerce"] }
+
+# Just data structures
 fnv = { version = "1.0.7", default-features = false }
 hashbrown = { version = "0.17.1", default-features = false }
 slotmap = { version = "1.1.1", default-features = false }
-smallvec = { version = "1.15.1", default-features = false }
-smallbox = { version = "0.8.8", default-features = false, features = ["coerce"] }
+enum-map = { version = "2.7.3", default-features = false }
+mheap = { version = "0.1.1", default-features = false }
+
+# File formats
 yoke = { version = "0.8.2", default-features = false, features = ["alloc"] }
 zerocopy = { version = "0.8.48", default-features = false, features = ["alloc"] }
 zerocopy-derive = "0.8.48"
 
+# Software rendering
 fixed = { version = "1.31.0", default-features = false }
