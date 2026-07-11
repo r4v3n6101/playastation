@@ -1,21 +1,15 @@
 # Author and source: https://github.com/nicolasnoble/pcsx-redux/
-{ inputs, ... }:
+{ ... }:
 {
   perSystem =
-    { pkgs, self', ... }:
+    {
+      pkgs,
+      mipselPkgs,
+      bios,
+      self',
+      ...
+    }:
     let
-      mipselPkgs = import pkgs.path {
-        inherit (pkgs.stdenv.hostPlatform) system;
-
-        crossSystem = {
-          config = "mipsel-none-elf";
-          gcc = {
-            arch = "mips1";
-            tune = "r3000";
-          };
-        };
-      };
-
       test-rom =
         kind:
         mipselPkgs.stdenv.mkDerivation {
@@ -51,7 +45,7 @@
 
           text = ''
             playastation-desktop \
-              --bios "${inputs.bios}" \
+              --bios "${bios}" \
               --rom "${(test-rom kind)}"
           '';
         };

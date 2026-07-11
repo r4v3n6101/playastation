@@ -1,8 +1,13 @@
 # Author: Amidog
 # Source: https://psx.amidog.se/doku.php?id=psx:download:cpu
-{ inputs, ... }: {
+{ ... }: {
   perSystem =
-    { pkgs, self', ... }:
+    {
+      pkgs,
+      bios,
+      self',
+      ...
+    }:
     let
       test-rom-cpu = pkgs.fetchzip {
         url = "https://psx.amidog.se/lib/exe/fetch.php?media=psx:download:psxtest_cpu.zip";
@@ -25,7 +30,7 @@
 
           text = ''
             playastation-desktop \
-              --bios "${inputs.bios}" \
+              --bios "${bios}" \
               --rom "${rom}"
           '';
         };

@@ -1,9 +1,11 @@
 # Author and source: https://github.com/ABelliqueux/nolibgs_hello_worlds/
-{ inputs, ... }:
+{ ... }:
 {
   perSystem =
     {
       pkgs,
+      mipselPkgs,
+      bios,
       lib,
       self',
       ...
@@ -27,18 +29,6 @@
         cmakeFlags = [
           "-DCMAKE_BUILD_TYPE=Release"
         ];
-      };
-
-      mipselPkgs = import pkgs.path {
-        inherit (pkgs.stdenv.hostPlatform) system;
-
-        crossSystem = {
-          config = "mipsel-none-elf";
-          gcc = {
-            arch = "mips1";
-            tune = "r3000";
-          };
-        };
       };
 
       psyq = pkgs.stdenv.mkDerivation {
@@ -121,7 +111,7 @@
 
         text = ''
           playastation-desktop \
-            --bios "${inputs.bios}" \
+            --bios "${bios}" \
             --bin "${
               test-artifact "hello_cd" [
                 "hello_cd.bin"
@@ -140,7 +130,7 @@
 
           text = ''
             playastation-desktop \
-              --bios "${inputs.bios}" \
+              --bios "${bios}" \
               --rom "${test-artifact "${dir}" [ "${dir}.ps-exe" ]}/${dir}.ps-exe"
           '';
         };
