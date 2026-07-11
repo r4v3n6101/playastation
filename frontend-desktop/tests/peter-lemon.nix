@@ -1,7 +1,12 @@
 # Author and source: https://github.com/PeterLemon/PSX/
-{ inputs, ... }: {
+{ ... }: {
   perSystem =
-    { pkgs, self', ... }:
+    {
+      pkgs,
+      bios,
+      self',
+      ...
+    }:
     let
       test-roms = pkgs.fetchFromGitHub {
         owner = "PeterLemon";
@@ -21,7 +26,7 @@
           text = ''
             while IFS= read -r -d "" exe; do
               playastation-desktop \
-                --bios "${inputs.bios}" \
+                --bios "${bios}" \
                 --rom "$exe"
             done < <(find "${test-roms}/${dir}" -type f \( -name '*.exe' -o -name '*.EXE' \) -print0)
           '';
