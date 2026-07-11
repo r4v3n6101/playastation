@@ -11,7 +11,9 @@ mod interpreter;
 const BLOCK_THRESHOLD: Cycle = 8;
 
 pub enum StopReason {
+    UnitEnded,
     BudgetExhausted,
+    Stalled,
     ExeLoad,
     Print(char),
     Exception(Exception),
@@ -51,15 +53,17 @@ impl CpuEngine {
             let before = result.cycles_elapsed;
             let remaining = budget - before;
 
+            result.stop_reason = StopReason::UnitEnded;
             self.run_unit(&mut result, cpu, bus, remaining);
 
             match result.stop_reason {
-                StopReason::BudgetExhausted => {}
+                StopReason::UnitEnded => {}
                 _ => break,
             }
 
             // Prevent deadloop
             if result.cycles_elapsed == before {
+                result.stop_reason = StopReason::Stalled;
                 break;
             }
         }
