@@ -5,7 +5,7 @@ use crate::{
     cpu::{Cpu, Exception, PendingJump},
     formats::psexe::{BoxedExeFile, ExeHeader},
     interconnect::Bus,
-    scheduler::{Cycle, Scheduler},
+    scheduler::Cycle,
 };
 
 mod backend;
@@ -20,22 +20,15 @@ pub struct Console {
     pub printf: Option<Box<dyn FnMut(char)>>,
     /// CPU engine for code execution, with some optimizations.
     engine: backend::CpuEngine,
-    /// For timing devices and sync with CPU budget.
-    scheduler: Scheduler,
 }
 
 impl Console {
     pub fn step(&mut self) -> u64 {
-        let budget = self.scheduler.cycles_until_next().clamp(1, MAX_BUDGET);
+        // May be scheduler in the future
+        let budget = MAX_BUDGET;
 
         // TODO : budget not working, large values screw games up
         let result = self.engine.run_for(&mut self.cpu, &mut self.bus, budget);
-        self.scheduler.advance(result.cycles_elapsed);
-
-        self.bus.update_until(self.scheduler.now());
-        while let Some(event) = self.scheduler.pop_due() {
-            self.bus.handle_event(event);
-        }
 
         // TODO : more precise timings
         // TODO : remove
