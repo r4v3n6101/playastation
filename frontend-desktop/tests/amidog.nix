@@ -4,7 +4,6 @@
   perSystem =
     {
       pkgs,
-      bios,
       self',
       ...
     }:
@@ -30,7 +29,7 @@
 
           text = ''
             playastation-desktop \
-              --bios "${bios}" \
+              --bios "${self'.packages.bios}" \
               --rom "${rom}"
           '';
         };

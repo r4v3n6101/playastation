@@ -5,7 +5,6 @@
     {
       pkgs,
       mipselPkgs,
-      bios,
       lib,
       self',
       ...
@@ -111,7 +110,7 @@
 
         text = ''
           playastation-desktop \
-            --bios "${bios}" \
+            --bios "${self'.packages.bios}" \
             --bin "${
               test-artifact "hello_cd" [
                 "hello_cd.bin"
@@ -130,7 +129,7 @@
 
           text = ''
             playastation-desktop \
-              --bios "${bios}" \
+              --bios "${self'.packages.bios}" \
               --rom "${test-artifact "${dir}" [ "${dir}.ps-exe" ]}/${dir}.ps-exe"
           '';
         };

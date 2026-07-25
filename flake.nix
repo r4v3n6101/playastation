@@ -27,7 +27,7 @@
       ];
       imports = [
         (inputs.import-tree [
-          ./rust.nix
+          ./nix
           ./core
           ./frontend-desktop
           ./frontend-web

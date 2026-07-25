@@ -3,7 +3,6 @@
   perSystem =
     {
       pkgs,
-      bios,
       self',
       ...
     }:
@@ -26,7 +25,7 @@
           text = ''
             while IFS= read -r -d "" exe; do
               playastation-desktop \
-                --bios "${bios}" \
+                --bios "${self'.packages.bios}" \
                 --rom "$exe"
             done < <(find "${test-roms}/${dir}" -type f \( -name '*.exe' -o -name '*.EXE' \) -print0)
           '';

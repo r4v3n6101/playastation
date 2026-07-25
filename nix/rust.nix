@@ -16,10 +16,10 @@
 
       craneCommonArgs = {
         src = lib.fileset.toSource rec {
-          root = ./.;
+          root = ../.;
           fileset = lib.fileset.unions [
             # Rust-specific (locks, toml-s, .rs)
-            (craneLib.fileset.commonCargoSources ./.)
+            (craneLib.fileset.commonCargoSources ../.)
 
             # Web specific like assets, html-s
             (lib.fileset.fileFilter (

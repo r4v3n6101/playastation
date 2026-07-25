@@ -56,15 +56,14 @@ impl CpuEngine {
             result.stop_reason = StopReason::UnitEnded;
             self.run_unit(&mut result, cpu, bus, remaining);
 
-            match result.stop_reason {
-                StopReason::UnitEnded => {}
-                _ => break,
-            }
-
             // Prevent deadloop
             if result.cycles_elapsed == before {
                 result.stop_reason = StopReason::Stalled;
-                break;
+            }
+
+            match result.stop_reason {
+                StopReason::UnitEnded => {}
+                _ => break,
             }
         }
 

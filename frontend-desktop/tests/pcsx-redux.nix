@@ -5,7 +5,6 @@
     {
       pkgs,
       mipselPkgs,
-      bios,
       self',
       ...
     }:
@@ -45,7 +44,7 @@
 
           text = ''
             playastation-desktop \
-              --bios "${bios}" \
+              --bios "${self'.packages.bios}" \
               --rom "${(test-rom kind)}"
           '';
         };
