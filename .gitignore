@@ -1,7 +1,8 @@
-.direnv/
-**/target
 **/.DS_Store
+**/.direnv/
+**/target
 **/output
 **/dist
+**/result
 
 trace.*
