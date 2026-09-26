@@ -157,7 +157,9 @@ impl Default for Dpcr {
 
 impl Dicr {
     fn set_irq_lane(&mut self, ch: usize) {
-        self.set_irq_flags(self.irq_flags() | (1 << ch));
+        if self.master_enabled() && self.irq_enabled() & (1 << ch) != 0 {
+            self.set_irq_flags(self.irq_flags() | (1 << ch));
+        }
         self.update_irq_signal();
     }
 
@@ -326,8 +328,9 @@ impl Mmio for DmaController {
                 self.dicr.set_master_enabled(new.master_enabled());
 
                 // W1C on bits 24..30: writing 1 clears the corresponding existing flag bit
+                let ack = Dicr::from_bytes(write_part::<4, 4>(maddr, value, [0; 4]));
                 self.dicr
-                    .set_irq_flags(self.dicr.irq_flags() & !new.irq_flags());
+                    .set_irq_flags(self.dicr.irq_flags() & !ack.irq_flags());
 
                 // Recalculate irq signal bit, rather than copy it
                 self.dicr.update_irq_signal();

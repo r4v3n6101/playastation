@@ -133,7 +133,7 @@ impl<H> App<H> {
                 buttons |= Button::TRIANGLE;
             }
 
-            if input.key_pressed(egui::Key::Enter) {
+            if input.key_down(egui::Key::Enter) {
                 buttons |= Button::START;
             }
 
