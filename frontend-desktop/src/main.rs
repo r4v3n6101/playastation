@@ -137,7 +137,7 @@ fn spawn_emulator_thread(
             let sys_cycles = console.step();
 
             scaler.add_cycles(sys_cycles);
-            scaler.wait();
+            // scaler.wait();
 
             if last_frame.elapsed() > Duration::from_millis(5) {
                 data_tx.write(EmulatorData {

@@ -79,7 +79,7 @@ impl<H> App<H> {
             VerticalResolution::V480 => 480,
         };
 
-        if offset[0] + hres >= VRAM_WIDTH || offset[1] + vres >= VRAM_HEIGHT {
+        if offset[0] + hres > VRAM_WIDTH || offset[1] + vres > VRAM_HEIGHT {
             return;
         }
 
