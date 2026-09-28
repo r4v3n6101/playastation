@@ -471,6 +471,7 @@ fn execute(
         | Instruction::Sb { .. }
         | Instruction::Swl { .. }
         | Instruction::Swr { .. }
+        | Instruction::Swc2 { .. }
             if ctx.cpu.cop0.status().isc() => {}
 
         // Stores
@@ -739,20 +740,74 @@ fn execute(
                 early_exit = true;
             }
         }
+
         // Return state before exception
         Instruction::Rfe => {
             ctx.cpu.cop0.exception_leave();
             early_exit = true;
         }
 
-        // TODO
+        // Cop2 (GTE) is disabled via Cop0
         Instruction::Mfc2 { .. }
         | Instruction::Mtc2 { .. }
         | Instruction::Cfc2 { .. }
         | Instruction::Ctc2 { .. }
-        | Instruction::Cop2Cmd { .. }
         | Instruction::Lwc2 { .. }
-        | Instruction::Swc2 { .. } => {}
+        | Instruction::Swc2 { .. }
+        | Instruction::Cop2Cmd { .. }
+            if !ctx.cpu.cop0.status().cu2() =>
+        {
+            return Err(BreakReason::Exception(Exception::CoprocessorUnusable {
+                cop: 2,
+            }));
+        }
+
+        // Cop2 (GTE) instructions
+        Instruction::Mfc2 { rt, cop2_reg } => {
+            pending_load = PendingLoad {
+                dest: rt,
+                value: ctx.cpu.gte.read_data(cop2_reg),
+            };
+        }
+        Instruction::Cfc2 { rt, cop2_reg } => {
+            pending_load = PendingLoad {
+                dest: rt,
+                value: ctx.cpu.gte.read_control(cop2_reg),
+            };
+        }
+        Instruction::Mtc2 { rt, cop2_reg } => {
+            ctx.cpu.gte.write_data(cop2_reg, gpr_read(ctx.cpu, rt));
+        }
+        Instruction::Ctc2 { rt, cop2_reg } => {
+            ctx.cpu.gte.write_control(cop2_reg, gpr_read(ctx.cpu, rt));
+        }
+        Instruction::Cop2Cmd { ins } => {
+            let cycles = ctx.cpu.gte.execute(ins);
+
+            ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(cycles - 1);
+        }
+        Instruction::Lwc2 { rs, rt, imm_sext } => {
+            let vaddr = gpr_read(ctx.cpu, rs).wrapping_add_signed(i32::from(imm_sext));
+            let value = ctx
+                .cpu
+                .read_bus(ctx.bus, vaddr)
+                .map(u32::from_le_bytes)
+                .map_err(BreakReason::Exception)?;
+
+            ctx.cpu.gte.write_data(rt, value);
+
+            ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(LOAD_LATENCY);
+        }
+        Instruction::Swc2 { rs, rt, imm_sext } => {
+            let vaddr = gpr_read(ctx.cpu, rs).wrapping_add_signed(i32::from(imm_sext));
+            ctx.cpu
+                .write_bus(ctx.bus, vaddr, ctx.cpu.gte.read_data(rt).to_le_bytes())
+                .map_err(BreakReason::Exception)?;
+
+            early_exit = observer.on_mem_store(ctx, vaddr);
+
+            ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(STORE_LATENCY);
+        }
 
         // Exceptions
         Instruction::Break { .. } => return Err(BreakReason::Exception(Exception::Break)),

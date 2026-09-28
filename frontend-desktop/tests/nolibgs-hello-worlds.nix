@@ -137,6 +137,7 @@
     {
       legacyPackages.nolibgs-hello-worlds = pkgs.lib.makeScope pkgs.newScope (_: {
         hello-world = test-suite-rom "hello_world";
+        gte-opti = test-suite-rom "hello_gte_opti";
         pad = test-suite-rom "hello_pad";
         cd = test-suite-cd;
       });

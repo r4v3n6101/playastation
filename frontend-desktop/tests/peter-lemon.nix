@@ -33,7 +33,7 @@
     in
     {
       legacyPackages.peter-lemon-tests = pkgs.lib.makeScope pkgs.newScope (_: {
-        cpu = test-suite "CPUTest/CPU/";
+        cpu = test-suite "CPUTest/";
         gpu = test-suite "GPU/";
         cube = test-suite "Cube/";
       });

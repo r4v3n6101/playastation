@@ -29,7 +29,11 @@ pub struct Status {
     /// Boot vector select
     pub bev: bool,
     #[skip]
-    reserved: B9,
+    reserved: B7,
+    /// Cop2 (GTE) enable
+    pub cu2: bool,
+    #[skip]
+    reserved: B1,
 }
 
 #[bitfield(bits = 32)]
@@ -43,7 +47,11 @@ pub struct Cause {
     // Interrupt pending
     pub ip: B8,
     #[skip]
-    reserved: B15,
+    reserved: B12,
+    /// Coprocessor number for a [`Exception::CoprocessorUnusable`] exception.
+    pub ce: B2,
+    #[skip]
+    reserved: B1,
     // Branch delay flag
     pub bd: bool,
 }
@@ -59,6 +67,7 @@ pub enum Exception {
     Syscall = 0x08,
     Break = 0x09,
     ReservedInstruction = 0x0A,
+    CoprocessorUnusable { cop: u8 } = 0x0B,
     Overflow = 0x0C,
 }
 
@@ -108,31 +117,33 @@ impl Cop0 {
         fault_pc: u32,
         jump_target: Option<u32>,
     ) {
-        self.regs[Self::EPC_IDX] = if jump_target.is_some() {
-            fault_pc.wrapping_sub(4)
-        } else {
-            fault_pc
-        };
-
         let old = self.cause();
         let mut cause = Cause::new();
         cause.set_ip(old.ip() & 0b0000_0011);
+
         cause.set_excode(exception.discriminant() as u8);
+        match exception {
+            Exception::UnalignedLoad { bad_vaddr }
+            | Exception::UnalignedStore { bad_vaddr }
+            | Exception::InstructionBus { bad_vaddr }
+            | Exception::DataBus { bad_vaddr } => {
+                self.regs[Self::BAD_VADDR_IDX] = bad_vaddr;
+            }
+            Exception::CoprocessorUnusable { cop: coprocessor } => {
+                cause.set_ce(coprocessor);
+            }
+            _ => {}
+        }
 
         if let Some(jump_target) = jump_target {
             cause.set_bd(true);
             self.regs[Self::TAR_IDX] = jump_target;
+            self.regs[Self::EPC_IDX] = fault_pc.wrapping_sub(4);
+        } else {
+            self.regs[Self::EPC_IDX] = fault_pc;
         }
 
         self.regs[Self::CAUSE_IDX] = u32::from_le_bytes(cause.into_bytes());
-
-        if let Exception::UnalignedLoad { bad_vaddr }
-        | Exception::UnalignedStore { bad_vaddr }
-        | Exception::InstructionBus { bad_vaddr }
-        | Exception::DataBus { bad_vaddr } = exception
-        {
-            self.regs[Self::BAD_VADDR_IDX] = bad_vaddr;
-        }
 
         let sr = &mut self.regs[Self::STATUS_IDX];
         *sr = (*sr & !0b111111) | (((*sr & 0b111111) << 2) & 0b111111);
@@ -157,13 +168,8 @@ impl Cop0 {
 
     #[inline(always)]
     pub(crate) fn set_hw_irq(&mut self, active: bool) {
-        let old = self.cause();
-
-        let mut cause = Cause::new();
-        cause.set_excode(old.excode());
-        cause.set_bd(old.bd());
-
-        let mut ip = old.ip();
+        let mut cause = self.cause();
+        let mut ip = cause.ip();
         if active {
             // PSX supports only second HW lane (bit 2)
             ip |= 1 << 2;

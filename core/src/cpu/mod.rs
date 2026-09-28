@@ -3,10 +3,12 @@ use derive_more::Debug;
 use crate::interconnect::Bus;
 
 pub use cop0::{Cop0, Exception};
+pub use gte::Gte;
 pub use ins::Instruction;
 pub use mmu::{Mmu, TranslationResult};
 
 mod cop0;
+mod gte;
 mod ins;
 mod mmu;
 
@@ -32,6 +34,7 @@ pub struct Cpu {
 
     // Coprocessors
     pub cop0: Cop0,
+    pub gte: Gte,
 }
 
 #[derive(Debug, Default, Copy, Clone)]
@@ -69,6 +72,7 @@ impl Default for Cpu {
             mmu: Mmu,
 
             cop0: Cop0::default(),
+            gte: Gte::default(),
         }
     }
 }
