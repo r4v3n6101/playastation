@@ -64,7 +64,7 @@ pub struct GpuStat {
     pub dither_24_to_15: bool,
     pub draw_to_display_area: bool,
     pub set_mask_while_drawing: bool,
-    pub draw_to_masked_pixels: bool,
+    pub check_mask_before_drawing: bool,
     pub interlace_field: bool,
     pub reverse_flag: bool,
     pub texture_disable: bool,
@@ -185,7 +185,7 @@ impl Gpu {
             .with_reverse_flag(self.display.reversed)
             // Via [`MaskBitSetting`]
             .with_set_mask_while_drawing(mask_bit_setting.set_mask_while_drawing())
-            .with_draw_to_masked_pixels(mask_bit_setting.draw_to_masked_pixels())
+            .with_check_mask_before_drawing(mask_bit_setting.check_mask_before_drawing())
             // Other
             .with_interrupt_request(self.int_flag)
             .with_display_disabled(!self.display.enabled)

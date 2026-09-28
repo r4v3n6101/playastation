@@ -5,7 +5,7 @@ use playastation::{
     VRAM_HEIGHT, VRAM_WIDTH,
     devices::{
         cdrom::{CdRomMode, CdRomStat, CdRomStatus},
-        gpu::{Display, GpuStat, HorizontalResolution, VerticalResolution},
+        gpu::{Display, DisplayDepth, GpuStat, HorizontalResolution, VerticalResolution},
         joy::{JoyCtrl, JoyMode, JoyStat, controller::Button},
     },
 };
@@ -79,7 +79,13 @@ impl<H> App<H> {
             VerticalResolution::V480 => 480,
         };
 
-        if offset[0] + hres > VRAM_WIDTH || offset[1] + vres > VRAM_HEIGHT {
+        let bytes_per_pixel = match data.display.depth {
+            DisplayDepth::Bpp15 => 2,
+            DisplayDepth::Bpp24 => 3,
+        };
+
+        if offset[0] * 2 + hres * bytes_per_pixel > VRAM_WIDTH * 2 || offset[1] + vres > VRAM_HEIGHT
+        {
             return;
         }
 
@@ -87,7 +93,22 @@ impl<H> App<H> {
             [VRAM_WIDTH, VRAM_HEIGHT],
             data.vram.iter().copied().map(bgr555_to_color32).collect(),
         );
-        let screen = vram.region_by_pixels(offset, [hres, vres]);
+        let screen = match data.display.depth {
+            DisplayDepth::Bpp15 => vram.region_by_pixels(offset, [hres, vres]),
+            DisplayDepth::Bpp24 => {
+                let mut pixels = Vec::with_capacity(hres * vres);
+                for y in offset[1]..offset[1] + vres {
+                    let row = &data.vram[y * VRAM_WIDTH..][..VRAM_WIDTH];
+                    let byte = |i: usize| (row[i / 2] >> ((i % 2) * 8)) as u8;
+                    for x in 0..hres {
+                        // The display origin is in 16-bit VRAM words, even in 24-bit mode.
+                        let i = offset[0] * 2 + x * 3;
+                        pixels.push(egui::Color32::from_rgb(byte(i), byte(i + 1), byte(i + 2)));
+                    }
+                }
+                egui::ColorImage::new([hres, vres], pixels)
+            }
+        };
 
         match &mut self.display {
             Some(display) => {

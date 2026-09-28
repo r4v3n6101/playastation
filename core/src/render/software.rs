@@ -9,7 +9,7 @@ use super::{
     Renderer,
     types::{
         Color, DrawMode, EnvParameter, Location, MaskBitSetting, Polygon, Polyline, Position, Rect,
-        RenderState, Size, TextureDepth, TextureWindow, Vertex, Vram,
+        RenderState, SemiTransparency, Size, TextureDepth, TextureWindow, Vertex, Vram,
     },
 };
 
@@ -104,39 +104,40 @@ impl Renderer for SoftwareRenderer {
         } else {
             0
         };
-        let mut rasterize = |a, b, c| match (flat_color, tex_depth, raw_texture) {
+        let mut rasterize = |a, b, c, d| match (flat_color, tex_depth, raw_texture) {
             // 15BPP, textured, flat
-            (true, 15, false) => self.rasterize_triangle::<true, 15, false>(a, b, c),
+            (true, 15, false) => self.rasterize_triangle::<true, 15, false>(a, b, c, d),
             // 15BPP, textured, Gouraud
-            (false, 15, false) => self.rasterize_triangle::<false, 15, false>(a, b, c),
+            (false, 15, false) => self.rasterize_triangle::<false, 15, false>(a, b, c, d),
 
             // 8BPP, textured, flat
-            (true, 8, false) => self.rasterize_triangle::<true, 8, false>(a, b, c),
+            (true, 8, false) => self.rasterize_triangle::<true, 8, false>(a, b, c, d),
             // 8BPP, textured, Gouraud
-            (false, 8, false) => self.rasterize_triangle::<false, 8, false>(a, b, c),
+            (false, 8, false) => self.rasterize_triangle::<false, 8, false>(a, b, c, d),
 
             // 4BPP, textured, flat
-            (true, 4, false) => self.rasterize_triangle::<true, 4, false>(a, b, c),
+            (true, 4, false) => self.rasterize_triangle::<true, 4, false>(a, b, c, d),
             // 4BPP, textured, Gouraud
-            (false, 4, false) => self.rasterize_triangle::<false, 4, false>(a, b, c),
+            (false, 4, false) => self.rasterize_triangle::<false, 4, false>(a, b, c, d),
 
             // 15BPP, textured, raw texture
-            (_, 15, true) => self.rasterize_triangle::<false, 15, true>(a, b, c),
+            (_, 15, true) => self.rasterize_triangle::<false, 15, true>(a, b, c, d),
             // 8BPP, textured, raw texture
-            (_, 8, true) => self.rasterize_triangle::<false, 8, true>(a, b, c),
+            (_, 8, true) => self.rasterize_triangle::<false, 8, true>(a, b, c, d),
             // 4BPP, textured, raw texture
-            (_, 4, true) => self.rasterize_triangle::<false, 4, true>(a, b, c),
+            (_, 4, true) => self.rasterize_triangle::<false, 4, true>(a, b, c, d),
 
             // untextured, flat
-            (true, _, _) => self.rasterize_triangle::<true, 0, false>(a, b, c),
+            (true, _, _) => self.rasterize_triangle::<true, 0, false>(a, b, c, d),
             // untextured, Gouraud
-            (false, _, _) => self.rasterize_triangle::<false, 0, false>(a, b, c),
+            (false, _, _) => self.rasterize_triangle::<false, 0, false>(a, b, c, d),
         };
         match polygon.vertices.len() {
             3 => {
                 rasterize(
                     polygon.flat_color,
                     polygon.clut,
+                    polygon.semi_transparent,
                     [
                         polygon.vertices[0],
                         polygon.vertices[1],
@@ -148,6 +149,7 @@ impl Renderer for SoftwareRenderer {
                 rasterize(
                     polygon.flat_color,
                     polygon.clut,
+                    polygon.semi_transparent,
                     [
                         polygon.vertices[0],
                         polygon.vertices[1],
@@ -157,6 +159,7 @@ impl Renderer for SoftwareRenderer {
                 rasterize(
                     polygon.flat_color,
                     polygon.clut,
+                    polygon.semi_transparent,
                     [
                         polygon.vertices[1],
                         polygon.vertices[2],
@@ -260,7 +263,7 @@ impl Renderer for SoftwareRenderer {
             let x = (x + i % w) & (VRAM_WIDTH - 1);
             let y = (y + i / w) & (VRAM_HEIGHT - 1);
 
-            self.vram[y * VRAM_WIDTH + x] = pixel;
+            self.write_pixel(x, y, pixel, false);
             self.push_counter += 1;
         }
     }
@@ -290,7 +293,7 @@ impl Renderer for SoftwareRenderer {
             for x in 0..w {
                 let (x, y) = (dx + x, dy + y);
                 if (0..VRAM_WIDTH).contains(&x) && (0..VRAM_HEIGHT).contains(&y) {
-                    self.vram[y * VRAM_WIDTH + x] = tmp.pop_back().unwrap();
+                    self.write_pixel(x, y, tmp.pop_back().unwrap(), false);
                 }
             }
         }
@@ -308,6 +311,7 @@ impl SoftwareRenderer {
         &mut self,
         flat_color: Option<Color>,
         clut: Option<Position>,
+        semi_transparent: bool,
         vertices: [Vertex; 3],
     ) {
         debug_assert!(matches!(DEPTH, 0 | 4 | 8 | 15));
@@ -349,7 +353,9 @@ impl SoftwareRenderer {
         let dx20 = FP::from_num(x2) - FP::from_num(x0);
         let dy20 = FP::from_num(y2) - FP::from_num(y0);
 
-        let inv_area = FP::ONE.wrapping_div_int(area as i64);
+        // Divide each gradient directly: rounding 1 / area first can turn an
+        // exact one-texel step into slightly less than one.
+        let area_divisor = i64::from(area);
 
         let (r0, g0, b0, dr_dx, dr_dy, dg_dx, dg_dy, db_dx, db_dy) = if !FLAT_COLOR && !RAW_TEXTURE
         {
@@ -374,24 +380,24 @@ impl SoftwareRenderer {
                 let dr10 = r1 - r0;
                 let dr20 = r2 - r0;
                 (
-                    (dr10 * dy20 - dr20 * dy10) * inv_area,
-                    (dx10 * dr20 - dx20 * dr10) * inv_area,
+                    (dr10 * dy20 - dr20 * dy10).wrapping_div_int(area_divisor),
+                    (dx10 * dr20 - dx20 * dr10).wrapping_div_int(area_divisor),
                 )
             };
             let (dg_dx, dg_dy) = {
                 let dg10 = g1 - g0;
                 let dg20 = g2 - g0;
                 (
-                    (dg10 * dy20 - dg20 * dy10) * inv_area,
-                    (dx10 * dg20 - dx20 * dg10) * inv_area,
+                    (dg10 * dy20 - dg20 * dy10).wrapping_div_int(area_divisor),
+                    (dx10 * dg20 - dx20 * dg10).wrapping_div_int(area_divisor),
                 )
             };
             let (db_dx, db_dy) = {
                 let db10 = b1 - b0;
                 let db20 = b2 - b0;
                 (
-                    (db10 * dy20 - db20 * dy10) * inv_area,
-                    (dx10 * db20 - dx20 * db10) * inv_area,
+                    (db10 * dy20 - db20 * dy10).wrapping_div_int(area_divisor),
+                    (dx10 * db20 - dx20 * db10).wrapping_div_int(area_divisor),
                 )
             };
 
@@ -429,16 +435,16 @@ impl SoftwareRenderer {
                 let du10 = u1 - u0;
                 let du20 = u2 - u0;
                 (
-                    (du10 * dy20 - du20 * dy10) * inv_area,
-                    (dx10 * du20 - dx20 * du10) * inv_area,
+                    (du10 * dy20 - du20 * dy10).wrapping_div_int(area_divisor),
+                    (dx10 * du20 - dx20 * du10).wrapping_div_int(area_divisor),
                 )
             };
             let (dv_dx, dv_dy) = {
                 let dv10 = v1 - v0;
                 let dv20 = v2 - v0;
                 (
-                    (dv10 * dy20 - dv20 * dy10) * inv_area,
-                    (dx10 * dv20 - dx20 * dv10) * inv_area,
+                    (dv10 * dy20 - dv20 * dy10).wrapping_div_int(area_divisor),
+                    (dx10 * dv20 - dx20 * dv10).wrapping_div_int(area_divisor),
                 )
             };
 
@@ -474,17 +480,24 @@ impl SoftwareRenderer {
             return;
         }
 
-        let w0_dx = y1 - y2;
-        let w1_dx = y2 - y0;
-        let w2_dx = y0 - y1;
+        let winding = area.signum();
+        let w0_dx = (y1 - y2) * winding;
+        let w1_dx = (y2 - y0) * winding;
+        let w2_dx = (y0 - y1) * winding;
 
-        let w0_dy = x2 - x1;
-        let w1_dy = x0 - x2;
-        let w2_dy = x1 - x0;
+        let w0_dy = (x2 - x1) * winding;
+        let w1_dy = (x0 - x2) * winding;
+        let w2_dy = (x1 - x0) * winding;
 
-        let mut w0_row = cross2(x1, y1, x2, y2, min_x, min_y);
-        let mut w1_row = cross2(x2, y2, x0, y0, min_x, min_y);
-        let mut w2_row = cross2(x0, y0, x1, y1, min_x, min_y);
+        // Include only top/left edges so shared edges are blended exactly once.
+        let w0_min = i32::from(!is_top_left_edge((x2 - x1) * winding, (y2 - y1) * winding));
+        let w1_min = i32::from(!is_top_left_edge((x0 - x2) * winding, (y0 - y2) * winding));
+        let w2_min = i32::from(!is_top_left_edge((x1 - x0) * winding, (y1 - y0) * winding));
+
+        let mut w0_row = cross2(x1, y1, x2, y2, min_x, min_y) * winding;
+        let mut w1_row = cross2(x2, y2, x0, y0, min_x, min_y) * winding;
+        let mut w2_row = cross2(x0, y0, x1, y1, min_x, min_y) * winding;
+        let rounding_bias = FP::ONE / 2;
 
         for y in min_y..=max_y {
             let mut w0 = w0_row;
@@ -494,21 +507,19 @@ impl SoftwareRenderer {
             let dy = FP::from_num(y) - FP::from_num(y0);
             let dx = FP::from_num(min_x) - FP::from_num(x0);
 
-            let mut r = r0 + dr_dx * dx + dr_dy * dy;
-            let mut g = g0 + dg_dx * dx + dg_dy * dy;
-            let mut b = b0 + db_dx * dx + db_dy * dy;
+            // Round interpolated attributes to the nearest texel/color value.
+            // This bias applies to attributes, not to screen coordinates.
+            let mut r = r0 + rounding_bias + dr_dx * dx + dr_dy * dy;
+            let mut g = g0 + rounding_bias + dg_dx * dx + dg_dy * dy;
+            let mut b = b0 + rounding_bias + db_dx * dx + db_dy * dy;
 
-            let mut u = u0 + du_dx * dx + du_dy * dy;
-            let mut v = v0 + dv_dx * dx + dv_dy * dy;
+            let mut u = u0 + rounding_bias + du_dx * dx + du_dy * dy;
+            let mut v = v0 + rounding_bias + dv_dx * dx + dv_dy * dy;
 
             for x in min_x..=max_x {
-                // Inside test (no backface culling for PSX)
-                let inside = if area > 0 {
-                    w0 >= 0 && w1 >= 0 && w2 >= 0
-                } else {
-                    w0 <= 0 && w1 <= 0 && w2 <= 0
-                };
-                debug_assert_eq!(w0 + w1 + w2, area);
+                // Edge functions are normalized for either winding (no backface culling).
+                let inside = w0 >= w0_min && w1 >= w1_min && w2 >= w2_min;
+                debug_assert_eq!(w0 + w1 + w2, area.abs());
 
                 if inside {
                     let color = if DEPTH != 0 {
@@ -544,11 +555,12 @@ impl SoftwareRenderer {
                     };
 
                     if let Some(color) = color {
-                        unsafe {
-                            *self
-                                .vram
-                                .get_unchecked_mut(y as usize * VRAM_WIDTH + x as usize) = color;
-                        }
+                        self.write_pixel(
+                            x as usize,
+                            y as usize,
+                            color,
+                            semi_transparent && (DEPTH == 0 || color & 0x8000 != 0),
+                        );
                     }
                 }
 
@@ -663,13 +675,32 @@ impl SoftwareRenderer {
                     rgb888_to_bgr555(r, g, b)
                 };
 
-                unsafe {
-                    *self
-                        .vram
-                        .get_unchecked_mut(y as usize * VRAM_WIDTH + x as usize) = color;
-                }
+                self.write_pixel(
+                    x as usize,
+                    y as usize,
+                    color,
+                    rect.semi_transparent && (DEPTH == 0 || color & 0x8000 != 0),
+                );
             }
         }
+    }
+
+    #[inline(always)]
+    fn write_pixel(&mut self, x: usize, y: usize, mut color: u16, semi_transparent: bool) {
+        let pixel = &mut self.vram[y * VRAM_WIDTH + x];
+
+        if self.mask_bit_setting.check_mask_before_drawing() && *pixel & 0x8000 != 0 {
+            return;
+        }
+
+        if semi_transparent {
+            color = blend_bgr555(*pixel, color, self.draw_mode.tex_page().semi_transparency());
+        }
+        if self.mask_bit_setting.set_mask_while_drawing() {
+            color |= 0x8000;
+        }
+
+        *pixel = color;
     }
 
     #[inline(always)]
@@ -688,12 +719,8 @@ impl SoftwareRenderer {
             _ => unreachable!(),
         };
 
-        // color=0 means transparent for textured rendering.
-        if color.trailing_zeros() >= 15 {
-            None
-        } else {
-            Some(color)
-        }
+        // Only 0x0000 is transparent; 0x8000 is black with the STP bit set.
+        (color != 0).then_some(color)
     }
 
     #[inline(always)]
@@ -747,6 +774,27 @@ impl SoftwareRenderer {
 #[inline(always)]
 fn cross2(ax: i32, ay: i32, bx: i32, by: i32, px: i32, py: i32) -> i32 {
     (bx - ax) * (py - ay) - (by - ay) * (px - ax)
+}
+
+#[inline(always)]
+fn is_top_left_edge(dx: i32, dy: i32) -> bool {
+    dy < 0 || (dy == 0 && dx > 0)
+}
+
+#[inline(always)]
+fn blend_bgr555(background: u16, foreground: u16, mode: SemiTransparency) -> u16 {
+    let blend_channel = |shift: u32| {
+        let back = (background >> shift) & 0x1F;
+        let front = (foreground >> shift) & 0x1F;
+        match mode {
+            SemiTransparency::Average => (back + front) / 2,
+            SemiTransparency::Add => (back + front).min(0x1F),
+            SemiTransparency::Subtract => back.saturating_sub(front),
+            SemiTransparency::AddQuarter => (back + (front / 4)).min(0x1F),
+        }
+    };
+
+    (foreground & 0x8000) | blend_channel(0) | (blend_channel(5) << 5) | (blend_channel(10) << 10)
 }
 
 #[inline(always)]

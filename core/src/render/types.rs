@@ -95,7 +95,8 @@ pub struct TextureWindow {
 #[derive(Debug, Copy, Clone)]
 pub struct MaskBitSetting {
     pub set_mask_while_drawing: bool,
-    pub draw_to_masked_pixels: bool,
+    /// Skip writes when the destination pixel already has bit 15 set.
+    pub check_mask_before_drawing: bool,
 }
 
 #[derive(Specifier, Debug, Clone, Copy, PartialEq, Eq)]
