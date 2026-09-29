@@ -357,6 +357,11 @@ impl Mmio for CdRom {
                         0x0A => SmallBox::new(tasks::InitFirst),
                         0x0B => SmallBox::new(tasks::Mute),
                         0x0C => SmallBox::new(tasks::Demute),
+                        0x0D => {
+                            let file = self.param_fifo.pop_front().unwrap_or(0);
+                            let channel = self.param_fifo.pop_front().unwrap_or(0);
+                            SmallBox::new(tasks::Setfilter { file, channel })
+                        }
                         0x0E => {
                             let mode = self.param_fifo.pop_front().unwrap_or(0);
                             SmallBox::new(tasks::Setmode { mode })

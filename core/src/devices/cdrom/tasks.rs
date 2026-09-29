@@ -127,6 +127,25 @@ impl Task for GetIdSecond {
     }
 }
 
+pub struct Setfilter {
+    pub file: u8,
+    pub channel: u8,
+}
+
+impl Task for Setfilter {
+    fn busy_flag(&self) -> bool {
+        true
+    }
+
+    fn execute(&mut self, cdrom: &mut CdRom) {
+        cdrom.filter_file = self.file;
+        cdrom.filter_channel = self.channel;
+
+        cdrom.push_response(&[cdrom.status.bits()]);
+        cdrom.raise_int(IrqFlag::Int3);
+    }
+}
+
 pub struct Setmode {
     pub mode: u8,
 }
