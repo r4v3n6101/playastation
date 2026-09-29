@@ -5,7 +5,7 @@ use crate::{
     BIOS_SIZE, RAM_SIZE,
     devices::{
         Mmio, cdrom::CdRom, dma::DmaController, gpu::Gpu, int::InterruptController, joy::JoyBus,
-        timer::TimerController,
+        spu::Spu, timer::TimerController,
     },
 };
 
@@ -55,6 +55,7 @@ pub struct Bus {
     pub cdrom: CdRom,
     pub gpu: Gpu,
     pub joy_bus: JoyBus,
+    pub spu: Spu,
 }
 
 impl Default for Bus {
@@ -74,6 +75,7 @@ impl Default for Bus {
             cdrom: CdRom::default(),
             gpu: Gpu::default(),
             joy_bus: JoyBus::default(),
+            spu: Spu::default(),
         }
     }
 }
@@ -228,6 +230,7 @@ impl Bus {
                 let _guard = mmio_span.enter();
                 let mmio_addr = paddr - SPU.start;
                 tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "spu read");
+                self.spu.read(buf, mmio_addr);
             }
             Region::HwRegs => {
                 let _guard = mmio_span.enter();
@@ -293,6 +296,7 @@ impl Bus {
                 let _guard = mmio_span.enter();
                 let mmio_addr = paddr - SPU.start;
                 tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "spu write");
+                self.spu.write(mmio_addr, &value);
             }
             Region::HwRegs => {
                 let _guard = mmio_span.enter();
