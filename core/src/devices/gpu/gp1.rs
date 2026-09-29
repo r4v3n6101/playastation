@@ -4,7 +4,8 @@ use modular_bitfield::bitfield;
 use strum::FromRepr;
 
 use super::{
-    DisplayDepth, DmaDirection, Gpu, HorizontalResolution, VerticalResolution, VideoMode, gp0,
+    DEFAULT_HRANGE, DEFAULT_VRANGE, Display, DisplayDepth, DmaDirection, Gpu, HorizontalResolution,
+    VerticalResolution, VideoMode, gp0,
 };
 
 #[derive(FromRepr, Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,18 +56,19 @@ impl Gpu {
                 self.int_flag = false;
                 self.dma_direction = DmaDirection::default();
                 self.vram_start = (0, 0);
-                self.hrange = (0, 0);
-                self.vrange = (0, 0);
 
-                self.display.enabled = false;
-                self.display.hres = HorizontalResolution::default();
-                self.display.vmode = VideoMode::default();
-                self.display.special_368_hres = false;
+                self.hrange = DEFAULT_HRANGE;
+                self.vrange = DEFAULT_VRANGE;
+                self.clock.set_display_ranges(self.hrange, self.vrange);
+
+                self.display = Display::default();
+                self.frame_ready = true;
 
                 self.clock.set_display_mode(
                     self.display.vmode,
                     self.display.hres,
                     self.display.special_368_hres,
+                    self.display.interlaced,
                 );
             }
             Gp1Opcode::ResetCommandBuffer => {
@@ -77,6 +79,7 @@ impl Gpu {
             }
             Gp1Opcode::DisplayEnable => {
                 self.display.enabled = (cmd & 1) == 0;
+                self.frame_ready |= !self.display.enabled;
             }
             Gp1Opcode::DmaDirection => {
                 self.dma_direction = match cmd & 0x3 {
@@ -92,9 +95,11 @@ impl Gpu {
             }
             Gp1Opcode::DisplayHorizontalRange => {
                 self.hrange = ((cmd & 0x0FFF) as u16, ((cmd >> 12) & 0x0FFF) as u16);
+                self.clock.set_display_ranges(self.hrange, self.vrange);
             }
             Gp1Opcode::DisplayVerticalRange => {
                 self.vrange = ((cmd & 0x03FF) as u16, ((cmd >> 10) & 0x03FF) as u16);
+                self.clock.set_display_ranges(self.hrange, self.vrange);
             }
             Gp1Opcode::DisplayMode => {
                 let mode = DisplayMode::from_bytes([cmd as u8]);
@@ -111,6 +116,7 @@ impl Gpu {
                     self.display.vmode,
                     self.display.hres,
                     self.display.special_368_hres,
+                    self.display.interlaced,
                 );
             }
             Gp1Opcode::GetGpuInfo => {}

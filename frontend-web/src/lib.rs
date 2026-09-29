@@ -1,3 +1,7 @@
+use playastation::{
+    VRAM_HEIGHT, VRAM_WIDTH,
+    devices::gpu::{Display, HorizontalResolution},
+};
 use playastation_frontend_common::{App, EmulatorData, EmulatorHost, InputState, eframe};
 use wasm_bindgen::prelude::*;
 
@@ -20,7 +24,7 @@ impl EmulatorHost for Host {
     fn poll_data(&mut self) -> Option<EmulatorData> {
         self.frame_index = self.frame_index.wrapping_add(1);
 
-        let mut pixels = vec![0u16; WIDTH * HEIGHT];
+        let mut pixels = vec![0u16; VRAM_WIDTH * VRAM_HEIGHT];
 
         for y in 0..HEIGHT {
             for x in 0..WIDTH {
@@ -28,12 +32,18 @@ impl EmulatorHost for Host {
                 let g = (((y + self.frame_index as usize) & 31) as u16) << 5;
                 let b = (((x ^ y) & 31) as u16) << 10;
 
-                pixels[y * WIDTH + x] = r | g | b;
+                pixels[y * VRAM_WIDTH + x] = r | g | b;
             }
         }
 
         Some(EmulatorData {
             vram: pixels,
+            display_size: (WIDTH, HEIGHT),
+            display: Display {
+                hres: HorizontalResolution::H320,
+                enabled: true,
+                ..Default::default()
+            },
 
             ..Default::default()
         })

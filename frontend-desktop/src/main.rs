@@ -1,10 +1,4 @@
-use std::{
-    fs,
-    path::PathBuf,
-    sync::Arc,
-    thread,
-    time::{Duration, Instant},
-};
+use std::{fs, path::PathBuf, sync::Arc, thread};
 
 use clap::Parser;
 use crossbeam_utils::atomic::AtomicCell;
@@ -132,17 +126,17 @@ fn spawn_emulator_thread(
         );
 
         let mut scaler = time::Scaler::<CPU_FREQ>::default();
-        let mut last_frame = Instant::now();
         loop {
             let sys_cycles = console.step();
 
             scaler.add_cycles(sys_cycles);
             // scaler.wait();
 
-            if last_frame.elapsed() > Duration::from_millis(5) {
+            if console.bus.gpu.take_frame_ready() {
                 data_tx.write(EmulatorData {
                     vram: console.bus.gpu.renderer.framebuffer().to_vec(),
                     vram_start: console.bus.gpu.vram_start,
+                    display_size: console.bus.gpu.display_size(),
                     display: console.bus.gpu.display,
 
                     cdrom_status: console.bus.cdrom.status,
@@ -156,7 +150,6 @@ fn spawn_emulator_thread(
                     joy_ctrl: console.bus.joy_bus.ctrl,
                     joy_stat: console.bus.joy_bus.stat(),
                 });
-                last_frame = Instant::now();
             }
         }
     });

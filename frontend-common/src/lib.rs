@@ -5,7 +5,7 @@ use playastation::{
     VRAM_HEIGHT, VRAM_WIDTH,
     devices::{
         cdrom::{CdRomMode, CdRomStat, CdRomStatus},
-        gpu::{Display, DisplayDepth, GpuStat, HorizontalResolution, VerticalResolution},
+        gpu::{Display, DisplayDepth, GpuStat},
         joy::{JoyCtrl, JoyMode, JoyStat, controller::Button},
     },
 };
@@ -24,6 +24,7 @@ pub struct InputState {
 pub struct EmulatorData {
     pub vram: Vec<u16>,
     pub vram_start: (u16, u16),
+    pub display_size: (usize, usize),
     pub display: Display,
 
     pub cdrom_status: CdRomStatus,
@@ -65,26 +66,21 @@ impl<H> App<H> {
     }
 
     fn upload_frame(&mut self, ui: &egui::Ui, data: &EmulatorData) {
-        let offset = [data.vram_start.0 as usize, data.vram_start.1 as usize];
-        let hres = match data.display.hres {
-            HorizontalResolution::H256 => 256,
-            HorizontalResolution::H320 => 320,
-            HorizontalResolution::H512 => 512,
-            HorizontalResolution::H640 => 640,
-        };
-        // TODO : this is inaccurate, because of interlace
-        // Normally I should follow vrange + 480i
-        let vres = match data.display.vres {
-            VerticalResolution::V240 => 240,
-            VerticalResolution::V480 => 480,
-        };
+        let offset = [
+            usize::from(data.vram_start.0),
+            usize::from(data.vram_start.1),
+        ];
+        let (hres, vres) = data.display_size;
+        let blank = !data.display.enabled || hres == 0 || vres == 0;
 
         let bytes_per_pixel = match data.display.depth {
             DisplayDepth::Bpp15 => 2,
             DisplayDepth::Bpp24 => 3,
         };
 
-        if offset[0] * 2 + hres * bytes_per_pixel > VRAM_WIDTH * 2 || offset[1] + vres > VRAM_HEIGHT
+        if !blank
+            && (offset[0] * 2 + hres * bytes_per_pixel > VRAM_WIDTH * 2
+                || offset[1] + vres > VRAM_HEIGHT)
         {
             return;
         }
@@ -93,9 +89,10 @@ impl<H> App<H> {
             [VRAM_WIDTH, VRAM_HEIGHT],
             data.vram.iter().copied().map(bgr555_to_color32).collect(),
         );
-        let screen = match data.display.depth {
-            DisplayDepth::Bpp15 => vram.region_by_pixels(offset, [hres, vres]),
-            DisplayDepth::Bpp24 => {
+        let screen = match (blank, data.display.depth) {
+            (true, _) => egui::ColorImage::filled([1, 1], egui::Color32::BLACK),
+            (false, DisplayDepth::Bpp15) => vram.region_by_pixels(offset, [hres, vres]),
+            (false, DisplayDepth::Bpp24) => {
                 let mut pixels = Vec::with_capacity(hres * vres);
                 for y in offset[1]..offset[1] + vres {
                     let row = &data.vram[y * VRAM_WIDTH..][..VRAM_WIDTH];

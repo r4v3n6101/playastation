@@ -1,4 +1,5 @@
 use alloc::boxed::Box;
+use core::mem;
 
 use modular_bitfield::prelude::*;
 
@@ -19,6 +20,9 @@ use super::{Mmio, read_part, write_part};
 mod clock;
 mod gp0;
 mod gp1;
+
+const DEFAULT_HRANGE: (u16, u16) = (512, 3072);
+const DEFAULT_VRANGE: (u16, u16) = (16, 256);
 
 #[derive(Default, Clone, Copy)]
 pub struct Display {
@@ -48,7 +52,7 @@ pub struct Gpu {
     cmdbuf: gp0::CmdBuf,
 
     // GPU state itself
-    draw_odd_even_frame: bool,
+    frame_ready: bool,
     dma_direction: DmaDirection,
 
     int_flag: bool,
@@ -133,14 +137,14 @@ impl Default for Gpu {
         Self {
             renderer: Box::new(NoopRenderer::default()),
             vram_start: (0, 0),
-            hrange: (0, 0),
-            vrange: (0, 0),
+            hrange: DEFAULT_HRANGE,
+            vrange: DEFAULT_VRANGE,
             display: Display::default(),
 
             clock: clock::State::default(),
             cmdbuf: gp0::CmdBuf::default(),
 
-            draw_odd_even_frame: false,
+            frame_ready: false,
             dma_direction: DmaDirection::default(),
 
             int_flag: false,
@@ -149,6 +153,35 @@ impl Default for Gpu {
 }
 
 impl Gpu {
+    pub fn display_size(&self) -> (usize, usize) {
+        let clocks_per_pixel = if self.display.special_368_hres {
+            7
+        } else {
+            match self.display.hres {
+                HorizontalResolution::H256 => 10,
+                HorizontalResolution::H320 => 8,
+                HorizontalResolution::H512 => 5,
+                HorizontalResolution::H640 => 4,
+            }
+        };
+
+        // here it is: https://psx-spx.consoledev.net/ps1/gpu/display-control-commands-gp1/#gp106h-horizontal-display-range-on-screen
+        let (h0, h1) = self.hrange;
+        let width = (usize::from(h1.saturating_sub(h0)) / clocks_per_pixel).wrapping_add(2) & !3;
+
+        let (v0, v1) = self.vrange;
+        let mut height = usize::from(v1.saturating_sub(v0));
+        if self.display.interlaced && self.display.vres == VerticalResolution::V480 {
+            height *= 2;
+        }
+
+        (width, height)
+    }
+
+    pub fn take_frame_ready(&mut self) -> bool {
+        mem::take(&mut self.frame_ready)
+    }
+
     pub fn stat(&self) -> GpuStat {
         let RenderState {
             draw_mode,
@@ -180,7 +213,8 @@ impl Gpu {
             .with_vres(self.display.vres)
             .with_vmode(self.display.vmode)
             .with_display_depth(self.display.depth)
-            .with_interlace_field(self.display.interlaced)
+            .with_interlace_field(!self.display.interlaced || self.clock.even_field())
+            .with_vertical_interlace(self.display.interlaced)
             .with_special_hres_368(self.display.special_368_hres)
             .with_reverse_flag(self.display.reversed)
             // Via [`MaskBitSetting`]
@@ -195,13 +229,13 @@ impl Gpu {
             .with_ready_to_send_vram(ready_to_send_vram)
             .with_ready_to_receive_dma(ready_to_receive_dma)
             .with_dma_data_request(dma_data_request)
-            // Some tests need this
             .with_drawing_even_odd_lines(if self.clock.vblank() {
                 false
-            } else if self.display.interlaced {
-                self.draw_odd_even_frame
+            } else if self.display.interlaced && self.display.vres == VerticalResolution::V480 {
+                // i hate interlacing
+                (self.vram_start.1 & 1 != 0) ^ !self.clock.even_field()
             } else {
-                self.clock.scanline & 1 != 0
+                self.clock.scanline() & 1 != 0
             })
     }
 
@@ -215,8 +249,8 @@ impl Gpu {
         }
 
         self.clock.update(sys_cycles).inspect(|span| {
-            if span.event.contains(TimingEvent::VBLANK_LEAVE) {
-                self.draw_odd_even_frame = !self.draw_odd_even_frame;
+            if span.event.contains(TimingEvent::VBLANK_ENTER) {
+                self.frame_ready = true;
             }
         })
     }

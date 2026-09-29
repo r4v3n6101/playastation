@@ -19,7 +19,7 @@
             repo = "pcsx-redux";
             rev = "221e96bdbd9bf52e7af631864aa22b9b0513581e";
             fetchSubmodules = true;
-            hash = "sha256-MAyUvhMqS35KGSU8skQkZ+5c2vycSPLfdWFYeShNydw=";
+            hash = "sha256-hVc2jH8Nr8iA7PPm5c6t7DSVSJKRt2cr48uiYiUtpBI=";
           };
 
           buildPhase = ''
