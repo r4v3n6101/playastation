@@ -11,14 +11,18 @@ use super::{Mmio, read_part, write_part};
 
 pub mod controller;
 
-pub trait SerialDevice {
-    fn select(&mut self);
-    fn deselect(&mut self);
-    fn exchange(&mut self, tx: u8) -> u8;
+// Approximate peripheral response delay and ACK pulse width in CPU clocks.
+const ACK_DELAY: u64 = 100;
+const ACK_PULSE: u64 = 100;
 
-    fn reset(&mut self) {
-        self.deselect();
-    }
+pub trait SerialDevice {
+    /// Starts a new transfer before receiving its address byte.
+    fn begin_transfer(&mut self);
+
+    /// # Returns
+    ///
+    /// Received byte and ACK for the next byte.
+    fn exchange(&mut self, tx: u8) -> (u8, bool);
 }
 
 pub struct JoyBus {
@@ -26,11 +30,21 @@ pub struct JoyBus {
     pub ctrl: JoyCtrl,
     pub baud: u16,
 
-    selected_slot: Slot,
+    selection: Selection,
     devs: [Option<Box<dyn SerialDevice>>; Slot::COUNT],
     rx_fifo: VecDeque<u8>,
 
     irq_pending: bool,
+    ack_delay: Option<u64>,
+    ack_pulse_left: u64,
+}
+
+#[derive(Default, Clone, Copy)]
+enum Selection {
+    #[default]
+    Address,
+    Device(Slot),
+    Disconnected,
 }
 
 #[derive(EnumCount, Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,7 +104,7 @@ pub struct JoyCtrl {
     #[skip]
     __: B1,
 
-    pub ack_irq_enable: bool,
+    pub acknowledge_irq: bool,
 
     #[skip]
     __: B1,
@@ -103,7 +117,7 @@ pub struct JoyCtrl {
     pub rx_irq_mode: B2,
     pub tx_irq_enable: bool,
     pub rx_irq_enable: bool,
-    pub ack_irq_enable2: bool,
+    pub ack_irq_enable: bool,
     pub slot_select: bool,
 
     #[skip]
@@ -114,15 +128,17 @@ impl Default for JoyBus {
     fn default() -> Self {
         Self {
             devs: [const { None }; _],
-            selected_slot: Slot::MemCard1,
+            selection: Selection::default(),
 
-            rx_fifo: VecDeque::with_capacity(10),
+            rx_fifo: VecDeque::with_capacity(16),
 
             mode: JoyMode::new(),
             ctrl: JoyCtrl::new(),
             baud: 0,
 
             irq_pending: false,
+            ack_delay: None,
+            ack_pulse_left: 0,
         }
     }
 }
@@ -133,9 +149,11 @@ impl JoyBus {
             .with_tx_ready(true)
             .with_tx_idle(true)
             .with_rx_not_empty(!self.rx_fifo.is_empty())
+            .with_ack_input(self.ack_pulse_left != 0)
             .with_irq_pending(self.irq_pending)
     }
 
+    // TODO : SmallBox probably
     pub fn insert_dev(&mut self, slot: Slot, dev: Box<dyn SerialDevice>) {
         self.devs[slot as usize] = Some(dev);
     }
@@ -144,25 +162,78 @@ impl JoyBus {
         self.devs[slot as usize] = None;
     }
 
-    pub(crate) fn update(&mut self, int_ctrl: &mut InterruptController) {
-        if self.irq_pending {
+    pub(crate) fn update(&mut self, int_ctrl: &mut InterruptController, sys_cycles: u64) {
+        self.ack_pulse_left = self.ack_pulse_left.saturating_sub(sys_cycles);
+
+        let mut ack_edge = false;
+        if let Some(delay) = self.ack_delay {
+            if delay > sys_cycles {
+                self.ack_delay = Some(delay - sys_cycles);
+            } else {
+                self.ack_delay = None;
+                self.ack_pulse_left = ACK_PULSE.saturating_sub(sys_cycles - delay);
+                ack_edge = true;
+            }
+        }
+
+        let irq = (self.ctrl.ack_irq_enable() && (ack_edge || self.ack_pulse_left != 0))
+            || self.ctrl.tx_irq_enable()
+            || (self.ctrl.rx_irq_enable() && self.rx_fifo.len() >= (1 << self.ctrl.rx_irq_mode()));
+        if !self.irq_pending && irq {
+            self.irq_pending = true;
             int_ctrl.raise(InterruptFlags::JOY);
         }
     }
 
-    fn selected_dev_mut(&mut self) -> &mut Option<Box<dyn SerialDevice>> {
-        &mut self.devs[self.selected_slot as usize]
-    }
+    fn exchange(&mut self, tx: u8) -> (u8, bool) {
+        const CONTROLLER_ID: u8 = 0x01;
+        const MEMCARD_ID: u8 = 0x81;
 
-    fn reset(&mut self) {
-        self.rx_fifo.clear();
-        self.irq_pending = false;
+        if self.ctrl.joy_select() {
+            if let Selection::Address = self.selection {
+                let slot = match (tx, self.ctrl.slot_select()) {
+                    (CONTROLLER_ID, false) => Some(Slot::Controller1),
+                    (CONTROLLER_ID, true) => Some(Slot::Controller2),
+                    (MEMCARD_ID, false) => Some(Slot::MemCard1),
+                    (MEMCARD_ID, true) => Some(Slot::MemCard2),
+                    _ => None,
+                };
+                if let Some(slot) = slot
+                    && let Some(dev) = self.devs[slot as usize].as_mut()
+                {
+                    dev.begin_transfer();
+                    self.selection = Selection::Device(slot);
+                } else {
+                    self.selection = Selection::Disconnected;
+                }
+            }
 
-        for port in &mut self.devs {
-            if let Some(dev) = port.as_mut() {
-                dev.reset();
+            if let Selection::Device(slot) = self.selection
+                && let Some(dev) = self.devs[slot as usize].as_mut()
+            {
+                let response @ (_, ack) = dev.exchange(tx);
+                if !ack {
+                    self.selection = Selection::Disconnected;
+                }
+
+                return response;
             }
         }
+
+        (0xFF, false)
+    }
+
+    fn byte_cycles(&self) -> u64 {
+        let factor = match self.mode.baud_reload_factor() {
+            0 | 1 => 1,
+            2 => 16,
+            _ => 64,
+        };
+
+        let bit_cycles = ((u64::from(self.baud) * factor) & !1).max(1);
+        let bits = 5 + u64::from(self.mode.char_length()) + u64::from(self.mode.parity_enable());
+
+        bit_cycles * bits
     }
 }
 
@@ -196,14 +267,16 @@ impl Mmio for JoyBus {
                 }
 
                 let [tx] = write_part::<4, 1>(maddr, value, [0]);
-                let rx = self.devs[self.selected_slot as usize]
-                    .as_mut()
-                    .map_or(0xFF, |dev| dev.exchange(tx));
+                let (rx, ack) = self.exchange(tx);
 
-                self.rx_fifo.push_back(rx);
+                if self.ctrl.joy_select() || self.ctrl.rx_enable() {
+                    self.rx_fifo.push_back(rx);
+                    self.ctrl.set_rx_enable(false);
+                }
 
-                if self.ctrl.ack_irq_enable() || self.ctrl.ack_irq_enable2() {
-                    self.irq_pending = true;
+                if ack {
+                    // Delay ACK IRQ
+                    self.ack_delay = Some(self.byte_cycles() + ACK_DELAY);
                 }
             }
             0x4..0x8 => {
@@ -216,32 +289,25 @@ impl Mmio for JoyBus {
             0xA..0xE => {
                 let ctrl =
                     JoyCtrl::from_bytes(write_part::<2, 2>(maddr, value, self.ctrl.into_bytes()));
-                let old = mem::replace(&mut self.ctrl, ctrl);
 
                 if ctrl.reset() {
-                    self.reset();
-                    return;
-                }
+                    *self = Self {
+                        devs: mem::take(&mut self.devs),
+                        ..Self::default()
+                    };
+                } else {
+                    if self.ctrl.joy_select() != ctrl.joy_select()
+                        || self.ctrl.slot_select() != ctrl.slot_select()
+                    {
+                        self.selection = Selection::Address;
+                        self.ack_delay = None;
+                        self.ack_pulse_left = 0;
+                    }
 
-                self.selected_slot = match (ctrl.slot_select(), ctrl.joy_select()) {
-                    (false, false) => Slot::MemCard1,
-                    (false, true) => Slot::Controller1,
-                    (true, false) => Slot::MemCard2,
-                    (true, true) => Slot::Controller2,
-                };
-
-                if !old.joy_select()
-                    && ctrl.joy_select()
-                    && let Some(dev) = self.selected_dev_mut()
-                {
-                    dev.select();
-                }
-
-                if old.joy_select()
-                    && !ctrl.joy_select()
-                    && let Some(dev) = self.selected_dev_mut()
-                {
-                    dev.deselect();
+                    if ctrl.acknowledge_irq() {
+                        self.irq_pending = false;
+                    }
+                    self.ctrl = ctrl.with_acknowledge_irq(false).with_reset(false);
                 }
             }
             0xE..0x10 => {

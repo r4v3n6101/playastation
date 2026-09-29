@@ -90,7 +90,7 @@ impl Bus {
                 self.timer_ctrl.update(&mut self.int_ctrl, span);
             });
         self.cdrom.update(&mut self.int_ctrl, sys_cycles);
-        self.joy_bus.update(&mut self.int_ctrl);
+        self.joy_bus.update(&mut self.int_ctrl, sys_cycles);
 
         sys_cycles
     }

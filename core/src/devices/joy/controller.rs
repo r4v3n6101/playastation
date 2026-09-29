@@ -1,5 +1,4 @@
 use alloc::boxed::Box;
-use core::mem;
 
 use super::SerialDevice;
 
@@ -65,18 +64,14 @@ impl DigitalController {
 }
 
 impl SerialDevice for DigitalController {
-    fn select(&mut self) {
+    fn begin_transfer(&mut self) {
         self.state = State::Idle;
     }
 
-    fn deselect(&mut self) {
-        self.state = State::Idle;
-    }
-
-    fn exchange(&mut self, tx: u8) -> u8 {
+    fn exchange(&mut self, tx: u8) -> (u8, bool) {
         let mut pressed = || !(self.poll_buttons)().bits();
 
-        match self.state {
+        let rx = match self.state {
             State::Idle => {
                 if tx == 0x01 {
                     self.state = State::Command;
@@ -108,11 +103,8 @@ impl SerialDevice for DigitalController {
                 self.state = State::Idle;
                 (pressed() >> 8) as u8
             }
-        }
-    }
+        };
 
-    fn reset(&mut self) {
-        let old = mem::take(self);
-        self.poll_buttons = old.poll_buttons;
+        (rx, self.state != State::Idle)
     }
 }
