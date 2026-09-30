@@ -13,9 +13,10 @@ use crate::{
         noop::NoopRenderer,
         types::{RenderState, SemiTransparency, TextureDepth},
     },
+    scheduler::SystemCycle,
 };
 
-use super::{Mmio, read_part, write_part};
+use super::{Mmio, Schedule, read_part, write_part};
 
 mod clock;
 mod gp0;
@@ -152,6 +153,12 @@ impl Default for Gpu {
     }
 }
 
+impl Schedule for Gpu {
+    fn next_event(&self) -> Option<SystemCycle> {
+        Some(self.clock.cycles_till_next_event())
+    }
+}
+
 impl Gpu {
     pub fn display_size(&self) -> (usize, usize) {
         let clocks_per_pixel = if self.display.special_368_hres {
@@ -237,6 +244,18 @@ impl Gpu {
             } else {
                 self.clock.scanline() & 1 != 0
             })
+    }
+
+    pub(crate) fn hblank(&self) -> bool {
+        self.clock.hblank()
+    }
+
+    pub(crate) fn vblank(&self) -> bool {
+        self.clock.vblank()
+    }
+
+    pub(crate) fn cycles_till_dotclocks(&self, dots: u64) -> SystemCycle {
+        self.clock.cycles_till_dotclocks(dots)
     }
 
     pub(crate) fn update<'a>(

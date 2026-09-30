@@ -12,7 +12,6 @@ const BLOCK_THRESHOLD: SystemCycle = 8;
 
 pub enum StopReason {
     UnitEnded,
-    BudgetExhausted,
     Stalled,
     ExeLoad,
     Print(char),
@@ -46,7 +45,7 @@ impl CpuEngine {
     ) -> ExecutionResult {
         let mut result = ExecutionResult {
             cycles_elapsed: 0,
-            stop_reason: StopReason::BudgetExhausted,
+            stop_reason: StopReason::UnitEnded,
         };
 
         while result.cycles_elapsed < budget {
@@ -56,20 +55,18 @@ impl CpuEngine {
             }
 
             let before = result.cycles_elapsed;
-            let remaining = budget - before;
+            self.run_unit(&mut result, cpu, bus, budget);
 
-            result.stop_reason = StopReason::UnitEnded;
-            self.run_unit(&mut result, cpu, bus, remaining);
-
-            // Prevent deadloop
-            if result.cycles_elapsed == before {
-                result.stop_reason = StopReason::Stalled;
+            if let StopReason::UnitEnded = result.stop_reason {
+                // Prevent deadloop
+                if result.cycles_elapsed != before {
+                    continue;
+                } else {
+                    result.stop_reason = StopReason::Stalled;
+                }
             }
 
-            match result.stop_reason {
-                StopReason::UnitEnded => {}
-                _ => break,
-            }
+            break;
         }
 
         result

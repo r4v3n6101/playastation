@@ -46,7 +46,7 @@ use crate::{
     formats::disk::{Disc, RawSector, sector_data},
 };
 
-use super::Mmio;
+use super::{Mmio, Schedule};
 
 mod tasks;
 
@@ -305,6 +305,8 @@ impl CdRom {
         self.irq_flags = int as u8;
     }
 }
+
+impl Schedule for CdRom {}
 
 impl Mmio for CdRom {
     fn read(&mut self, dest: &mut [u8], maddr: u32) {

@@ -3,7 +3,7 @@ use modular_bitfield::prelude::*;
 
 use crate::{devices::int::InterruptFlags, interconnect::Bus};
 
-use super::{Mmio, read_part, write_part};
+use super::{Mmio, Schedule, read_part, write_part};
 
 mod handler;
 
@@ -251,6 +251,8 @@ impl DmaController {
         best
     }
 }
+
+impl Schedule for DmaController {}
 
 impl Mmio for DmaController {
     fn read(&mut self, dest: &mut [u8], maddr: u32) {

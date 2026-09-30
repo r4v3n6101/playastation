@@ -87,8 +87,27 @@ impl State {
         self.in_vblank
     }
 
+    pub fn hblank(&self) -> bool {
+        self.in_hblank
+    }
+
     pub fn even_field(&self) -> bool {
         self.even_field
+    }
+
+    pub fn cycles_till_next_event(&self) -> u64 {
+        self.cycles_for_ticks(self.ticks_until_next_event())
+    }
+
+    pub fn cycles_till_dotclocks(&self, dots: u64) -> u64 {
+        if dots == 0 {
+            return 0;
+        }
+
+        let ticks = (dots * self.timing.ticks_per_scanline - self.dot_remainder)
+            .div_ceil(self.timing.dotclocks_per_scanline);
+
+        self.cycles_for_ticks(ticks)
     }
 
     pub fn update(&mut self, mut remaining: u64) -> impl Iterator<Item = TimingSpan> + '_ {
@@ -97,10 +116,7 @@ impl State {
                 return None;
             }
 
-            let ticks = self.ticks_until_next_event();
-            let step = (ticks * CPU_FREQ - self.clock_remainder)
-                .div_ceil(self.timing.ticks_per_second)
-                .min(remaining);
+            let step = self.cycles_till_next_event().min(remaining);
 
             let hblank = self.in_hblank;
             let vblank = self.in_vblank;
@@ -157,6 +173,10 @@ impl State {
             let unit = self.timing.ticks_per_scanline;
             !(u64::from(a) * unit..u64::from(b) * unit).contains(&self.field_tick)
         };
+    }
+
+    fn cycles_for_ticks(&self, ticks: u64) -> u64 {
+        (ticks * CPU_FREQ - self.clock_remainder).div_ceil(self.timing.ticks_per_second)
     }
 
     fn advance(&mut self, sysclocks: u64) -> (u64, TimingEvent) {

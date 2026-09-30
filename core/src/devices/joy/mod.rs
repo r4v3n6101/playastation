@@ -7,7 +7,7 @@ use strum::EnumCount;
 
 use crate::devices::int::{InterruptController, InterruptFlags};
 
-use super::{Mmio, read_part, write_part};
+use super::{Mmio, Schedule, read_part, write_part};
 
 pub mod controller;
 
@@ -236,6 +236,8 @@ impl JoyBus {
         bit_cycles * bits
     }
 }
+
+impl Schedule for JoyBus {}
 
 impl Mmio for JoyBus {
     fn read(&mut self, dest: &mut [u8], maddr: u32) {
