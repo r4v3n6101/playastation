@@ -5,12 +5,12 @@ use crate::{
     cpu::{Cpu, Exception, PendingJump},
     formats::psexe::{BoxedExeFile, ExeHeader},
     interconnect::Bus,
-    scheduler::Cycle,
+    scheduler::SystemCycle,
 };
 
 mod backend;
 
-const MAX_BUDGET: Cycle = 128;
+const MAX_BUDGET: SystemCycle = 128;
 
 #[derive(Default)]
 pub struct Console {
