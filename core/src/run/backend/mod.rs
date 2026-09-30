@@ -1,14 +1,14 @@
 use crate::{
+    SystemTime,
     cpu::{Cpu, Exception},
     interconnect::Bus,
-    scheduler::SystemCycle,
 };
 
 mod cache;
 mod decoder;
 mod interpreter;
 
-const BLOCK_THRESHOLD: SystemCycle = 8;
+const BLOCK_THRESHOLD: SystemTime = 8;
 
 pub enum StopReason {
     UnitEnded,
@@ -19,7 +19,7 @@ pub enum StopReason {
 }
 
 pub struct ExecutionResult {
-    pub cycles_elapsed: SystemCycle,
+    pub cycles_elapsed: SystemTime,
     pub stop_reason: StopReason,
 }
 
@@ -37,12 +37,7 @@ impl CpuEngine {
         self.cache.invalidate_addr(paddr);
     }
 
-    pub fn run_for(
-        &mut self,
-        cpu: &mut Cpu,
-        bus: &mut Bus,
-        budget: SystemCycle,
-    ) -> ExecutionResult {
+    pub fn run_for(&mut self, cpu: &mut Cpu, bus: &mut Bus, budget: SystemTime) -> ExecutionResult {
         let mut result = ExecutionResult {
             cycles_elapsed: 0,
             stop_reason: StopReason::UnitEnded,
@@ -77,7 +72,7 @@ impl CpuEngine {
         result: &mut ExecutionResult,
         cpu: &mut Cpu,
         bus: &mut Bus,
-        budget: SystemCycle,
+        budget: SystemTime,
     ) {
         if budget < BLOCK_THRESHOLD {
             interpreter::run_single(result, cpu, bus, &mut self.cache);

@@ -1,5 +1,7 @@
 use smallbox::{SmallBox, space::S4};
 
+use crate::SystemTime;
+
 use super::{
     CDROM_SECOND_DELAY, CDROM_SEEK_DELAY, CdRom, CdRomMode, CdRomStatus, ErrorCode, IrqFlag,
     bin_to_bcd,
@@ -13,7 +15,7 @@ pub trait Task {
 }
 
 pub struct ScheduledTask {
-    pub sys_cycles_left: u64,
+    pub remaining_delay: SystemTime,
     pub task: BoxedTask,
 }
 

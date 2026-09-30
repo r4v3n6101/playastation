@@ -3,12 +3,11 @@ use core::cmp::Reverse;
 
 use strum::{EnumCount, EnumIter, IntoEnumIterator};
 
-/// This is CPU time in cycles.
-pub type SystemCycle = u64;
+use crate::SystemTime;
 
 #[derive(Debug, Clone)]
 pub struct Scheduler {
-    now: SystemCycle,
+    now: SystemTime,
     generations: [u64; Event::COUNT],
     events: BinaryHeap<Reverse<QueuedEvent>>,
 }
@@ -24,8 +23,9 @@ pub enum Event {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct QueuedEvent {
-    scheduled_at: SystemCycle,
-    deadline: SystemCycle,
+    // Keep deadline first: derived Ord determines the heap's priority.
+    deadline: SystemTime,
+    scheduled_at: SystemTime,
     event: Event,
     generation: u64,
 }
@@ -49,24 +49,24 @@ impl Default for Scheduler {
 }
 
 impl Scheduler {
-    pub fn advance(&mut self, cycles: SystemCycle) {
+    pub fn advance(&mut self, elapsed: SystemTime) {
         self.now = self
             .now
-            .checked_add(cycles)
+            .checked_add(elapsed)
             .expect("scheduler time overflow");
     }
 
-    pub fn cycles_till_next_event(&mut self) -> Option<SystemCycle> {
+    pub fn delay_till_next_event(&mut self) -> Option<SystemTime> {
         self.discard_stale();
         self.events
             .peek()
             .map(|entry| entry.0.deadline.saturating_sub(self.now))
     }
 
-    pub fn schedule(&mut self, event: Event, after: SystemCycle) {
+    pub fn schedule(&mut self, event: Event, delay: SystemTime) {
         let deadline = self
             .now
-            .checked_add(after)
+            .checked_add(delay)
             .expect("event deadline overflow");
 
         self.cancel(event);
@@ -85,7 +85,7 @@ impl Scheduler {
             .expect("event generation overflow");
     }
 
-    pub fn pop_event_with_elapsed(&mut self) -> Option<(Event, SystemCycle)> {
+    pub fn pop_event_with_elapsed(&mut self) -> Option<(Event, SystemTime)> {
         self.discard_stale();
 
         if self.events.peek()?.0.deadline > self.now {

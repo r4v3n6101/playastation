@@ -1,7 +1,7 @@
 use core::iter;
 
 use crate::{
-    CPU_FREQ,
+    CPU_FREQ, SystemTime,
     devices::timer::{TimingEvent, TimingSpan},
 };
 
@@ -9,19 +9,20 @@ use super::{DEFAULT_HRANGE, DEFAULT_VRANGE, HorizontalResolution, VideoMode};
 
 const GPU_FREQ_NTSC: u64 = 53_693_175;
 const GPU_FREQ_PAL: u64 = 53_203_425;
-const TICKS_PER_VIDEO_CLOCK: u64 = 4;
+// Internal positions count quarter video clocks.
+const QUARTERS_PER_VIDEO_CLOCK: u64 = 4;
 
 const NTSC: VideoStandard = VideoStandard {
-    ticks_per_second: GPU_FREQ_NTSC * TICKS_PER_VIDEO_CLOCK,
-    ticks_per_scanline: 3412 * TICKS_PER_VIDEO_CLOCK + TICKS_PER_VIDEO_CLOCK / 2,
+    quarter_clocks_per_second: GPU_FREQ_NTSC * QUARTERS_PER_VIDEO_CLOCK,
+    quarter_clocks_per_scanline: 3412 * QUARTERS_PER_VIDEO_CLOCK + QUARTERS_PER_VIDEO_CLOCK / 2,
     dotclocks_per_scanline: [341, 426, 682, 853, 487],
     progressive_half_lines: 263 * 2,
     interlaced_half_lines: 262 * 2 + 1,
 };
 
 const PAL: VideoStandard = VideoStandard {
-    ticks_per_second: GPU_FREQ_PAL * TICKS_PER_VIDEO_CLOCK,
-    ticks_per_scanline: 3405 * TICKS_PER_VIDEO_CLOCK,
+    quarter_clocks_per_second: GPU_FREQ_PAL * QUARTERS_PER_VIDEO_CLOCK,
+    quarter_clocks_per_scanline: 3405 * QUARTERS_PER_VIDEO_CLOCK,
     // Timer0 counts integer dots per line; PAL 320 rounds up to 426.
     dotclocks_per_scanline: [340, 426, 681, 851, 486],
     progressive_half_lines: 314 * 2,
@@ -30,8 +31,8 @@ const PAL: VideoStandard = VideoStandard {
 
 #[derive(Debug, Clone)]
 pub struct State {
-    line_tick: u64,
-    field_tick: u64,
+    line_quarter_clocks: u64,
+    field_quarter_clocks: u64,
     clock_remainder: u64,
     dot_remainder: u64,
     in_hblank: bool,
@@ -45,15 +46,15 @@ pub struct State {
 
 #[derive(Debug, Clone, Copy)]
 struct VideoTiming {
-    ticks_per_second: u64,
-    ticks_per_scanline: u64,
-    ticks_per_field: u64,
+    quarter_clocks_per_second: u64,
+    quarter_clocks_per_scanline: u64,
+    quarter_clocks_per_field: u64,
     dotclocks_per_scanline: u64,
 }
 
 struct VideoStandard {
-    ticks_per_second: u64,
-    ticks_per_scanline: u64,
+    quarter_clocks_per_second: u64,
+    quarter_clocks_per_scanline: u64,
     dotclocks_per_scanline: [u64; 5],
     progressive_half_lines: u64,
     interlaced_half_lines: u64,
@@ -62,8 +63,8 @@ struct VideoStandard {
 impl Default for State {
     fn default() -> Self {
         Self {
-            line_tick: 0,
-            field_tick: 0,
+            line_quarter_clocks: 0,
+            field_quarter_clocks: 0,
             clock_remainder: 0,
             dot_remainder: 0,
             in_hblank: true,
@@ -80,7 +81,7 @@ impl Default for State {
 
 impl State {
     pub fn scanline(&self) -> u64 {
-        self.field_tick / self.timing.ticks_per_scanline
+        self.field_quarter_clocks / self.timing.quarter_clocks_per_scanline
     }
 
     pub fn vblank(&self) -> bool {
@@ -95,36 +96,37 @@ impl State {
         self.even_field
     }
 
-    pub fn cycles_till_next_event(&self) -> u64 {
-        self.cycles_for_ticks(self.ticks_until_next_event())
+    pub fn delay_till_next_event(&self) -> SystemTime {
+        self.duration_for_quarter_clocks(self.quarter_clocks_till_next_event())
     }
 
-    pub fn cycles_till_dotclocks(&self, dots: u64) -> u64 {
+    pub fn delay_till_dotclocks(&self, dots: u64) -> SystemTime {
         if dots == 0 {
             return 0;
         }
 
-        let ticks = (dots * self.timing.ticks_per_scanline - self.dot_remainder)
+        let quarter_clocks = (dots * self.timing.quarter_clocks_per_scanline - self.dot_remainder)
             .div_ceil(self.timing.dotclocks_per_scanline);
 
-        self.cycles_for_ticks(ticks)
+        self.duration_for_quarter_clocks(quarter_clocks)
     }
 
-    pub fn update(&mut self, mut remaining: u64) -> impl Iterator<Item = TimingSpan> + '_ {
+    pub fn update(&mut self, elapsed: SystemTime) -> impl Iterator<Item = TimingSpan> + '_ {
+        let mut remaining = elapsed;
         iter::from_fn(move || {
             if remaining == 0 {
                 return None;
             }
 
-            let step = self.cycles_till_next_event().min(remaining);
+            let duration = self.delay_till_next_event().min(remaining);
 
             let hblank = self.in_hblank;
             let vblank = self.in_vblank;
-            let (dotclocks, event) = self.advance(step);
-            remaining -= step;
+            let (dotclocks, event) = self.advance(duration);
+            remaining -= duration;
 
             Some(TimingSpan {
-                sysclocks: step,
+                elapsed: duration,
                 dotclocks,
                 hblank,
                 vblank,
@@ -144,13 +146,13 @@ impl State {
 
         // idk but i think it must be reset when changing format
         if self.timing.dotclocks_per_scanline != timing.dotclocks_per_scanline
-            || self.timing.ticks_per_scanline != timing.ticks_per_scanline
+            || self.timing.quarter_clocks_per_scanline != timing.quarter_clocks_per_scanline
         {
             self.dot_remainder = 0;
         }
         self.timing = timing;
-        self.line_tick %= timing.ticks_per_scanline;
-        self.field_tick %= timing.ticks_per_field;
+        self.line_quarter_clocks %= timing.quarter_clocks_per_scanline;
+        self.field_quarter_clocks %= timing.quarter_clocks_per_field;
 
         self.refresh_blank_levels();
     }
@@ -165,45 +167,46 @@ impl State {
     fn refresh_blank_levels(&mut self) {
         self.in_hblank = {
             let (a, b) = self.hrange;
-            let unit = TICKS_PER_VIDEO_CLOCK;
-            !(u64::from(a) * unit..u64::from(b) * unit).contains(&self.line_tick)
+            let unit = QUARTERS_PER_VIDEO_CLOCK;
+            !(u64::from(a) * unit..u64::from(b) * unit).contains(&self.line_quarter_clocks)
         };
         self.in_vblank = {
             let (a, b) = self.vrange;
-            let unit = self.timing.ticks_per_scanline;
-            !(u64::from(a) * unit..u64::from(b) * unit).contains(&self.field_tick)
+            let unit = self.timing.quarter_clocks_per_scanline;
+            !(u64::from(a) * unit..u64::from(b) * unit).contains(&self.field_quarter_clocks)
         };
     }
 
-    fn cycles_for_ticks(&self, ticks: u64) -> u64 {
-        (ticks * CPU_FREQ - self.clock_remainder).div_ceil(self.timing.ticks_per_second)
+    fn duration_for_quarter_clocks(&self, quarter_clocks: u64) -> SystemTime {
+        (quarter_clocks * CPU_FREQ - self.clock_remainder)
+            .div_ceil(self.timing.quarter_clocks_per_second)
     }
 
-    fn advance(&mut self, sysclocks: u64) -> (u64, TimingEvent) {
-        let clock = self.clock_remainder + sysclocks * self.timing.ticks_per_second;
-        let mut ticks = clock / CPU_FREQ;
+    fn advance(&mut self, elapsed: SystemTime) -> (u64, TimingEvent) {
+        let clock = self.clock_remainder + elapsed * self.timing.quarter_clocks_per_second;
+        let mut quarter_clocks = clock / CPU_FREQ;
         self.clock_remainder = clock % CPU_FREQ;
 
-        self.dot_remainder += ticks * self.timing.dotclocks_per_scanline;
-        let dotclocks = self.dot_remainder / self.timing.ticks_per_scanline;
-        self.dot_remainder %= self.timing.ticks_per_scanline;
+        self.dot_remainder += quarter_clocks * self.timing.dotclocks_per_scanline;
+        let dotclocks = self.dot_remainder / self.timing.quarter_clocks_per_scanline;
+        self.dot_remainder %= self.timing.quarter_clocks_per_scanline;
 
         let mut event = TimingEvent::empty();
 
         // One CPU clock can cross both edges of a narrow display range.
-        while ticks != 0 {
-            let step = ticks.min(self.ticks_until_next_event());
-            self.line_tick += step;
-            self.field_tick += step;
-            ticks -= step;
+        while quarter_clocks != 0 {
+            let step_quarter_clocks = quarter_clocks.min(self.quarter_clocks_till_next_event());
+            self.line_quarter_clocks += step_quarter_clocks;
+            self.field_quarter_clocks += step_quarter_clocks;
+            quarter_clocks -= step_quarter_clocks;
 
             self.update_blank_edges(&mut event);
 
-            if self.line_tick == self.timing.ticks_per_scanline {
-                self.line_tick = 0;
+            if self.line_quarter_clocks == self.timing.quarter_clocks_per_scanline {
+                self.line_quarter_clocks = 0;
             }
-            if self.field_tick == self.timing.ticks_per_field {
-                self.field_tick = 0;
+            if self.field_quarter_clocks == self.timing.quarter_clocks_per_field {
+                self.field_quarter_clocks = 0;
                 self.even_field = !self.even_field;
             }
 
@@ -213,32 +216,41 @@ impl State {
         (dotclocks, event)
     }
 
-    fn ticks_until_next_event(&self) -> u64 {
-        let mut ticks = (self.timing.ticks_per_scanline - self.line_tick)
-            .min(self.timing.ticks_per_field - self.field_tick);
+    fn quarter_clocks_till_next_event(&self) -> u64 {
+        let mut quarter_clocks = (self.timing.quarter_clocks_per_scanline
+            - self.line_quarter_clocks)
+            .min(self.timing.quarter_clocks_per_field - self.field_quarter_clocks);
 
         for (position, range, unit) in [
-            (self.line_tick, self.hrange, TICKS_PER_VIDEO_CLOCK),
-            (self.field_tick, self.vrange, self.timing.ticks_per_scanline),
+            (
+                self.line_quarter_clocks,
+                self.hrange,
+                QUARTERS_PER_VIDEO_CLOCK,
+            ),
+            (
+                self.field_quarter_clocks,
+                self.vrange,
+                self.timing.quarter_clocks_per_scanline,
+            ),
         ] {
             if range.0 < range.1 {
                 for endpoint in [range.0, range.1] {
                     let boundary = u64::from(endpoint) * unit;
                     if boundary > position {
-                        ticks = ticks.min(boundary - position);
+                        quarter_clocks = quarter_clocks.min(boundary - position);
                     }
                 }
             }
         }
 
-        ticks
+        quarter_clocks
     }
 
     fn update_blank_edges(&mut self, event: &mut TimingEvent) {
         update_blank_edge(
-            self.line_tick,
+            self.line_quarter_clocks,
             self.hrange,
-            TICKS_PER_VIDEO_CLOCK,
+            QUARTERS_PER_VIDEO_CLOCK,
             &mut self.in_hblank,
             TimingEvent::HBLANK_ENTER,
             TimingEvent::HBLANK_LEAVE,
@@ -246,9 +258,9 @@ impl State {
         );
 
         update_blank_edge(
-            self.field_tick,
+            self.field_quarter_clocks,
             self.vrange,
-            self.timing.ticks_per_scanline,
+            self.timing.quarter_clocks_per_scanline,
             &mut self.in_vblank,
             TimingEvent::VBLANK_ENTER,
             TimingEvent::VBLANK_LEAVE,
@@ -287,9 +299,9 @@ impl VideoTiming {
         };
 
         Self {
-            ticks_per_second: standard.ticks_per_second,
-            ticks_per_scanline: standard.ticks_per_scanline,
-            ticks_per_field: standard.ticks_per_scanline * half_lines / 2,
+            quarter_clocks_per_second: standard.quarter_clocks_per_second,
+            quarter_clocks_per_scanline: standard.quarter_clocks_per_scanline,
+            quarter_clocks_per_field: standard.quarter_clocks_per_scanline * half_lines / 2,
             dotclocks_per_scanline: standard.dotclocks_per_scanline[index],
         }
     }

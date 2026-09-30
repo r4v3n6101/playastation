@@ -1,7 +1,7 @@
 use derive_more::Debug;
 use modular_bitfield::prelude::*;
 
-use crate::{devices::int::InterruptFlags, interconnect::Bus};
+use crate::{SystemTime, devices::int::InterruptFlags, interconnect::Bus};
 
 use super::{Mmio, Schedule, read_part, write_part};
 
@@ -172,8 +172,8 @@ impl Dicr {
 }
 
 impl DmaController {
-    pub(crate) fn run(bus: &mut Bus, mut ram_touched: impl FnMut(u32)) -> u64 {
-        let mut cycles = 0u64;
+    pub(crate) fn run(bus: &mut Bus, mut ram_touched: impl FnMut(u32)) -> SystemTime {
+        let mut duration: SystemTime = 0;
 
         if let Some(ch) = bus.dma_ctrl.pick_highest_priority_chan() {
             let mut chan = bus.dma_ctrl.channels[ch];
@@ -191,7 +191,7 @@ impl DmaController {
                     );
                     let _guard = transfer_span.enter();
 
-                    let elapsed_cycles = match chan.chcr.sync_mode() {
+                    let elapsed = match chan.chcr.sync_mode() {
                         SyncMode::Manual => {
                             handler::do_manual(bus, ch, &mut chan, &mut ram_touched)
                         }
@@ -201,8 +201,8 @@ impl DmaController {
                         SyncMode::LinkedList => handler::do_linked_list(bus, ch, &mut chan),
                         SyncMode::Reserved => unreachable!(),
                     };
-                    tracing::trace!(%elapsed_cycles, "dma cycles spent");
-                    cycles = cycles.saturating_add(elapsed_cycles);
+                    tracing::trace!(%elapsed, "dma transfer completed");
+                    duration = duration.saturating_add(elapsed);
                 }
 
                 chan.chcr.set_active(false);
@@ -217,7 +217,7 @@ impl DmaController {
             }
         }
 
-        cycles
+        duration
     }
 
     fn pick_highest_priority_chan(&self) -> Option<usize> {

@@ -2,12 +2,12 @@ use alloc::boxed::Box;
 use core::{ops::Range, ptr};
 
 use crate::{
-    BIOS_SIZE, RAM_SIZE,
+    BIOS_SIZE, RAM_SIZE, SystemTime,
     devices::{
         Mmio, Schedule, cdrom::CdRom, dma::DmaController, gpu::Gpu, int::InterruptController,
         joy::JoyBus, spu::Spu, timer::TimerController,
     },
-    scheduler::{Event, SystemCycle},
+    scheduler::Event,
 };
 
 /// RAM takes 8MiB, but 3 others are mirrors to the first 2MiB
@@ -85,36 +85,37 @@ impl Bus {
     pub(crate) fn handle_event(
         &mut self,
         event: Event,
-        cycles: SystemCycle,
+        elapsed: SystemTime,
         ram_touched: impl FnMut(u32),
-    ) -> (Option<SystemCycle>, SystemCycle) {
+    ) -> (Option<SystemTime>, SystemTime) {
         match event {
             Event::Gpu => {
-                for span in self.gpu.update(&mut self.int_ctrl, cycles) {
+                for span in self.gpu.update(&mut self.int_ctrl, elapsed) {
                     self.timer_ctrl.update(&mut self.int_ctrl, span);
                 }
                 let next_gpu_or_timer_event = self
                     .timer_ctrl
                     .next_event(self.gpu.hblank(), self.gpu.vblank(), |dots| {
-                        self.gpu.cycles_till_dotclocks(dots)
+                        self.gpu.delay_till_dotclocks(dots)
                     })
-                    .min(self.gpu.next_event());
+                    .into_iter()
+                    .chain(self.gpu.next_event())
+                    .min();
 
                 (next_gpu_or_timer_event, 0)
             }
             Event::CdRom => {
-                self.cdrom.update(&mut self.int_ctrl, cycles);
+                self.cdrom.update(&mut self.int_ctrl, elapsed);
                 (self.cdrom.next_event(), 0)
             }
             Event::Joy => {
-                self.joy_bus.update(&mut self.int_ctrl, cycles);
+                self.joy_bus.update(&mut self.int_ctrl, elapsed);
                 (self.joy_bus.next_event(), 0)
             }
             Event::Dma => {
-                let cycles_elapsed = DmaController::run(self, ram_touched);
-                (self.dma_ctrl.next_event(), cycles_elapsed)
+                let duration = DmaController::run(self, ram_touched);
+                (self.dma_ctrl.next_event(), duration)
             }
-            _ => todo!(),
         }
     }
 

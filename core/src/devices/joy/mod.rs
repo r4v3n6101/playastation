@@ -5,15 +5,18 @@ use alloc::{boxed::Box, collections::VecDeque};
 use modular_bitfield::prelude::*;
 use strum::EnumCount;
 
-use crate::devices::int::{InterruptController, InterruptFlags};
+use crate::{
+    SystemTime,
+    devices::int::{InterruptController, InterruptFlags},
+};
 
 use super::{Mmio, Schedule, read_part, write_part};
 
 pub mod controller;
 
 // Approximate peripheral response delay and ACK pulse width in CPU clocks.
-const ACK_DELAY: u64 = 100;
-const ACK_PULSE: u64 = 100;
+const ACK_DELAY: SystemTime = 100;
+const ACK_PULSE: SystemTime = 100;
 
 pub trait SerialDevice {
     /// Starts a new transfer before receiving its address byte.
@@ -35,8 +38,8 @@ pub struct JoyBus {
     rx_fifo: VecDeque<u8>,
 
     irq_pending: bool,
-    ack_delay: Option<u64>,
-    ack_pulse_left: u64,
+    ack_delay: Option<SystemTime>,
+    ack_pulse_left: SystemTime,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -162,16 +165,16 @@ impl JoyBus {
         self.devs[slot as usize] = None;
     }
 
-    pub(crate) fn update(&mut self, int_ctrl: &mut InterruptController, sys_cycles: u64) {
-        self.ack_pulse_left = self.ack_pulse_left.saturating_sub(sys_cycles);
+    pub(crate) fn update(&mut self, int_ctrl: &mut InterruptController, elapsed: SystemTime) {
+        self.ack_pulse_left = self.ack_pulse_left.saturating_sub(elapsed);
 
         let mut ack_edge = false;
         if let Some(delay) = self.ack_delay {
-            if delay > sys_cycles {
-                self.ack_delay = Some(delay - sys_cycles);
+            if delay > elapsed {
+                self.ack_delay = Some(delay - elapsed);
             } else {
                 self.ack_delay = None;
-                self.ack_pulse_left = ACK_PULSE.saturating_sub(sys_cycles - delay);
+                self.ack_pulse_left = ACK_PULSE.saturating_sub(elapsed - delay);
                 ack_edge = true;
             }
         }
@@ -223,17 +226,17 @@ impl JoyBus {
         (0xFF, false)
     }
 
-    fn byte_cycles(&self) -> u64 {
+    fn byte_duration(&self) -> SystemTime {
         let factor = match self.mode.baud_reload_factor() {
             0 | 1 => 1,
             2 => 16,
             _ => 64,
         };
 
-        let bit_cycles = ((u64::from(self.baud) * factor) & !1).max(1);
+        let bit_duration = ((SystemTime::from(self.baud) * factor) & !1).max(1);
         let bits = 5 + u64::from(self.mode.char_length()) + u64::from(self.mode.parity_enable());
 
-        bit_cycles * bits
+        bit_duration * bits
     }
 }
 
@@ -278,7 +281,7 @@ impl Mmio for JoyBus {
 
                 if ack {
                     // Delay ACK IRQ
-                    self.ack_delay = Some(self.byte_cycles() + ACK_DELAY);
+                    self.ack_delay = Some(self.byte_duration() + ACK_DELAY);
                 }
             }
             0x4..0x8 => {

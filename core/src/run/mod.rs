@@ -2,6 +2,7 @@ use alloc::{boxed::Box, string::String};
 use core::mem;
 
 use crate::{
+    SystemTime,
     cpu::{Cpu, Exception, PendingJump},
     formats::psexe::{BoxedExeFile, ExeHeader},
     interconnect::Bus,
@@ -22,30 +23,30 @@ pub struct Console {
 }
 
 impl Console {
-    pub fn step(&mut self) -> u64 {
-        let cycles = self
+    pub fn step(&mut self) -> SystemTime {
+        let budget = self
             .scheduler
-            .cycles_till_next_event()
+            .delay_till_next_event()
             .expect("GPU always scheduled");
 
         let backend::ExecutionResult {
-            cycles_elapsed,
+            cycles_elapsed: elapsed,
             stop_reason,
-        } = self.engine.run_for(&mut self.cpu, &mut self.bus, cycles);
+        } = self.engine.run_for(&mut self.cpu, &mut self.bus, budget);
 
-        let mut sys_cycles = cycles_elapsed;
-        self.scheduler.advance(sys_cycles);
+        let mut total_elapsed = elapsed;
+        self.scheduler.advance(elapsed);
 
         while let Some((event, elapsed)) = self.scheduler.pop_event_with_elapsed() {
-            let (timeout, cycles_elapsed) = self.bus.handle_event(event, elapsed, |paddr| {
+            let (delay, duration) = self.bus.handle_event(event, elapsed, |paddr| {
                 self.engine.cache_invalidate_by_addr(paddr);
             });
 
-            self.scheduler.advance(cycles_elapsed);
-            sys_cycles += cycles_elapsed;
+            self.scheduler.advance(duration);
+            total_elapsed += duration;
 
-            if let Some(interval) = timeout {
-                self.scheduler.schedule(event, interval);
+            if let Some(delay) = delay {
+                self.scheduler.schedule(event, delay);
             }
         }
 
@@ -57,7 +58,7 @@ impl Console {
             _ => {}
         }
 
-        sys_cycles
+        total_elapsed
     }
 
     fn print_char(&mut self, ch: char) {

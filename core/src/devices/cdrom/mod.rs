@@ -43,7 +43,8 @@ use smallbox::SmallBox;
 
 use crate::{
     devices::int::{InterruptController, InterruptFlags},
-    formats::disk::{Disc, RawSector, sector_data},
+    formats::disk::{sector_data, Disc, RawSector},
+    SystemTime,
 };
 
 use super::{Mmio, Schedule};
@@ -52,11 +53,11 @@ mod tasks;
 
 const PARAM_FIFO_CAP: usize = 16;
 
-const CDROM_COMMAND_DEFAULT_DELAY: u64 = 0x1100;
-const CDROM_SECOND_DELAY: u64 = 0x3000;
-const CDROM_SEEK_DELAY: u64 = 0x30000;
+const CDROM_COMMAND_DEFAULT_DELAY: SystemTime = 0x1100;
+const CDROM_SECOND_DELAY: SystemTime = 0x3000;
+const CDROM_SEEK_DELAY: SystemTime = 0x30000;
 // https://github.com/Amjad50/Trapezoid/blob/b2411afe405a4c1d33586338b0768b3343f8353f/trapezoid-core/src/cdrom.rs#L22
-const CDROM_READ_PLAY_DELAY: u64 = 0x6e400 - 0x100;
+const CDROM_READ_PLAY_DELAY: SystemTime = 0x6e400 - 0x100;
 
 bitflags::bitflags! {
     #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -221,8 +222,8 @@ impl CdRom {
         self.data_fifo.pop_front()
     }
 
-    pub(crate) fn update(&mut self, int_ctrl: &mut InterruptController, sys_cycles: u64) {
-        self.tick_scheduled(sys_cycles);
+    pub(crate) fn update(&mut self, int_ctrl: &mut InterruptController, elapsed: SystemTime) {
+        self.advance_task(elapsed);
 
         // Next task needs IRQ ack
         if self.irq_flags == 0 {
@@ -234,8 +235,7 @@ impl CdRom {
         }
     }
 
-    /// Create a delay before task can be executed.
-    fn tick_scheduled(&mut self, cycles: u64) {
+    fn advance_task(&mut self, elapsed: SystemTime) {
         if self.pending_task.is_some() {
             return;
         }
@@ -244,8 +244,8 @@ impl CdRom {
             return;
         };
 
-        if scheduled.sys_cycles_left > cycles {
-            scheduled.sys_cycles_left -= cycles;
+        if scheduled.remaining_delay > elapsed {
+            scheduled.remaining_delay -= elapsed;
             return;
         }
 
@@ -262,14 +262,14 @@ impl CdRom {
         task.execute(self);
     }
 
-    fn schedule_task(&mut self, sys_cycles: u64, task: tasks::BoxedTask) {
+    fn schedule_task(&mut self, delay: SystemTime, task: tasks::BoxedTask) {
         self.scheduled_tasks.push_back(tasks::ScheduledTask {
-            sys_cycles_left: sys_cycles,
+            remaining_delay: delay,
             task,
         });
     }
 
-    fn read_sector_delay(&self) -> u64 {
+    fn read_sector_delay(&self) -> SystemTime {
         if self.mode.contains(CdRomMode::DOUBLE_SPEED) {
             CDROM_READ_PLAY_DELAY / 2
         } else {

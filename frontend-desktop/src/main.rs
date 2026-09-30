@@ -127,9 +127,9 @@ fn spawn_emulator_thread(
 
         let mut scaler = time::Scaler::<CPU_FREQ>::default();
         loop {
-            let sys_cycles = console.step();
+            let elapsed = console.step();
 
-            scaler.add_cycles(sys_cycles);
+            scaler.add_elapsed(elapsed);
             // scaler.wait();
 
             if console.bus.gpu.take_frame_ready() {

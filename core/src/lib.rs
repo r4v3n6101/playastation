@@ -8,10 +8,12 @@ pub mod formats;
 pub mod interconnect;
 pub mod render;
 pub mod run;
+mod scheduler;
 
-pub(crate) mod scheduler;
+/// This is CPU time in cycles.
+pub type SystemTime = u64;
 
-/// CPU Frequency (ticks per second).
+/// CPU frequency in cycles per second.
 pub const CPU_FREQ: u64 = 33_868_800;
 
 /// 2MiB of mapped RAM.
