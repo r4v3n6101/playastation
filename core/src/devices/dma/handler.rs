@@ -1,4 +1,4 @@
-use crate::{RAM_SIZE, interconnect::Bus};
+use crate::{RAM_SIZE, SystemTime, interconnect::Bus};
 
 use super::{CHANNELS, Channel, Direction, Step};
 
@@ -19,15 +19,15 @@ const OTC: usize = 6;
 /// SPU: 0x420 clks per 0x100 (4 cycles/word).
 /// PIO: 0x1400 clks per 0x100 (20 cycles/word).
 /// OTC: 0x110 clks per 0x100 words (1 cycle/word).
-const TIMINGS: [u64; CHANNELS] = [1, 1, 1, 30, 4, 20, 1];
+const TIMINGS: [SystemTime; CHANNELS] = [1, 1, 1, 30, 4, 20, 1];
 
 pub fn do_manual(
     bus: &mut Bus,
     ch: usize,
     chan: &mut Channel,
     ram_touched: &mut impl FnMut(u32),
-) -> u64 {
-    let mut cycles = 0u64;
+) -> SystemTime {
+    let mut duration: SystemTime = 0;
 
     let step = match chan.chcr.step() {
         Step::Increment => 4,
@@ -53,7 +53,7 @@ pub fn do_manual(
                         store_direct_ram(bus, addr, word, ram_touched);
                     }
 
-                    cycles = cycles.saturating_add(TIMINGS[CDROM]);
+                    duration = duration.saturating_add(TIMINGS[CDROM]);
                 }
                 OTC => {
                     let word = if words_left == 0 {
@@ -68,7 +68,7 @@ pub fn do_manual(
                         store_direct_ram(bus, addr, word, ram_touched);
                     }
 
-                    cycles = cycles.saturating_add(TIMINGS[OTC]);
+                    duration = duration.saturating_add(TIMINGS[OTC]);
                 }
                 _ => todo!("{ch}={chan:#?}"),
             },
@@ -79,7 +79,7 @@ pub fn do_manual(
 
     chan.bcr.set_word_count(0);
 
-    cycles
+    duration
 }
 
 pub fn do_block(
@@ -87,8 +87,8 @@ pub fn do_block(
     ch: usize,
     chan: &mut Channel,
     ram_touched: &mut impl FnMut(u32),
-) -> u64 {
-    let mut cycles = 0u64;
+) -> SystemTime {
+    let mut duration: SystemTime = 0;
 
     let step = match chan.chcr.step() {
         Step::Increment => 4,
@@ -108,7 +108,7 @@ pub fn do_block(
                         let word = unsafe { load_direct_ram(bus, addr) };
                         bus.gpu.dispatch_gp0(word);
 
-                        cycles = cycles.saturating_add(TIMINGS[GPU]);
+                        duration = duration.saturating_add(TIMINGS[GPU]);
                     }
                     SPU => {}
                     _ => todo!("{ch}={chan:#?}"),
@@ -123,7 +123,7 @@ pub fn do_block(
                             store_direct_ram(bus, addr, word, ram_touched);
                         }
 
-                        cycles = cycles.saturating_add(TIMINGS[GPU]);
+                        duration = duration.saturating_add(TIMINGS[GPU]);
                     }
                     _ => todo!("{ch}={chan:#?}"),
                 },
@@ -136,13 +136,13 @@ pub fn do_block(
     chan.bcr.set_word_count(0);
     chan.bcr.set_block_count(0);
 
-    cycles
+    duration
 }
 
-pub fn do_linked_list(bus: &mut Bus, ch: usize, chan: &mut Channel) -> u64 {
+pub fn do_linked_list(bus: &mut Bus, ch: usize, chan: &mut Channel) -> SystemTime {
     debug_assert_eq!(ch, GPU);
 
-    let mut cycles = 0u64;
+    let mut duration: SystemTime = 0;
     loop {
         let mut addr = chan.madr & 0x1FFFFC;
 
@@ -157,11 +157,11 @@ pub fn do_linked_list(bus: &mut Bus, ch: usize, chan: &mut Channel) -> u64 {
             let command = unsafe { load_direct_ram(bus, addr) };
             bus.gpu.dispatch_gp0(command);
 
-            cycles = cycles.saturating_add(TIMINGS[GPU]);
+            duration = duration.saturating_add(TIMINGS[GPU]);
         }
 
         if next == 0xFFFFFF {
-            return cycles;
+            return duration;
         }
 
         chan.madr = next;

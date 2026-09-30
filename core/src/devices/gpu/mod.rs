@@ -4,6 +4,7 @@ use core::mem;
 use modular_bitfield::prelude::*;
 
 use crate::{
+    SystemTime,
     devices::{
         int::{InterruptController, InterruptFlags},
         timer::{TimingEvent, TimingSpan},
@@ -13,7 +14,6 @@ use crate::{
         noop::NoopRenderer,
         types::{RenderState, SemiTransparency, TextureDepth},
     },
-    scheduler::SystemCycle,
 };
 
 use super::{Mmio, Schedule, read_part, write_part};
@@ -154,8 +154,8 @@ impl Default for Gpu {
 }
 
 impl Schedule for Gpu {
-    fn next_event(&self) -> Option<SystemCycle> {
-        Some(self.clock.cycles_till_next_event())
+    fn next_event(&self) -> Option<SystemTime> {
+        Some(self.clock.delay_till_next_event())
     }
 }
 
@@ -254,20 +254,20 @@ impl Gpu {
         self.clock.vblank()
     }
 
-    pub(crate) fn cycles_till_dotclocks(&self, dots: u64) -> SystemCycle {
-        self.clock.cycles_till_dotclocks(dots)
+    pub(crate) fn delay_till_dotclocks(&self, dots: u64) -> SystemTime {
+        self.clock.delay_till_dotclocks(dots)
     }
 
     pub(crate) fn update<'a>(
         &'a mut self,
         int_ctrl: &mut InterruptController,
-        sys_cycles: u64,
+        elapsed: SystemTime,
     ) -> impl Iterator<Item = TimingSpan> + 'a {
         if self.int_flag {
             int_ctrl.raise(InterruptFlags::GPU);
         }
 
-        self.clock.update(sys_cycles).inspect(|span| {
+        self.clock.update(elapsed).inspect(|span| {
             if span.event.contains(TimingEvent::VBLANK_ENTER) {
                 self.frame_ready = true;
             }

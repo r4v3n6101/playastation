@@ -4,8 +4,8 @@ use bitflags::bitflags;
 use modular_bitfield::prelude::*;
 
 use crate::{
+    SystemTime,
     devices::int::{InterruptController, InterruptFlags},
-    scheduler::SystemCycle,
 };
 
 use super::{Mmio, read_part, write_part};
@@ -25,7 +25,7 @@ bitflags! {
 
 #[derive(Debug, Clone, Copy)]
 pub struct TimingSpan {
-    pub sysclocks: u64,
+    pub elapsed: SystemTime,
     pub dotclocks: u64,
 
     /// State during this chunk.
@@ -39,7 +39,7 @@ pub struct TimingSpan {
 #[derive(Debug, Default)]
 pub struct TimerController {
     pub timers: [Timer; TIMERS],
-    sysclock_8_rem: u64,
+    div8_remainder: SystemTime,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -241,8 +241,8 @@ impl TimerController {
         &self,
         hblank: bool,
         vblank: bool,
-        dotclocks_to_cycles: impl Fn(u64) -> SystemCycle,
-    ) -> Option<SystemCycle> {
+        dotclocks_to_duration: impl Fn(u64) -> SystemTime,
+    ) -> Option<SystemTime> {
         self.timers
             .iter()
             .enumerate()
@@ -262,29 +262,31 @@ impl TimerController {
                 }
 
                 let ticks = timer.next_step(u64::MAX).ticks;
-                let cycles = match (idx, timer.mode.clock_source()) {
+                let delay = match (idx, timer.mode.clock_source()) {
                     (0 | 1, ClockSource::Source0 | ClockSource::Source2)
                     | (2, ClockSource::Source0 | ClockSource::Source1) => ticks,
-                    (0, ClockSource::Source1 | ClockSource::Source3) => dotclocks_to_cycles(ticks),
+                    (0, ClockSource::Source1 | ClockSource::Source3) => {
+                        dotclocks_to_duration(ticks)
+                    }
                     // Timer1 receives HBlank ticks from GPU TimingSpan events.
                     (1, ClockSource::Source1 | ClockSource::Source3) => return None,
                     (2, ClockSource::Source2 | ClockSource::Source3) => {
-                        ticks * 8 - self.sysclock_8_rem
+                        ticks * 8 - self.div8_remainder
                     }
                     _ => unreachable!(),
                 };
 
-                Some(cycles)
+                Some(delay)
             })
             .min()
     }
 
     pub(crate) fn update(&mut self, int_ctrl: &mut InterruptController, input: TimingSpan) {
         let timer2_div8 = {
-            self.sysclock_8_rem += input.sysclocks;
+            self.div8_remainder += input.elapsed;
 
-            let ticks = self.sysclock_8_rem / 8;
-            self.sysclock_8_rem %= 8;
+            let ticks = self.div8_remainder / 8;
+            self.div8_remainder %= 8;
 
             ticks
         };
@@ -312,17 +314,17 @@ impl TimerController {
         // Base ticks count
         let base = match (idx, timer.mode.clock_source()) {
             // Timer0: sysclock or dotclock
-            (0, ClockSource::Source0 | ClockSource::Source2) => span.sysclocks,
+            (0, ClockSource::Source0 | ClockSource::Source2) => span.elapsed,
             (0, ClockSource::Source1 | ClockSource::Source3) => span.dotclocks,
 
             // Timer1: sysclock or HBlank count
-            (1, ClockSource::Source0 | ClockSource::Source2) => span.sysclocks,
+            (1, ClockSource::Source0 | ClockSource::Source2) => span.elapsed,
             (1, ClockSource::Source1 | ClockSource::Source3) => {
                 u64::from(span.event.contains(TimingEvent::HBLANK_ENTER))
             }
 
             // Timer2: sysclock or sysclock/8
-            (2, ClockSource::Source0 | ClockSource::Source1) => span.sysclocks,
+            (2, ClockSource::Source0 | ClockSource::Source1) => span.elapsed,
             (2, ClockSource::Source2 | ClockSource::Source3) => timer2_div8,
 
             _ => unreachable!(),

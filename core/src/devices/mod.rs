@@ -1,4 +1,4 @@
-use crate::scheduler::SystemCycle;
+use crate::SystemTime;
 
 pub mod cdrom;
 pub mod dma;
@@ -8,10 +8,10 @@ pub mod joy;
 pub mod spu;
 pub mod timer;
 
-const DEFAULT_POLL_INTERVAL: SystemCycle = 128;
+const DEFAULT_POLL_INTERVAL: SystemTime = 128;
 
 pub trait Schedule {
-    fn next_event(&self) -> Option<SystemCycle> {
+    fn next_event(&self) -> Option<SystemTime> {
         Some(DEFAULT_POLL_INTERVAL)
     }
 }

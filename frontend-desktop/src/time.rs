@@ -3,23 +3,25 @@ use std::{
     time::{Duration, Instant},
 };
 
+use playastation::SystemTime;
+
 pub struct Scaler<const GUEST_FREQ: u64> {
     started_at: Instant,
-    emulated_cycles: u64,
+    emulated_time: SystemTime,
 }
 
 impl<const GUEST_FREQ: u64> Default for Scaler<GUEST_FREQ> {
     fn default() -> Self {
         Self {
             started_at: Instant::now(),
-            emulated_cycles: 0,
+            emulated_time: 0,
         }
     }
 }
 
 impl<const GUEST_FREQ: u64> Scaler<GUEST_FREQ> {
     pub fn emu_elapsed(&self) -> Duration {
-        Duration::from_secs_f64(self.emulated_cycles as f64 / GUEST_FREQ as f64)
+        Duration::from_secs_f64(self.emulated_time as f64 / GUEST_FREQ as f64)
     }
 
     pub fn host_elapsed(&self) -> Duration {
@@ -30,8 +32,8 @@ impl<const GUEST_FREQ: u64> Scaler<GUEST_FREQ> {
         self.emu_elapsed().checked_sub(self.host_elapsed())
     }
 
-    pub fn add_cycles(&mut self, cycles: u64) {
-        self.emulated_cycles = self.emulated_cycles.saturating_add(cycles);
+    pub fn add_elapsed(&mut self, elapsed: SystemTime) {
+        self.emulated_time = self.emulated_time.saturating_add(elapsed);
     }
 
     pub fn wait(&mut self) {
@@ -56,6 +58,6 @@ impl<const GUEST_FREQ: u64> Scaler<GUEST_FREQ> {
         }
 
         self.started_at = Instant::now();
-        self.emulated_cycles = 0;
+        self.emulated_time = 0;
     }
 }
