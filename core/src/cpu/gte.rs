@@ -171,11 +171,7 @@ impl Gte {
                     self.store_vector(self.modulated_color(), shift, lm);
                 }
                 self.push_rgb();
-                if command & 0x3f == 0x14 {
-                    13
-                } else {
-                    11
-                }
+                if command & 0x3f == 0x14 { 13 } else { 11 }
             }
             0x28 => {
                 self.store_vector(self.ir().map(|v| v * v), shift, lm);
@@ -200,11 +196,7 @@ impl Gte {
                 let value = sum * i64::from(self.control[if four { 30 } else { 29 }].cast_signed());
                 self.set_mac0(value);
                 self.data[7] = (self.saturate(value >> 12, 0, 0xffff, 18) as i32).cast_unsigned();
-                if four {
-                    6
-                } else {
-                    5
-                }
+                if four { 6 } else { 5 }
             }
             0x30 => {
                 for i in 0..3 {

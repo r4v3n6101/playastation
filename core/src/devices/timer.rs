@@ -3,7 +3,10 @@ use core::cmp::Ordering;
 use bitflags::bitflags;
 use modular_bitfield::prelude::*;
 
-use crate::devices::int::{InterruptController, InterruptFlags};
+use crate::{
+    devices::int::{InterruptController, InterruptFlags},
+    scheduler::SystemCycle,
+};
 
 use super::{Mmio, read_part, write_part};
 
@@ -234,6 +237,48 @@ impl Timer {
 }
 
 impl TimerController {
+    pub(crate) fn next_event(
+        &self,
+        hblank: bool,
+        vblank: bool,
+        dotclocks_to_cycles: impl Fn(u64) -> SystemCycle,
+    ) -> Option<SystemCycle> {
+        self.timers
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, timer)| {
+                let running = !timer.mode.sync_enabled()
+                    || match (idx, timer.mode.sync_mode()) {
+                        (0, SyncMode::Mode0) => !hblank,
+                        (0, SyncMode::Mode2) => hblank,
+                        (1, SyncMode::Mode0) => !vblank,
+                        (1, SyncMode::Mode2) => vblank,
+                        (2, SyncMode::Mode0 | SyncMode::Mode3) => false,
+                        _ => true,
+                    };
+
+                if !running {
+                    return None;
+                }
+
+                let ticks = timer.next_step(u64::MAX).ticks;
+                let cycles = match (idx, timer.mode.clock_source()) {
+                    (0 | 1, ClockSource::Source0 | ClockSource::Source2)
+                    | (2, ClockSource::Source0 | ClockSource::Source1) => ticks,
+                    (0, ClockSource::Source1 | ClockSource::Source3) => dotclocks_to_cycles(ticks),
+                    // Timer1 receives HBlank ticks from GPU TimingSpan events.
+                    (1, ClockSource::Source1 | ClockSource::Source3) => return None,
+                    (2, ClockSource::Source2 | ClockSource::Source3) => {
+                        ticks * 8 - self.sysclock_8_rem
+                    }
+                    _ => unreachable!(),
+                };
+
+                Some(cycles)
+            })
+            .min()
+    }
+
     pub(crate) fn update(&mut self, int_ctrl: &mut InterruptController, input: TimingSpan) {
         let timer2_div8 = {
             self.sysclock_8_rem += input.sysclocks;

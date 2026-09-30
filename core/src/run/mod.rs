@@ -5,12 +5,10 @@ use crate::{
     cpu::{Cpu, Exception, PendingJump},
     formats::psexe::{BoxedExeFile, ExeHeader},
     interconnect::Bus,
-    scheduler::SystemCycle,
+    scheduler::Scheduler,
 };
 
 mod backend;
-
-const MAX_BUDGET: SystemCycle = 128;
 
 #[derive(Default)]
 pub struct Console {
@@ -20,26 +18,42 @@ pub struct Console {
     pub printf: Option<Box<dyn FnMut(char)>>,
     /// CPU engine for code execution, with some optimizations.
     engine: backend::CpuEngine,
+    scheduler: Scheduler,
 }
 
 impl Console {
     pub fn step(&mut self) -> u64 {
-        // May be scheduler in the future
-        let budget = MAX_BUDGET;
+        let cycles = self
+            .scheduler
+            .cycles_till_next_event()
+            .expect("GPU always scheduled");
 
-        // TODO : budget not working, large values screw games up
-        let result = self.engine.run_for(&mut self.cpu, &mut self.bus, budget);
+        let backend::ExecutionResult {
+            cycles_elapsed,
+            stop_reason,
+        } = self.engine.run_for(&mut self.cpu, &mut self.bus, cycles);
 
-        // TODO : more precise timings
-        // TODO : remove
-        let sys_cycles = self.bus.update(result.cycles_elapsed, |paddr| {
-            self.engine.cache_invalidate_by_addr(paddr);
-        });
+        let mut sys_cycles = cycles_elapsed;
+        self.scheduler.advance(sys_cycles);
 
-        match result.stop_reason {
+        while let Some((event, elapsed)) = self.scheduler.pop_event_with_elapsed() {
+            let (timeout, cycles_elapsed) = self.bus.handle_event(event, elapsed, |paddr| {
+                self.engine.cache_invalidate_by_addr(paddr);
+            });
+
+            self.scheduler.advance(cycles_elapsed);
+            sys_cycles += cycles_elapsed;
+
+            if let Some(interval) = timeout {
+                self.scheduler.schedule(event, interval);
+            }
+        }
+
+        match stop_reason {
             backend::StopReason::Print(ch) => self.print_char(ch),
             backend::StopReason::ExeLoad => self.load_exe(),
             backend::StopReason::Exception(exc) => self.handle_exception(exc),
+            backend::StopReason::Stalled => tracing::warn!("CPU has no progress"),
             _ => {}
         }
 

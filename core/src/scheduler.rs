@@ -1,37 +1,51 @@
 use alloc::collections::BinaryHeap;
 use core::cmp::Reverse;
 
-use strum::EnumCount;
+use strum::{EnumCount, EnumIter, IntoEnumIterator};
 
 /// This is CPU time in cycles.
 pub type SystemCycle = u64;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Scheduler {
     now: SystemCycle,
-    events: BinaryHeap<Reverse<QueuedEvent>>,
     generations: [u64; Event::COUNT],
+    events: BinaryHeap<Reverse<QueuedEvent>>,
 }
 
-/// One pending wakeup per variant. Devices keep their internal task queues.
-/// Declaration order breaks ties between deadlines; it is not hardware priority.
-#[derive(EnumCount, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(EnumCount, EnumIter, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Event {
+    /// GPU and timers together.
     Gpu,
-    Timer0,
-    Timer1,
-    Timer2,
     CdRom,
     Joy,
-    Spu,
     Dma,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct QueuedEvent {
+    scheduled_at: SystemCycle,
     deadline: SystemCycle,
     event: Event,
     generation: u64,
+}
+
+impl Default for Scheduler {
+    fn default() -> Self {
+        Self {
+            now: 0,
+            generations: [0; _],
+            events: Event::iter()
+                .map(|event| QueuedEvent {
+                    scheduled_at: 0,
+                    deadline: 0,
+                    generation: 0,
+                    event,
+                })
+                .map(Reverse)
+                .collect(),
+        }
+    }
 }
 
 impl Scheduler {
@@ -60,6 +74,7 @@ impl Scheduler {
             deadline,
             event,
             generation: self.generations[event as usize],
+            scheduled_at: self.now,
         }));
     }
 
@@ -70,16 +85,16 @@ impl Scheduler {
             .expect("event generation overflow");
     }
 
-    /// Remove the earliest due event without advancing time.
-    /// The handler may schedule further events before the next pop.
-    pub fn pop(&mut self) -> Option<Event> {
+    pub fn pop_event_with_elapsed(&mut self) -> Option<(Event, SystemCycle)> {
         self.discard_stale();
 
         if self.events.peek()?.0.deadline > self.now {
             return None;
         }
 
-        self.events.pop().map(|entry| entry.0.event)
+        self.events
+            .pop()
+            .map(|Reverse(entry)| (entry.event, self.now - entry.scheduled_at))
     }
 
     fn discard_stale(&mut self) {

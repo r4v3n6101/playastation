@@ -4,9 +4,10 @@ use core::{ops::Range, ptr};
 use crate::{
     BIOS_SIZE, RAM_SIZE,
     devices::{
-        Mmio, cdrom::CdRom, dma::DmaController, gpu::Gpu, int::InterruptController, joy::JoyBus,
-        spu::Spu, timer::TimerController,
+        Mmio, Schedule, cdrom::CdRom, dma::DmaController, gpu::Gpu, int::InterruptController,
+        joy::JoyBus, spu::Spu, timer::TimerController,
     },
+    scheduler::{Event, SystemCycle},
 };
 
 /// RAM takes 8MiB, but 3 others are mirrors to the first 2MiB
@@ -81,20 +82,40 @@ impl Default for Bus {
 }
 
 impl Bus {
-    #[inline(never)]
-    pub(crate) fn update(&mut self, cpu_cycles: u64, ram_touched: impl FnMut(u32)) -> u64 {
-        let dma_cycles = DmaController::run(self, ram_touched);
-        let sys_cycles = cpu_cycles.saturating_add(dma_cycles);
+    pub(crate) fn handle_event(
+        &mut self,
+        event: Event,
+        cycles: SystemCycle,
+        ram_touched: impl FnMut(u32),
+    ) -> (Option<SystemCycle>, SystemCycle) {
+        match event {
+            Event::Gpu => {
+                for span in self.gpu.update(&mut self.int_ctrl, cycles) {
+                    self.timer_ctrl.update(&mut self.int_ctrl, span);
+                }
+                let next_gpu_or_timer_event = self
+                    .timer_ctrl
+                    .next_event(self.gpu.hblank(), self.gpu.vblank(), |dots| {
+                        self.gpu.cycles_till_dotclocks(dots)
+                    })
+                    .min(self.gpu.next_event());
 
-        self.gpu
-            .update(&mut self.int_ctrl, sys_cycles)
-            .for_each(|span| {
-                self.timer_ctrl.update(&mut self.int_ctrl, span);
-            });
-        self.cdrom.update(&mut self.int_ctrl, sys_cycles);
-        self.joy_bus.update(&mut self.int_ctrl, sys_cycles);
-
-        sys_cycles
+                (next_gpu_or_timer_event, 0)
+            }
+            Event::CdRom => {
+                self.cdrom.update(&mut self.int_ctrl, cycles);
+                (self.cdrom.next_event(), 0)
+            }
+            Event::Joy => {
+                self.joy_bus.update(&mut self.int_ctrl, cycles);
+                (self.joy_bus.next_event(), 0)
+            }
+            Event::Dma => {
+                let cycles_elapsed = DmaController::run(self, ram_touched);
+                (self.dma_ctrl.next_event(), cycles_elapsed)
+            }
+            _ => todo!(),
+        }
     }
 
     // Inlined because RAM/BIOS hot paths are needed for caller

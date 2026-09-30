@@ -1,3 +1,5 @@
+use crate::scheduler::SystemCycle;
+
 pub mod cdrom;
 pub mod dma;
 pub mod gpu;
@@ -5,6 +7,14 @@ pub mod int;
 pub mod joy;
 pub mod spu;
 pub mod timer;
+
+const DEFAULT_POLL_INTERVAL: SystemCycle = 128;
+
+pub trait Schedule {
+    fn next_event(&self) -> Option<SystemCycle> {
+        Some(DEFAULT_POLL_INTERVAL)
+    }
+}
 
 pub trait Mmio {
     fn read(&mut self, dest: &mut [u8], maddr: u32);
