@@ -25,7 +25,7 @@ pub struct Polygon {
     pub semi_transparent: bool,
     pub flat_color: Option<Color>,
     pub clut: Option<Position>,
-    pub tpage: Option<TexturePage>,
+    pub tpage: Option<DrawMode>,
 }
 
 #[derive(Debug, Clone)]

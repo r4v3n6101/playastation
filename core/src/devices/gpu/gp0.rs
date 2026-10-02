@@ -7,8 +7,7 @@ use crate::{
     devices::int::{InterruptController, InterruptFlags},
     render::types::{
         Color, DrawMode, EnvParameter, Location, MaskBitSetting, POLYGON_STACK_LIMIT,
-        POLYLINE_STACK_LIMIT, Polygon, Polyline, Position, Rect, Size, TexturePage, TextureWindow,
-        UV, Vertex,
+        POLYLINE_STACK_LIMIT, Polygon, Polyline, Position, Rect, Size, TextureWindow, UV, Vertex,
     },
 };
 
@@ -129,7 +128,7 @@ struct PolygonPacket {
     color: Option<Color>,
     vertices: SmallVec<[VertexBuilder; POLYGON_STACK_LIMIT]>,
     clut: Option<Position>,
-    tpage: Option<TexturePage>,
+    tpage: Option<DrawMode>,
 
     words_left: usize,
 }
@@ -743,13 +742,13 @@ fn parse_uv_clut(cmd: u32) -> (UV, Position) {
     )
 }
 
-fn parse_uv_tpage(cmd: u32) -> (UV, TexturePage) {
+fn parse_uv_tpage(cmd: u32) -> (UV, DrawMode) {
     (
         UV {
             u: cmd as u8,
             v: (cmd >> 8) as u8,
         },
-        TexturePage::from_bytes(((cmd >> 16) as u16).to_le_bytes()),
+        DrawMode::from_bytes((((cmd >> 16) & 0x09FF) as u16).to_le_bytes()),
     )
 }
 
