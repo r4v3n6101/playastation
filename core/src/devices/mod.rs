@@ -1,5 +1,3 @@
-use crate::SystemTime;
-
 pub mod cdrom;
 pub mod dma;
 pub mod gpu;
@@ -7,20 +5,6 @@ pub mod int;
 pub mod joy;
 pub mod spu;
 pub mod timer;
-
-const DEFAULT_POLL_INTERVAL: SystemTime = 128;
-
-pub trait Schedule {
-    fn next_event(&self) -> Option<SystemTime> {
-        Some(DEFAULT_POLL_INTERVAL)
-    }
-}
-
-pub trait Mmio {
-    fn read(&mut self, dest: &mut [u8], maddr: u32);
-
-    fn write(&mut self, maddr: u32, value: &[u8]);
-}
 
 fn read_part<const WINDOW: usize, const SRC: usize>(dest: &mut [u8], addr: u32, src: [u8; SRC]) {
     debug_assert!(matches!(WINDOW, 1 | 2 | 4));

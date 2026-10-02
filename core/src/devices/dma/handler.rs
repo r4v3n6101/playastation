@@ -106,7 +106,7 @@ pub fn do_block(
                     GPU => {
                         // SAFETY: addr masked above
                         let word = unsafe { load_direct_ram(bus, addr) };
-                        bus.gpu.dispatch_gp0(word);
+                        bus.gpu.dispatch_gp0(&mut bus.int_ctrl, word);
 
                         duration = duration.saturating_add(TIMINGS[GPU]);
                     }
@@ -155,7 +155,7 @@ pub fn do_linked_list(bus: &mut Bus, ch: usize, chan: &mut Channel) -> SystemTim
 
             // SAFETY: addr masked above
             let command = unsafe { load_direct_ram(bus, addr) };
-            bus.gpu.dispatch_gp0(command);
+            bus.gpu.dispatch_gp0(&mut bus.int_ctrl, command);
 
             duration = duration.saturating_add(TIMINGS[GPU]);
         }

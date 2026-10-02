@@ -1,4 +1,4 @@
-use super::{Mmio, read_part, write_part};
+use super::{read_part, write_part};
 
 bitflags::bitflags! {
     #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -31,10 +31,8 @@ impl InterruptController {
     pub fn raise(&mut self, int: InterruptFlags) {
         self.i_stat.insert(int);
     }
-}
 
-impl Mmio for InterruptController {
-    fn read(&mut self, dest: &mut [u8], maddr: u32) {
+    pub(crate) fn read_mmio(&mut self, dest: &mut [u8], maddr: u32) {
         match maddr {
             0x0..0x4 => {
                 read_part::<4, 2>(dest, maddr, self.i_stat.bits().to_le_bytes());
@@ -46,7 +44,7 @@ impl Mmio for InterruptController {
         }
     }
 
-    fn write(&mut self, maddr: u32, value: &[u8]) {
+    pub(crate) fn write_mmio(&mut self, maddr: u32, value: &[u8]) {
         match maddr {
             0x0..0x4 => {
                 self.i_stat &= InterruptFlags::from_bits_truncate(u16::from_le_bytes(

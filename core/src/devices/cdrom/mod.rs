@@ -39,17 +39,15 @@
 use alloc::{boxed::Box, collections::vec_deque::VecDeque};
 
 use modular_bitfield::*;
-use smallbox::SmallBox;
 
 use crate::{
-    devices::int::{InterruptController, InterruptFlags},
-    formats::disk::{sector_data, Disc, RawSector},
     SystemTime,
+    devices::int::{InterruptController, InterruptFlags},
+    formats::disk::{Disc, RawSector, sector_data},
+    scheduler::{Event as SchedulerEvent, Scheduler},
 };
 
-use super::{Mmio, Schedule};
-
-mod tasks;
+mod inner;
 
 const PARAM_FIFO_CAP: usize = 16;
 
@@ -121,8 +119,7 @@ pub struct CdRom {
     response_fifo: VecDeque<u8>,
     data_fifo: VecDeque<u8>,
 
-    scheduled_tasks: VecDeque<tasks::ScheduledTask>,
-    pending_task: Option<tasks::BoxedTask>,
+    pending: VecDeque<inner::ScheduledCommand>,
     read_second_delivery_attempt: bool,
 
     irq_enable: u8,
@@ -182,8 +179,7 @@ impl Default for CdRom {
             response_fifo: VecDeque::new(),
             data_fifo: VecDeque::new(),
 
-            scheduled_tasks: VecDeque::new(),
-            pending_task: None,
+            pending: VecDeque::new(),
 
             irq_enable: 0,
             irq_flags: 0,
@@ -205,8 +201,10 @@ impl Default for CdRom {
 
 impl CdRom {
     pub fn stat(&self) -> CdRomStat {
-        let busy = self.pending_task.iter().any(|x| x.busy_flag())
-            || self.scheduled_tasks.iter().any(|x| x.task.busy_flag());
+        let busy = self
+            .pending
+            .iter()
+            .any(|scheduled| scheduled.cmd.busy_flag());
 
         CdRomStat::new()
             .with_index(self.index)
@@ -222,94 +220,32 @@ impl CdRom {
         self.data_fifo.pop_front()
     }
 
-    pub(crate) fn update(&mut self, int_ctrl: &mut InterruptController, elapsed: SystemTime) {
-        self.advance_task(elapsed);
+    pub(crate) fn update(&mut self, scheduler: &mut Scheduler, int_ctrl: &mut InterruptController) {
+        let elapsed = scheduler.take_elapsed(SchedulerEvent::CdRom);
 
-        // Next task needs IRQ ack
-        if self.irq_flags == 0 {
-            self.handle_ready_task();
+        for scheduled in &mut self.pending {
+            scheduled.remaining_delay = scheduled.remaining_delay.saturating_sub(elapsed);
         }
 
-        if self.irq_enable & self.irq_flags != 0 {
-            int_ctrl.raise(InterruptFlags::CDROM);
-        }
-    }
-
-    fn advance_task(&mut self, elapsed: SystemTime) {
-        if self.pending_task.is_some() {
-            return;
-        }
-
-        let Some(scheduled) = self.scheduled_tasks.front_mut() else {
-            return;
-        };
-
-        if scheduled.remaining_delay > elapsed {
-            scheduled.remaining_delay -= elapsed;
-            return;
+        while self.irq_flags == 0
+            && self
+                .pending
+                .front()
+                .is_some_and(|scheduled| scheduled.remaining_delay == 0)
+        {
+            let task = self.pending.pop_front().unwrap().cmd;
+            task.execute(self, int_ctrl);
         }
 
-        let scheduled = self.scheduled_tasks.pop_front().unwrap();
-        self.pending_task = Some(scheduled.task);
-    }
-
-    /// Handle command or other event in queue, but only if IRQ flag is not set.
-    fn handle_ready_task(&mut self) {
-        let Some(mut task) = self.pending_task.take() else {
-            return;
-        };
-
-        task.execute(self);
-    }
-
-    fn schedule_task(&mut self, delay: SystemTime, task: tasks::BoxedTask) {
-        self.scheduled_tasks.push_back(tasks::ScheduledTask {
-            remaining_delay: delay,
-            task,
-        });
-    }
-
-    fn read_sector_delay(&self) -> SystemTime {
-        if self.mode.contains(CdRomMode::DOUBLE_SPEED) {
-            CDROM_READ_PLAY_DELAY / 2
-        } else {
-            CDROM_READ_PLAY_DELAY
+        scheduler.remove(SchedulerEvent::CdRom);
+        if let Some(scheduled) = self.pending.front()
+            && scheduled.remaining_delay != 0
+        {
+            scheduler.schedule(SchedulerEvent::CdRom, scheduled.remaining_delay);
         }
     }
 
-    fn apply_setloc(&mut self) {
-        let Some([mm, ss, ff]) = self.msf_loc.take() else {
-            return;
-        };
-
-        let minutes = bcd_to_bin(mm) as i32;
-        let seconds = bcd_to_bin(ss) as i32;
-        let frames = bcd_to_bin(ff) as i32;
-
-        let lba = ((minutes * 60) + seconds) * 75 + frames - 150;
-
-        self.cursor_lba = lba.max(0) as usize;
-    }
-
-    fn raise_err(&mut self, err: ErrorCode) {
-        self.push_response(&[(self.status | CdRomStatus::ERROR).bits(), err as u8]);
-        self.raise_int(IrqFlag::Int5);
-    }
-
-    fn push_response(&mut self, data: &[u8]) {
-        self.response_fifo.clear();
-        self.response_fifo.extend(data);
-    }
-
-    fn raise_int(&mut self, int: IrqFlag) {
-        self.irq_flags = int as u8;
-    }
-}
-
-impl Schedule for CdRom {}
-
-impl Mmio for CdRom {
-    fn read(&mut self, dest: &mut [u8], maddr: u32) {
+    pub(crate) fn read_mmio(&mut self, dest: &mut [u8], maddr: u32) {
         assert_eq!(dest.len(), 1, "only 1-byte access supported");
 
         dest[0] = match maddr & 3 {
@@ -329,7 +265,13 @@ impl Mmio for CdRom {
         };
     }
 
-    fn write(&mut self, maddr: u32, value: &[u8]) {
+    pub(crate) fn write_mmio(
+        &mut self,
+        scheduler: &mut Scheduler,
+        int_ctrl: &mut InterruptController,
+        maddr: u32,
+        value: &[u8],
+    ) {
         let Ok([value]) = <[_; 1]>::try_from(value) else {
             panic!("only 1-byte access supported");
         };
@@ -346,43 +288,50 @@ impl Mmio for CdRom {
             }
             0x1 => match self.index {
                 BankIndex::Zero => {
-                    let cmd: SmallBox<dyn tasks::Task, _> = match value {
-                        0x01 => SmallBox::new(tasks::Getstat),
+                    let cmd = match value {
+                        0x01 => inner::Command::Getstat,
                         0x02 => {
                             let mm = self.param_fifo.pop_front().unwrap_or(0);
                             let ss = self.param_fifo.pop_front().unwrap_or(0);
                             let ff = self.param_fifo.pop_front().unwrap_or(0);
-                            SmallBox::new(tasks::Setloc { mm, ss, ff })
+                            inner::Command::Setloc { mm, ss, ff }
                         }
-                        0x06 | 0x1B => SmallBox::new(tasks::Read),
-                        0x09 => SmallBox::new(tasks::PauseFirst),
-                        0x0A => SmallBox::new(tasks::InitFirst),
-                        0x0B => SmallBox::new(tasks::Mute),
-                        0x0C => SmallBox::new(tasks::Demute),
+                        0x06 | 0x1B => inner::Command::Read,
+                        0x09 => inner::Command::PauseFirst,
+                        0x0A => inner::Command::InitFirst,
+                        0x0B => inner::Command::Mute,
+                        0x0C => inner::Command::Demute,
                         0x0D => {
                             let file = self.param_fifo.pop_front().unwrap_or(0);
                             let channel = self.param_fifo.pop_front().unwrap_or(0);
-                            SmallBox::new(tasks::Setfilter { file, channel })
+                            inner::Command::Setfilter { file, channel }
                         }
                         0x0E => {
                             let mode = self.param_fifo.pop_front().unwrap_or(0);
-                            SmallBox::new(tasks::Setmode { mode })
+                            inner::Command::Setmode { mode }
                         }
-                        0x13 => SmallBox::new(tasks::GetTn),
+                        0x13 => inner::Command::GetTn,
                         0x14 => {
                             let track = self.param_fifo.pop_front().unwrap_or(0);
-                            SmallBox::new(tasks::GetTd { track })
+                            inner::Command::GetTd { track }
                         }
-                        0x15 | 0x16 => SmallBox::new(tasks::SeekFirst),
+                        0x15 | 0x16 => inner::Command::SeekFirst,
                         0x19 => {
                             let subcommand = self.param_fifo.pop_front().unwrap_or(0);
-                            SmallBox::new(tasks::Test { subcommand })
+                            inner::Command::Test { subcommand }
                         }
-                        0x1A => SmallBox::new(tasks::GetIdFirst),
-                        cmd => SmallBox::new(tasks::BadCommand { cmd }),
+                        0x1A => inner::Command::GetIdFirst,
+                        cmd => inner::Command::Bad { cmd },
                     };
                     self.param_fifo.clear();
-                    self.schedule_task(CDROM_COMMAND_DEFAULT_DELAY, cmd);
+
+                    let remaining_delay = scheduler
+                        .elapsed_since_update(SchedulerEvent::CdRom)
+                        .checked_add(CDROM_COMMAND_DEFAULT_DELAY)
+                        .expect("cdrom task deadline overflow");
+
+                    self.queue_task(cmd, remaining_delay);
+                    scheduler.schedule(SchedulerEvent::CdRom, CDROM_COMMAND_DEFAULT_DELAY);
                 }
                 // TODO : Audio
                 // Index::First => self.sound_map_data_out = value,
@@ -396,11 +345,15 @@ impl Mmio for CdRom {
                         self.param_fifo.push_back(value);
                     } else {
                         tracing::warn!(cap=%PARAM_FIFO_CAP, "cdrom parameter fifo overflow");
-                        self.raise_int(IrqFlag::Int5);
+                        self.raise_int(IrqFlag::Int5, int_ctrl);
                     }
                 }
                 BankIndex::First => {
+                    let was_asserted = self.irq_signal();
                     self.irq_enable = value & 0x1F;
+                    if !was_asserted && self.irq_signal() {
+                        int_ctrl.raise(InterruptFlags::CDROM);
+                    }
                 }
                 BankIndex::Second => self.volume_cd_left_to_spu_left = value,
                 BankIndex::Third => self.volume_cd_right_to_spu_left = value,
@@ -430,6 +383,8 @@ impl Mmio for CdRom {
                     if value & 0x40 != 0 {
                         self.param_fifo.clear();
                     }
+
+                    scheduler.schedule(SchedulerEvent::CdRom, 0);
                 }
                 BankIndex::Second => self.volume_cd_left_to_spu_right = value,
                 // TODO : Audio
@@ -438,6 +393,71 @@ impl Mmio for CdRom {
             },
             _ => unreachable!(),
         }
+    }
+
+    fn queue_task(&mut self, task: inner::Command, remaining_delay: SystemTime) {
+        let index = self
+            .pending
+            .iter()
+            .position(|scheduled| scheduled.remaining_delay > remaining_delay)
+            .unwrap_or(self.pending.len());
+        self.pending.insert(
+            index,
+            inner::ScheduledCommand {
+                remaining_delay,
+                cmd: task,
+            },
+        );
+    }
+
+    fn cancel_read(&mut self) {
+        self.pending
+            .retain(|scheduled| scheduled.cmd != inner::Command::SectorReady);
+        self.read_second_delivery_attempt = false;
+    }
+
+    fn read_sector_delay(&self) -> SystemTime {
+        if self.mode.contains(CdRomMode::DOUBLE_SPEED) {
+            CDROM_READ_PLAY_DELAY / 2
+        } else {
+            CDROM_READ_PLAY_DELAY
+        }
+    }
+
+    fn apply_setloc(&mut self) {
+        let Some([mm, ss, ff]) = self.msf_loc.take() else {
+            return;
+        };
+
+        let minutes = bcd_to_bin(mm) as i32;
+        let seconds = bcd_to_bin(ss) as i32;
+        let frames = bcd_to_bin(ff) as i32;
+
+        let lba = ((minutes * 60) + seconds) * 75 + frames - 150;
+
+        self.cursor_lba = lba.max(0) as usize;
+    }
+
+    fn raise_err(&mut self, err: ErrorCode, int_ctrl: &mut InterruptController) {
+        self.push_response(&[(self.status | CdRomStatus::ERROR).bits(), err as u8]);
+        self.raise_int(IrqFlag::Int5, int_ctrl);
+    }
+
+    fn push_response(&mut self, data: &[u8]) {
+        self.response_fifo.clear();
+        self.response_fifo.extend(data);
+    }
+
+    fn raise_int(&mut self, int: IrqFlag, int_ctrl: &mut InterruptController) {
+        let was_asserted = self.irq_signal();
+        self.irq_flags = int as u8;
+        if !was_asserted && self.irq_signal() {
+            int_ctrl.raise(InterruptFlags::CDROM);
+        }
+    }
+
+    fn irq_signal(&self) -> bool {
+        self.irq_enable & self.irq_flags != 0
     }
 }
 

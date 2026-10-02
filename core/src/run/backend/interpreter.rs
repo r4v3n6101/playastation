@@ -126,11 +126,9 @@ fn step_decoded(
     observer: impl MemAccessObserver,
     op: Result<Instruction, Exception>,
 ) -> bool {
-    match op {
+    let keep_running = match op {
         Ok(ins) => {
             let res = execute(ctx, observer, ins);
-            ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(1);
-
             match res {
                 Ok(()) => {
                     ctx.cpu.pc = ctx.cpu.pc.wrapping_add(4);
@@ -152,10 +150,12 @@ fn step_decoded(
         }
         Err(cause) => {
             ctx.result.stop_reason = StopReason::Exception(cause);
-            ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(1);
             false
         }
-    }
+    };
+    ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(1);
+
+    keep_running
 }
 
 #[inline]

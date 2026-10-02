@@ -3,10 +3,13 @@ use core::{fmt, mem};
 use smallbox::{SmallBox, space::S32};
 use smallvec::SmallVec;
 
-use crate::render::types::{
-    Color, DrawMode, EnvParameter, Location, MaskBitSetting, POLYGON_STACK_LIMIT,
-    POLYLINE_STACK_LIMIT, Polygon, Polyline, Position, Rect, Size, TexturePage, TextureWindow, UV,
-    Vertex,
+use crate::{
+    devices::int::{InterruptController, InterruptFlags},
+    render::types::{
+        Color, DrawMode, EnvParameter, Location, MaskBitSetting, POLYGON_STACK_LIMIT,
+        POLYLINE_STACK_LIMIT, Polygon, Polyline, Position, Rect, Size, TexturePage, TextureWindow,
+        UV, Vertex,
+    },
 };
 
 use super::Gpu;
@@ -26,10 +29,10 @@ impl Gpu {
         target = "gpu.gp0",
         level = "DEBUG",
         "dispatch",
-        skip(self),
+        skip(self, int_ctrl),
         fields(cmd=%format_args!("{cmd:#X}"))
     )]
-    pub(crate) fn dispatch_gp0(&mut self, cmd: u32) {
+    pub(crate) fn dispatch_gp0(&mut self, int_ctrl: &mut InterruptController, cmd: u32) {
         let mut cmdbuf = mem::take(&mut self.cmdbuf);
 
         if cmdbuf.0.needs_more() {
@@ -47,6 +50,9 @@ impl Gpu {
                     // Clear CLUT AFAIK
                 }
                 0x1F => {
+                    if !self.int_flag {
+                        int_ctrl.raise(InterruptFlags::GPU);
+                    }
                     self.int_flag = true;
                 }
                 0x02 => {

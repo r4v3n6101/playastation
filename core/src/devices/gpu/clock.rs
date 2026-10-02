@@ -1,5 +1,7 @@
 use core::iter;
 
+use bitflags::bitflags;
+
 use crate::{
     CPU_FREQ, SystemTime,
     devices::timer::{TimingEvent, TimingSpan},
@@ -28,6 +30,18 @@ const PAL: VideoStandard = VideoStandard {
     progressive_half_lines: 314 * 2,
     interlaced_half_lines: 312 * 2 + 1,
 };
+
+bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    struct Boundaries: u8 {
+        const HBLANK_ENTER = 1 << 0;
+        const HBLANK_LEAVE = 1 << 1;
+        const VBLANK_ENTER = 1 << 2;
+        const VBLANK_LEAVE = 1 << 3;
+        const LINE_WRAP = 1 << 4;
+        const FIELD_WRAP = 1 << 5;
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct State {
@@ -97,7 +111,7 @@ impl State {
     }
 
     pub fn delay_till_next_event(&self) -> SystemTime {
-        self.duration_for_quarter_clocks(self.quarter_clocks_till_next_event())
+        self.duration_for_quarter_clocks(self.next_boundary().0)
     }
 
     pub fn delay_till_dotclocks(&self, dots: u64) -> SystemTime {
@@ -109,30 +123,6 @@ impl State {
             .div_ceil(self.timing.dotclocks_per_scanline);
 
         self.duration_for_quarter_clocks(quarter_clocks)
-    }
-
-    pub fn update(&mut self, elapsed: SystemTime) -> impl Iterator<Item = TimingSpan> + '_ {
-        let mut remaining = elapsed;
-        iter::from_fn(move || {
-            if remaining == 0 {
-                return None;
-            }
-
-            let duration = self.delay_till_next_event().min(remaining);
-
-            let hblank = self.in_hblank;
-            let vblank = self.in_vblank;
-            let (dotclocks, event) = self.advance(duration);
-            remaining -= duration;
-
-            Some(TimingSpan {
-                elapsed: duration,
-                dotclocks,
-                hblank,
-                vblank,
-                event,
-            })
-        })
     }
 
     pub fn set_display_mode(
@@ -164,6 +154,137 @@ impl State {
         self.refresh_blank_levels();
     }
 
+    pub fn update(&mut self, elapsed: SystemTime) -> impl Iterator<Item = TimingSpan> + '_ {
+        let mut remaining = elapsed;
+        iter::from_fn(move || {
+            let (mut quarter_clocks, mut boundaries) = self.next_boundary();
+            let delay = self.duration_for_quarter_clocks(quarter_clocks);
+
+            if remaining == 0 && delay != 0 && self.clock_remainder < CPU_FREQ {
+                return None;
+            }
+
+            let duration = remaining.min(delay);
+            if duration < delay {
+                quarter_clocks = (self.clock_remainder
+                    + duration * self.timing.quarter_clocks_per_second)
+                    / CPU_FREQ;
+                boundaries = Boundaries::empty();
+            }
+
+            remaining -= duration;
+            Some(self.advance(duration, quarter_clocks, boundaries))
+        })
+    }
+
+    fn advance(
+        &mut self,
+        elapsed: SystemTime,
+        quarter_clocks: u64,
+        boundaries: Boundaries,
+    ) -> TimingSpan {
+        let mut span = TimingSpan {
+            elapsed,
+            dotclocks: 0,
+            hblank: self.in_hblank,
+            vblank: self.in_vblank,
+            event: TimingEvent::empty(),
+        };
+
+        self.clock_remainder += elapsed * self.timing.quarter_clocks_per_second;
+        self.clock_remainder -= quarter_clocks * CPU_FREQ;
+
+        self.dot_remainder += quarter_clocks * self.timing.dotclocks_per_scanline;
+        span.dotclocks = self.dot_remainder / self.timing.quarter_clocks_per_scanline;
+        self.dot_remainder %= self.timing.quarter_clocks_per_scanline;
+
+        self.line_quarter_clocks += quarter_clocks;
+        self.field_quarter_clocks += quarter_clocks;
+
+        if boundaries.contains(Boundaries::HBLANK_ENTER) && !self.in_hblank {
+            self.in_hblank = true;
+            span.event |= TimingEvent::HBLANK_ENTER;
+        }
+        if boundaries.contains(Boundaries::VBLANK_ENTER) && !self.in_vblank {
+            self.in_vblank = true;
+            span.event |= TimingEvent::VBLANK_ENTER;
+        }
+
+        if boundaries.contains(Boundaries::LINE_WRAP) {
+            self.line_quarter_clocks = 0;
+        }
+        if boundaries.contains(Boundaries::FIELD_WRAP) {
+            self.field_quarter_clocks = 0;
+            self.even_field = !self.even_field;
+        }
+
+        if boundaries.contains(Boundaries::HBLANK_LEAVE) && self.in_hblank {
+            self.in_hblank = false;
+            span.event |= TimingEvent::HBLANK_LEAVE;
+        }
+        if boundaries.contains(Boundaries::VBLANK_LEAVE) && self.in_vblank {
+            self.in_vblank = false;
+            span.event |= TimingEvent::VBLANK_LEAVE;
+        }
+
+        span
+    }
+
+    fn next_boundary(&self) -> (u64, Boundaries) {
+        let mut quarter_clocks = self.timing.quarter_clocks_per_scanline - self.line_quarter_clocks;
+        let mut boundaries = Boundaries::LINE_WRAP;
+
+        let mut include = |distance, boundary| {
+            if distance < quarter_clocks {
+                quarter_clocks = distance;
+                boundaries = boundary;
+            } else if distance == quarter_clocks {
+                boundaries |= boundary;
+            }
+        };
+
+        include(
+            self.timing.quarter_clocks_per_field - self.field_quarter_clocks,
+            Boundaries::FIELD_WRAP,
+        );
+
+        for (position, range, unit, leave, enter) in [
+            (
+                self.line_quarter_clocks,
+                self.hrange,
+                QUARTERS_PER_VIDEO_CLOCK,
+                Boundaries::HBLANK_LEAVE,
+                Boundaries::HBLANK_ENTER,
+            ),
+            (
+                self.field_quarter_clocks,
+                self.vrange,
+                self.timing.quarter_clocks_per_scanline,
+                Boundaries::VBLANK_LEAVE,
+                Boundaries::VBLANK_ENTER,
+            ),
+        ] {
+            if range.0 < range.1 {
+                for (endpoint, boundary) in [(range.0, leave), (range.1, enter)] {
+                    let endpoint = u64::from(endpoint) * unit;
+                    if endpoint > position {
+                        include(endpoint - position, boundary);
+                    }
+                }
+            }
+        }
+
+        // A range starting at zero leaves blank immediately after the wrap.
+        if boundaries.contains(Boundaries::LINE_WRAP) && self.hrange.0 == 0 && self.hrange.1 != 0 {
+            boundaries |= Boundaries::HBLANK_LEAVE;
+        }
+        if boundaries.contains(Boundaries::FIELD_WRAP) && self.vrange.0 == 0 && self.vrange.1 != 0 {
+            boundaries |= Boundaries::VBLANK_LEAVE;
+        }
+
+        (quarter_clocks, boundaries)
+    }
+
     fn refresh_blank_levels(&mut self) {
         self.in_hblank = {
             let (a, b) = self.hrange;
@@ -178,94 +299,9 @@ impl State {
     }
 
     fn duration_for_quarter_clocks(&self, quarter_clocks: u64) -> SystemTime {
-        (quarter_clocks * CPU_FREQ - self.clock_remainder)
+        (quarter_clocks * CPU_FREQ)
+            .saturating_sub(self.clock_remainder)
             .div_ceil(self.timing.quarter_clocks_per_second)
-    }
-
-    fn advance(&mut self, elapsed: SystemTime) -> (u64, TimingEvent) {
-        let clock = self.clock_remainder + elapsed * self.timing.quarter_clocks_per_second;
-        let mut quarter_clocks = clock / CPU_FREQ;
-        self.clock_remainder = clock % CPU_FREQ;
-
-        self.dot_remainder += quarter_clocks * self.timing.dotclocks_per_scanline;
-        let dotclocks = self.dot_remainder / self.timing.quarter_clocks_per_scanline;
-        self.dot_remainder %= self.timing.quarter_clocks_per_scanline;
-
-        let mut event = TimingEvent::empty();
-
-        // One CPU clock can cross both edges of a narrow display range.
-        while quarter_clocks != 0 {
-            let step_quarter_clocks = quarter_clocks.min(self.quarter_clocks_till_next_event());
-            self.line_quarter_clocks += step_quarter_clocks;
-            self.field_quarter_clocks += step_quarter_clocks;
-            quarter_clocks -= step_quarter_clocks;
-
-            self.update_blank_edges(&mut event);
-
-            if self.line_quarter_clocks == self.timing.quarter_clocks_per_scanline {
-                self.line_quarter_clocks = 0;
-            }
-            if self.field_quarter_clocks == self.timing.quarter_clocks_per_field {
-                self.field_quarter_clocks = 0;
-                self.even_field = !self.even_field;
-            }
-
-            self.update_blank_edges(&mut event);
-        }
-
-        (dotclocks, event)
-    }
-
-    fn quarter_clocks_till_next_event(&self) -> u64 {
-        let mut quarter_clocks = (self.timing.quarter_clocks_per_scanline
-            - self.line_quarter_clocks)
-            .min(self.timing.quarter_clocks_per_field - self.field_quarter_clocks);
-
-        for (position, range, unit) in [
-            (
-                self.line_quarter_clocks,
-                self.hrange,
-                QUARTERS_PER_VIDEO_CLOCK,
-            ),
-            (
-                self.field_quarter_clocks,
-                self.vrange,
-                self.timing.quarter_clocks_per_scanline,
-            ),
-        ] {
-            if range.0 < range.1 {
-                for endpoint in [range.0, range.1] {
-                    let boundary = u64::from(endpoint) * unit;
-                    if boundary > position {
-                        quarter_clocks = quarter_clocks.min(boundary - position);
-                    }
-                }
-            }
-        }
-
-        quarter_clocks
-    }
-
-    fn update_blank_edges(&mut self, event: &mut TimingEvent) {
-        update_blank_edge(
-            self.line_quarter_clocks,
-            self.hrange,
-            QUARTERS_PER_VIDEO_CLOCK,
-            &mut self.in_hblank,
-            TimingEvent::HBLANK_ENTER,
-            TimingEvent::HBLANK_LEAVE,
-            event,
-        );
-
-        update_blank_edge(
-            self.field_quarter_clocks,
-            self.vrange,
-            self.timing.quarter_clocks_per_scanline,
-            &mut self.in_vblank,
-            TimingEvent::VBLANK_ENTER,
-            TimingEvent::VBLANK_LEAVE,
-            event,
-        );
     }
 }
 
@@ -304,30 +340,5 @@ impl VideoTiming {
             quarter_clocks_per_field: standard.quarter_clocks_per_scanline * half_lines / 2,
             dotclocks_per_scanline: standard.dotclocks_per_scanline[index],
         }
-    }
-}
-
-fn update_blank_edge(
-    position: u64,
-    (a, b): (u16, u16),
-    unit: u64,
-    blank: &mut bool,
-    enter: TimingEvent,
-    leave: TimingEvent,
-    event: &mut TimingEvent,
-) {
-    if a == b {
-        return;
-    }
-
-    let a = u64::from(a) * unit;
-    let b = u64::from(b) * unit;
-
-    if position == a && *blank {
-        *blank = false;
-        *event |= leave;
-    } else if position == b && !*blank {
-        *blank = true;
-        *event |= enter;
     }
 }
