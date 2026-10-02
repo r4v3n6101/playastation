@@ -4,19 +4,19 @@ use core::mem;
 use modular_bitfield::prelude::*;
 
 use crate::{
-    SystemTime,
     devices::{
-        int::{InterruptController, InterruptFlags},
-        timer::{TimingEvent, TimingSpan},
+        int::InterruptController,
+        timer::{TimerController, TimingEvent},
     },
     render::{
         Renderer,
         noop::NoopRenderer,
         types::{RenderState, SemiTransparency, TextureDepth},
     },
+    scheduler::{Event, Scheduler},
 };
 
-use super::{Mmio, Schedule, read_part, write_part};
+use super::{read_part, write_part};
 
 mod clock;
 mod gp0;
@@ -51,6 +51,7 @@ pub struct Gpu {
     // Inner modules
     clock: clock::State,
     cmdbuf: gp0::CmdBuf,
+    timing_dirty: bool,
 
     // GPU state itself
     frame_ready: bool,
@@ -144,18 +145,13 @@ impl Default for Gpu {
 
             clock: clock::State::default(),
             cmdbuf: gp0::CmdBuf::default(),
+            timing_dirty: true,
 
             frame_ready: false,
             dma_direction: DmaDirection::default(),
 
             int_flag: false,
         }
-    }
-}
-
-impl Schedule for Gpu {
-    fn next_event(&self) -> Option<SystemTime> {
-        Some(self.clock.delay_till_next_event())
     }
 }
 
@@ -246,37 +242,46 @@ impl Gpu {
             })
     }
 
-    pub(crate) fn hblank(&self) -> bool {
-        self.clock.hblank()
-    }
-
-    pub(crate) fn vblank(&self) -> bool {
-        self.clock.vblank()
-    }
-
-    pub(crate) fn delay_till_dotclocks(&self, dots: u64) -> SystemTime {
-        self.clock.delay_till_dotclocks(dots)
-    }
-
-    pub(crate) fn update<'a>(
-        &'a mut self,
+    pub(crate) fn update(
+        &mut self,
+        scheduler: &mut Scheduler,
         int_ctrl: &mut InterruptController,
-        elapsed: SystemTime,
-    ) -> impl Iterator<Item = TimingSpan> + 'a {
-        if self.int_flag {
-            int_ctrl.raise(InterruptFlags::GPU);
-        }
+        timer_ctrl: &mut TimerController,
+    ) {
+        let elapsed = scheduler.take_elapsed(Event::Gpu);
 
-        self.clock.update(elapsed).inspect(|span| {
+        for span in self.clock.update(elapsed) {
+            timer_ctrl.update(int_ctrl, span);
             if span.event.contains(TimingEvent::VBLANK_ENTER) {
                 self.frame_ready = true;
             }
-        })
-    }
-}
+        }
 
-impl Mmio for Gpu {
-    fn read(&mut self, dest: &mut [u8], maddr: u32) {
+        // Advance with the old timing before rebuilding deadlines for GP1 changes.
+        if mem::take(&mut self.timing_dirty) {
+            self.clock.set_display_mode(
+                self.display.vmode,
+                self.display.hres,
+                self.display.special_368_hres,
+                self.display.interlaced,
+            );
+            self.clock.set_display_ranges(self.hrange, self.vrange);
+        }
+
+        let mut delay = self.clock.delay_till_next_event();
+        if let Some(timer_delay) =
+            timer_ctrl.delay_till_next_event(self.clock.hblank(), self.clock.vblank(), |dots| {
+                self.clock.delay_till_dotclocks(dots)
+            })
+        {
+            delay = delay.min(timer_delay);
+        }
+
+        scheduler.remove(Event::Gpu);
+        scheduler.schedule(Event::Gpu, delay);
+    }
+
+    pub(crate) fn read_mmio(&mut self, dest: &mut [u8], maddr: u32) {
         match maddr {
             0x0..0x4 => {
                 read_part::<4, 4>(dest, maddr, self.gpuread().to_le_bytes());
@@ -288,13 +293,26 @@ impl Mmio for Gpu {
         }
     }
 
-    fn write(&mut self, maddr: u32, value: &[u8]) {
+    pub(crate) fn write_mmio(
+        &mut self,
+        scheduler: &mut Scheduler,
+        int_ctrl: &mut InterruptController,
+        maddr: u32,
+        value: &[u8],
+    ) {
         match maddr {
             0x0..0x4 => {
-                self.dispatch_gp0(u32::from_le_bytes(write_part::<4, 4>(maddr, value, [0; 4])));
+                self.dispatch_gp0(
+                    int_ctrl,
+                    u32::from_le_bytes(write_part::<4, 4>(maddr, value, [0; 4])),
+                );
             }
             0x4..0x8 => {
+                let was_dirty = self.timing_dirty;
                 self.dispatch_gp1(u32::from_le_bytes(write_part::<4, 4>(maddr, value, [0; 4])));
+                if !was_dirty && self.timing_dirty {
+                    scheduler.schedule(Event::Gpu, 0);
+                }
             }
             _ => unimplemented!(),
         }

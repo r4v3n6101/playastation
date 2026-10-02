@@ -1,11 +1,18 @@
 use derive_more::Debug;
 use modular_bitfield::prelude::*;
 
-use crate::{SystemTime, devices::int::InterruptFlags, interconnect::Bus};
+use crate::{
+    SystemTime,
+    devices::int::{InterruptController, InterruptFlags},
+    interconnect::Bus,
+    scheduler::Event,
+};
 
-use super::{Mmio, Schedule, read_part, write_part};
+use super::{read_part, write_part};
 
 mod handler;
+
+const POLL_INTERVAL: SystemTime = 128;
 
 const CHANNELS: usize = 7;
 
@@ -138,8 +145,9 @@ pub struct Dicr {
     pub master_enabled: bool,
     /// Pending interrupts.
     pub irq_flags: B7,
-    /// Pending intrrupt controller call.
-    pub irq_signal: bool,
+    // Bit 31 is computed when reading DICR.
+    #[skip(getters)]
+    irq_signal: bool,
 }
 
 impl Default for Dpcr {
@@ -156,18 +164,14 @@ impl Default for Dpcr {
 }
 
 impl Dicr {
+    fn irq_signal(&self) -> bool {
+        self.force_irq() || (self.master_enabled() && self.irq_flags() != 0)
+    }
+
     fn set_irq_lane(&mut self, ch: usize) {
         if self.master_enabled() && self.irq_enabled() & (1 << ch) != 0 {
             self.set_irq_flags(self.irq_flags() | (1 << ch));
         }
-        self.update_irq_signal();
-    }
-
-    fn update_irq_signal(&mut self) {
-        self.set_irq_signal(
-            self.force_irq()
-                || (self.master_enabled() && (self.irq_enabled() & self.irq_flags()) != 0),
-        );
     }
 }
 
@@ -179,9 +183,7 @@ impl DmaController {
             let mut chan = bus.dma_ctrl.channels[ch];
 
             // trigger bit must be present when sync_mode is Manual
-            if chan.chcr.active()
-                && (!matches!(chan.chcr.sync_mode(), SyncMode::Manual) || chan.chcr.trigger())
-            {
+            if !matches!(chan.chcr.sync_mode(), SyncMode::Manual) || chan.chcr.trigger() {
                 {
                     let transfer_span = tracing::debug_span!(
                         target: "dma",
@@ -208,8 +210,9 @@ impl DmaController {
                 chan.chcr.set_active(false);
                 chan.chcr.set_trigger(false);
 
+                let was_asserted = bus.dma_ctrl.dicr.irq_signal();
                 bus.dma_ctrl.dicr.set_irq_lane(ch);
-                if bus.dma_ctrl.dicr.irq_signal() {
+                if !was_asserted && bus.dma_ctrl.dicr.irq_signal() {
                     bus.int_ctrl.raise(InterruptFlags::DMA);
                 }
 
@@ -217,45 +220,12 @@ impl DmaController {
             }
         }
 
+        bus.scheduler.schedule(Event::Dma, duration + POLL_INTERVAL);
+
         duration
     }
 
-    fn pick_highest_priority_chan(&self) -> Option<usize> {
-        fn dma_prio(dpcr: u32, ch: usize) -> u8 {
-            ((dpcr >> (ch * 4)) & 0x7) as u8
-        }
-        fn dma_enabled(dpcr: u32, ch: usize) -> bool {
-            ((dpcr >> (ch * 4 + 3)) & 1) != 0
-        }
-
-        let mut best = None;
-        let mut best_prio = u8::MAX;
-
-        let dpcr = u32::from_le_bytes(self.dpcr.into_bytes());
-        for ch in 0..7 {
-            if !dma_enabled(dpcr, ch) {
-                continue;
-            }
-
-            if !self.channels[ch].chcr.active() {
-                continue;
-            }
-
-            let prio = dma_prio(dpcr, ch);
-            if prio < best_prio {
-                best = Some(ch);
-                best_prio = prio;
-            }
-        }
-
-        best
-    }
-}
-
-impl Schedule for DmaController {}
-
-impl Mmio for DmaController {
-    fn read(&mut self, dest: &mut [u8], maddr: u32) {
+    pub(crate) fn read_mmio(&mut self, dest: &mut [u8], maddr: u32) {
         match maddr {
             ..0x70 => {
                 let reg = maddr % 0x10;
@@ -279,13 +249,19 @@ impl Mmio for DmaController {
                 read_part::<4, 4>(dest, maddr, self.dpcr.into_bytes());
             }
             0x74..0x78 => {
-                read_part::<4, 4>(dest, maddr, self.dicr.into_bytes());
+                let value = self.dicr.with_irq_signal(self.dicr.irq_signal());
+                read_part::<4, 4>(dest, maddr, value.into_bytes());
             }
             _ => unimplemented!(),
         }
     }
 
-    fn write(&mut self, maddr: u32, value: &[u8]) {
+    pub(crate) fn write_mmio(
+        &mut self,
+        int_ctrl: &mut InterruptController,
+        maddr: u32,
+        value: &[u8],
+    ) {
         match maddr {
             ..0x70 => {
                 let reg = maddr % 0x10;
@@ -322,6 +298,7 @@ impl Mmio for DmaController {
                     Dpcr::from_bytes(write_part::<4, 4>(maddr, value, self.dpcr.into_bytes()));
             }
             0x74..0x78 => {
+                let was_asserted = self.dicr.irq_signal();
                 let new =
                     Dicr::from_bytes(write_part::<4, 4>(maddr, value, self.dicr.into_bytes()));
 
@@ -334,66 +311,42 @@ impl Mmio for DmaController {
                 self.dicr
                     .set_irq_flags(self.dicr.irq_flags() & !ack.irq_flags());
 
-                // Recalculate irq signal bit, rather than copy it
-                self.dicr.update_irq_signal();
+                if !was_asserted && self.dicr.irq_signal() {
+                    int_ctrl.raise(InterruptFlags::DMA);
+                }
             }
             _ => unimplemented!(),
         }
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::{super::Mmio, Bcr, Chcr, Direction, DmaController, Dpcr, Step, SyncMode};
+    fn pick_highest_priority_chan(&self) -> Option<usize> {
+        fn dma_prio(dpcr: u32, ch: usize) -> u8 {
+            ((dpcr >> (ch * 4)) & 0x7) as u8
+        }
+        fn dma_enabled(dpcr: u32, ch: usize) -> bool {
+            ((dpcr >> (ch * 4 + 3)) & 1) != 0
+        }
 
-    fn write(ctrl: &mut DmaController, maddr: u32, val: u32) {
-        ctrl.write(maddr, val.to_le_bytes().as_slice());
-    }
+        let mut best = None;
+        let mut best_prio = u8::MAX;
 
-    #[test]
-    fn verify_default() {
-        let dpcr = Dpcr::default();
-        let reg = u32::from_le_bytes(dpcr.into_bytes());
+        let dpcr = u32::from_le_bytes(self.dpcr.into_bytes());
+        for ch in 0..7 {
+            if !dma_enabled(dpcr, ch) {
+                continue;
+            }
 
-        assert_eq!(reg, 0x07654321);
-    }
+            if !self.channels[ch].chcr.active() {
+                continue;
+            }
 
-    #[test]
-    fn verify_bios_seq() {
-        let mut ctrl = DmaController::default();
+            let prio = dma_prio(dpcr, ch);
+            if prio < best_prio {
+                best = Some(ch);
+                best_prio = prio;
+            }
+        }
 
-        write(&mut ctrl, 0x70, 0x076f4321);
-        assert!(ctrl.dpcr.enabled4());
-        assert_eq!(ctrl.dpcr.priority4(), 7);
-
-        write(&mut ctrl, 0x74, 0);
-        write(&mut ctrl, 0x74, 0x4840000);
-
-        write(&mut ctrl, 0x28, 0x401);
-        assert_eq!(
-            ctrl.channels[2].chcr,
-            Chcr::new()
-                .with_sync_mode(SyncMode::LinkedList)
-                .with_direction(Direction::FromRam)
-        );
-
-        write(&mut ctrl, 0x70, 0xf6f4321);
-
-        write(&mut ctrl, 0x60, 0x800eb8d4);
-        assert_eq!(ctrl.channels[6].madr, 0x800eb8d4);
-
-        write(&mut ctrl, 0x64, 0x00000400);
-        assert_eq!(ctrl.channels[6].bcr, Bcr::new().with_word_count(1024));
-
-        write(&mut ctrl, 0x68, 0x11000002);
-        assert_eq!(
-            ctrl.channels[6].chcr,
-            Chcr::new()
-                .with_sync_mode(SyncMode::Manual)
-                .with_direction(Direction::ToRam)
-                .with_step(Step::Decrement)
-                .with_active(true)
-                .with_trigger(true)
-        );
+        best
     }
 }

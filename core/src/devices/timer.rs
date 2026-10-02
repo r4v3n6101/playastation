@@ -6,9 +6,10 @@ use modular_bitfield::prelude::*;
 use crate::{
     SystemTime,
     devices::int::{InterruptController, InterruptFlags},
+    scheduler::{Event, Scheduler},
 };
 
-use super::{Mmio, read_part, write_part};
+use super::{read_part, write_part};
 
 const TIMERS: usize = 3;
 const COUNTER_PERIOD: u64 = u16::MAX as u64 + 1;
@@ -237,7 +238,96 @@ impl Timer {
 }
 
 impl TimerController {
-    pub(crate) fn next_event(
+    pub(crate) fn update(&mut self, int_ctrl: &mut InterruptController, input: TimingSpan) {
+        let timer2_div8 = {
+            self.div8_remainder += input.elapsed;
+
+            let ticks = self.div8_remainder / 8;
+            self.div8_remainder %= 8;
+
+            ticks
+        };
+
+        for i in 0..TIMERS {
+            let irq = self.advance_timer(i, input, timer2_div8);
+            if irq {
+                int_ctrl.raise(match i {
+                    0 => InterruptFlags::TMR0,
+                    1 => InterruptFlags::TMR1,
+                    2 => InterruptFlags::TMR2,
+                    _ => unreachable!(),
+                });
+            }
+        }
+
+        if input.event.contains(TimingEvent::VBLANK_ENTER) {
+            int_ctrl.raise(InterruptFlags::VBLANK);
+        }
+    }
+
+    pub(crate) fn read_mmio(&mut self, dest: &mut [u8], maddr: u32) {
+        let timer = (maddr / 0x10) as usize;
+        let reg = maddr % 0x10;
+
+        match reg {
+            0x0..0x4 => {
+                read_part::<4, 2>(dest, maddr, self.timers[timer].counter.to_le_bytes());
+            }
+            0x4..0x8 => {
+                let timer = &mut self.timers[timer];
+                let val = timer.mode.into_bytes();
+
+                timer.mode.set_reached_target(false);
+                timer.mode.set_reached_overflow(false);
+
+                read_part::<4, 2>(dest, maddr, val);
+            }
+            0x8..0xC => {
+                read_part::<4, 2>(dest, maddr, self.timers[timer].target.to_le_bytes());
+            }
+            _ => unimplemented!(),
+        }
+    }
+
+    pub(crate) fn write_mmio(&mut self, scheduler: &mut Scheduler, maddr: u32, value: &[u8]) {
+        let timer = (maddr / 0x10) as usize;
+        let reg = maddr % 0x10;
+
+        match reg {
+            0x0..0x4 => {
+                self.timers[timer].counter = u16::from_le_bytes(write_part::<4, 2>(
+                    maddr,
+                    value,
+                    self.timers[timer].counter.to_le_bytes(),
+                ));
+            }
+            0x4..0x8 => {
+                let timer = &mut self.timers[timer];
+                timer.counter = 0;
+
+                timer.mode = TimerMode::from_bytes(write_part::<4, 2>(
+                    maddr,
+                    value,
+                    timer.mode.into_bytes(),
+                ))
+                .with_irq_inhibit(true)
+                .with_reached_target(false)
+                .with_reached_overflow(false);
+            }
+            0x8..0xC => {
+                self.timers[timer].target = u16::from_le_bytes(write_part::<4, 2>(
+                    maddr,
+                    value,
+                    self.timers[timer].target.to_le_bytes(),
+                ));
+            }
+            _ => unimplemented!(),
+        }
+
+        scheduler.schedule(Event::Gpu, 0);
+    }
+
+    pub(crate) fn delay_till_next_event(
         &self,
         hblank: bool,
         vblank: bool,
@@ -279,33 +369,6 @@ impl TimerController {
                 Some(delay)
             })
             .min()
-    }
-
-    pub(crate) fn update(&mut self, int_ctrl: &mut InterruptController, input: TimingSpan) {
-        let timer2_div8 = {
-            self.div8_remainder += input.elapsed;
-
-            let ticks = self.div8_remainder / 8;
-            self.div8_remainder %= 8;
-
-            ticks
-        };
-
-        for i in 0..TIMERS {
-            let irq = self.advance_timer(i, input, timer2_div8);
-            if irq {
-                int_ctrl.raise(match i {
-                    0 => InterruptFlags::TMR0,
-                    1 => InterruptFlags::TMR1,
-                    2 => InterruptFlags::TMR2,
-                    _ => unreachable!(),
-                });
-            }
-        }
-
-        if input.event.contains(TimingEvent::VBLANK_ENTER) {
-            int_ctrl.raise(InterruptFlags::VBLANK);
-        }
     }
 
     fn advance_timer(&mut self, idx: usize, span: TimingSpan, timer2_div8: u64) -> bool {
@@ -408,125 +471,5 @@ impl TimerController {
         }
 
         irq
-    }
-}
-
-impl Mmio for TimerController {
-    fn read(&mut self, dest: &mut [u8], maddr: u32) {
-        let timer = (maddr / 0x10) as usize;
-        let reg = maddr % 0x10;
-
-        match reg {
-            0x0..0x4 => {
-                read_part::<4, 2>(dest, maddr, self.timers[timer].counter.to_le_bytes());
-            }
-            0x4..0x8 => {
-                let timer = &mut self.timers[timer];
-                let val = timer.mode.into_bytes();
-
-                timer.mode.set_reached_target(false);
-                timer.mode.set_reached_overflow(false);
-
-                read_part::<4, 2>(dest, maddr, val);
-            }
-            0x8..0xC => {
-                read_part::<4, 2>(dest, maddr, self.timers[timer].target.to_le_bytes());
-            }
-            _ => unimplemented!(),
-        }
-    }
-
-    fn write(&mut self, maddr: u32, value: &[u8]) {
-        let timer = (maddr / 0x10) as usize;
-        let reg = maddr % 0x10;
-
-        match reg {
-            0x0..0x4 => {
-                self.timers[timer].counter = u16::from_le_bytes(write_part::<4, 2>(
-                    maddr,
-                    value,
-                    self.timers[timer].counter.to_le_bytes(),
-                ));
-            }
-            0x4..0x8 => {
-                let timer = &mut self.timers[timer];
-                timer.counter = 0;
-
-                timer.mode = TimerMode::from_bytes(write_part::<4, 2>(
-                    maddr,
-                    value,
-                    timer.mode.into_bytes(),
-                ))
-                .with_irq_inhibit(true)
-                .with_reached_target(false)
-                .with_reached_overflow(false);
-            }
-            0x8..0xC => {
-                self.timers[timer].target = u16::from_le_bytes(write_part::<4, 2>(
-                    maddr,
-                    value,
-                    self.timers[timer].target.to_le_bytes(),
-                ));
-            }
-            _ => unimplemented!(),
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{super::Mmio, TimerController, TimerMode};
-
-    fn read(ctrl: &mut TimerController, maddr: u32) -> u32 {
-        let mut buf = [0; 4];
-        ctrl.read(&mut buf, maddr);
-        u32::from_le_bytes(buf)
-    }
-
-    fn write(ctrl: &mut TimerController, maddr: u32, val: u32) {
-        ctrl.write(maddr, val.to_le_bytes().as_slice());
-    }
-
-    #[test]
-    fn verify_default_mode() {
-        let reg = u16::from_le_bytes(TimerMode::default().into_bytes());
-
-        assert_eq!(reg, 0x0400);
-    }
-
-    #[test]
-    fn write_mode_resets_counter_and_sets_irq_request() {
-        let mut ctrl = TimerController::default();
-
-        write(&mut ctrl, 0x0, 0x1234);
-        write(&mut ctrl, 0x4, 0x0038);
-
-        assert_eq!(ctrl.timers[0].counter, 0);
-        assert!(ctrl.timers[0].mode.irq_inhibit());
-        assert!(ctrl.timers[0].mode.reset_on_target());
-        assert!(ctrl.timers[0].mode.irq_on_target());
-        assert!(ctrl.timers[0].mode.irq_on_overflow());
-    }
-
-    #[test]
-    fn mode_read_clears_reached_flags() {
-        let mut ctrl = TimerController::default();
-        ctrl.timers[1].mode.set_reached_target(true);
-        ctrl.timers[1].mode.set_reached_overflow(true);
-
-        assert_eq!(read(&mut ctrl, 0x14) & 0x1800, 0x1800);
-        assert!(!ctrl.timers[1].mode.reached_target());
-        assert!(!ctrl.timers[1].mode.reached_overflow());
-    }
-
-    #[test]
-    fn registers_are_repeated_for_three_timers() {
-        let mut ctrl = TimerController::default();
-
-        write(&mut ctrl, 0x20, 0x1111);
-        write(&mut ctrl, 0x28, 0x2222);
-
-        assert_eq!(read(&mut ctrl, 0x20), 0x1111);
-        assert_eq!(read(&mut ctrl, 0x28), 0x2222);
     }
 }

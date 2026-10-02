@@ -8,11 +8,14 @@ use strum::EnumCount;
 use crate::{
     SystemTime,
     devices::int::{InterruptController, InterruptFlags},
+    scheduler::{Event, Scheduler},
 };
 
-use super::{Mmio, Schedule, read_part, write_part};
+use super::{read_part, write_part};
 
 pub mod controller;
+
+const POLL_INTERVAL: SystemTime = 100;
 
 // Approximate peripheral response delay and ACK pulse width in CPU clocks.
 const ACK_DELAY: SystemTime = 100;
@@ -165,7 +168,9 @@ impl JoyBus {
         self.devs[slot as usize] = None;
     }
 
-    pub(crate) fn update(&mut self, int_ctrl: &mut InterruptController, elapsed: SystemTime) {
+    pub(crate) fn update(&mut self, scheduler: &mut Scheduler, int_ctrl: &mut InterruptController) {
+        let elapsed = scheduler.take_elapsed(Event::Joy);
+
         self.ack_pulse_left = self.ack_pulse_left.saturating_sub(elapsed);
 
         let mut ack_edge = false;
@@ -186,64 +191,11 @@ impl JoyBus {
             self.irq_pending = true;
             int_ctrl.raise(InterruptFlags::JOY);
         }
+
+        scheduler.schedule(Event::Joy, POLL_INTERVAL);
     }
 
-    fn exchange(&mut self, tx: u8) -> (u8, bool) {
-        const CONTROLLER_ID: u8 = 0x01;
-        const MEMCARD_ID: u8 = 0x81;
-
-        if self.ctrl.joy_select() {
-            if let Selection::Address = self.selection {
-                let slot = match (tx, self.ctrl.slot_select()) {
-                    (CONTROLLER_ID, false) => Some(Slot::Controller1),
-                    (CONTROLLER_ID, true) => Some(Slot::Controller2),
-                    (MEMCARD_ID, false) => Some(Slot::MemCard1),
-                    (MEMCARD_ID, true) => Some(Slot::MemCard2),
-                    _ => None,
-                };
-                if let Some(slot) = slot
-                    && let Some(dev) = self.devs[slot as usize].as_mut()
-                {
-                    dev.begin_transfer();
-                    self.selection = Selection::Device(slot);
-                } else {
-                    self.selection = Selection::Disconnected;
-                }
-            }
-
-            if let Selection::Device(slot) = self.selection
-                && let Some(dev) = self.devs[slot as usize].as_mut()
-            {
-                let response @ (_, ack) = dev.exchange(tx);
-                if !ack {
-                    self.selection = Selection::Disconnected;
-                }
-
-                return response;
-            }
-        }
-
-        (0xFF, false)
-    }
-
-    fn byte_duration(&self) -> SystemTime {
-        let factor = match self.mode.baud_reload_factor() {
-            0 | 1 => 1,
-            2 => 16,
-            _ => 64,
-        };
-
-        let bit_duration = ((SystemTime::from(self.baud) * factor) & !1).max(1);
-        let bits = 5 + u64::from(self.mode.char_length()) + u64::from(self.mode.parity_enable());
-
-        bit_duration * bits
-    }
-}
-
-impl Schedule for JoyBus {}
-
-impl Mmio for JoyBus {
-    fn read(&mut self, dest: &mut [u8], maddr: u32) {
+    pub(crate) fn read_mmio(&mut self, dest: &mut [u8], maddr: u32) {
         match maddr {
             0x0..0x4 => {
                 read_part::<4, 1>(dest, maddr, [self.rx_fifo.pop_front().unwrap_or(0xFF)]);
@@ -264,7 +216,7 @@ impl Mmio for JoyBus {
         }
     }
 
-    fn write(&mut self, maddr: u32, value: &[u8]) {
+    pub(crate) fn write_mmio(&mut self, maddr: u32, value: &[u8]) {
         match maddr {
             0x0..0x4 => {
                 if !self.ctrl.tx_enable() {
@@ -321,5 +273,56 @@ impl Mmio for JoyBus {
             }
             _ => unimplemented!(),
         }
+    }
+
+    fn exchange(&mut self, tx: u8) -> (u8, bool) {
+        const CONTROLLER_ID: u8 = 0x01;
+        const MEMCARD_ID: u8 = 0x81;
+
+        if self.ctrl.joy_select() {
+            if let Selection::Address = self.selection {
+                let slot = match (tx, self.ctrl.slot_select()) {
+                    (CONTROLLER_ID, false) => Some(Slot::Controller1),
+                    (CONTROLLER_ID, true) => Some(Slot::Controller2),
+                    (MEMCARD_ID, false) => Some(Slot::MemCard1),
+                    (MEMCARD_ID, true) => Some(Slot::MemCard2),
+                    _ => None,
+                };
+                if let Some(slot) = slot
+                    && let Some(dev) = self.devs[slot as usize].as_mut()
+                {
+                    dev.begin_transfer();
+                    self.selection = Selection::Device(slot);
+                } else {
+                    self.selection = Selection::Disconnected;
+                }
+            }
+
+            if let Selection::Device(slot) = self.selection
+                && let Some(dev) = self.devs[slot as usize].as_mut()
+            {
+                let response @ (_, ack) = dev.exchange(tx);
+                if !ack {
+                    self.selection = Selection::Disconnected;
+                }
+
+                return response;
+            }
+        }
+
+        (0xFF, false)
+    }
+
+    fn byte_duration(&self) -> SystemTime {
+        let factor = match self.mode.baud_reload_factor() {
+            0 | 1 => 1,
+            2 => 16,
+            _ => 64,
+        };
+
+        let bit_duration = ((SystemTime::from(self.baud) * factor) & !1).max(1);
+        let bits = 5 + u64::from(self.mode.char_length()) + u64::from(self.mode.parity_enable());
+
+        bit_duration * bits
     }
 }

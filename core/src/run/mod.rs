@@ -6,7 +6,6 @@ use crate::{
     cpu::{Cpu, Exception, PendingJump},
     formats::psexe::{BoxedExeFile, ExeHeader},
     interconnect::Bus,
-    scheduler::Scheduler,
 };
 
 mod backend;
@@ -19,35 +18,31 @@ pub struct Console {
     pub printf: Option<Box<dyn FnMut(char)>>,
     /// CPU engine for code execution, with some optimizations.
     engine: backend::CpuEngine,
-    scheduler: Scheduler,
 }
 
 impl Console {
     pub fn step(&mut self) -> SystemTime {
         let budget = self
+            .bus
             .scheduler
             .delay_till_next_event()
-            .expect("GPU always scheduled");
+            .expect("at least one event must be scheduled");
 
         let backend::ExecutionResult {
             cycles_elapsed: elapsed,
             stop_reason,
         } = self.engine.run_for(&mut self.cpu, &mut self.bus, budget);
 
+        self.bus.scheduler.advance(elapsed);
         let mut total_elapsed = elapsed;
-        self.scheduler.advance(elapsed);
 
-        while let Some((event, elapsed)) = self.scheduler.pop_event_with_elapsed() {
-            let (delay, duration) = self.bus.handle_event(event, elapsed, |paddr| {
-                self.engine.cache_invalidate_by_addr(paddr);
-            });
+        while let Some(event) = self.bus.scheduler.pop() {
+            let duration = self
+                .bus
+                .handle_event(event, |paddr| self.engine.cache_invalidate_by_addr(paddr));
 
-            self.scheduler.advance(duration);
+            self.bus.scheduler.advance(duration);
             total_elapsed += duration;
-
-            if let Some(delay) = delay {
-                self.scheduler.schedule(event, delay);
-            }
         }
 
         match stop_reason {

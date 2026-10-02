@@ -1,7 +1,5 @@
 // TODO : this is stub to run Silent Hill
 
-use super::Mmio;
-
 #[derive(Debug, Default)]
 pub struct Spu {
     reverb_enable: [u16; 2],
@@ -10,8 +8,8 @@ pub struct Spu {
     transfer_control: u16,
 }
 
-impl Mmio for Spu {
-    fn read(&mut self, dest: &mut [u8], maddr: u32) {
+impl Spu {
+    pub(crate) fn read_mmio(&mut self, dest: &mut [u8], maddr: u32) {
         for (offset, byte) in dest.iter_mut().enumerate() {
             let addr = maddr + offset as u32;
             let value = match addr & !1 {
@@ -27,7 +25,7 @@ impl Mmio for Spu {
         }
     }
 
-    fn write(&mut self, maddr: u32, value: &[u8]) {
+    pub(crate) fn write_mmio(&mut self, maddr: u32, value: &[u8]) {
         // TODO: byte writes require the full CPU halfword on the SPU bus.
         for (offset, bytes) in value.chunks_exact(2).enumerate() {
             let value = u16::from_le_bytes(bytes.try_into().unwrap());

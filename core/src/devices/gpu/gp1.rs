@@ -59,17 +59,10 @@ impl Gpu {
 
                 self.hrange = DEFAULT_HRANGE;
                 self.vrange = DEFAULT_VRANGE;
-                self.clock.set_display_ranges(self.hrange, self.vrange);
 
                 self.display = Display::default();
                 self.frame_ready = true;
-
-                self.clock.set_display_mode(
-                    self.display.vmode,
-                    self.display.hres,
-                    self.display.special_368_hres,
-                    self.display.interlaced,
-                );
+                self.timing_dirty = true;
             }
             Gp1Opcode::ResetCommandBuffer => {
                 self.cmdbuf = Default::default();
@@ -95,11 +88,11 @@ impl Gpu {
             }
             Gp1Opcode::DisplayHorizontalRange => {
                 self.hrange = ((cmd & 0x0FFF) as u16, ((cmd >> 12) & 0x0FFF) as u16);
-                self.clock.set_display_ranges(self.hrange, self.vrange);
+                self.timing_dirty = true;
             }
             Gp1Opcode::DisplayVerticalRange => {
                 self.vrange = ((cmd & 0x03FF) as u16, ((cmd >> 10) & 0x03FF) as u16);
-                self.clock.set_display_ranges(self.hrange, self.vrange);
+                self.timing_dirty = true;
             }
             Gp1Opcode::DisplayMode => {
                 let mode = DisplayMode::from_bytes([cmd as u8]);
@@ -112,12 +105,7 @@ impl Gpu {
                 self.display.special_368_hres = mode.special_hres();
                 self.display.reversed = mode.reverse();
 
-                self.clock.set_display_mode(
-                    self.display.vmode,
-                    self.display.hres,
-                    self.display.special_368_hres,
-                    self.display.interlaced,
-                );
+                self.timing_dirty = true;
             }
             Gp1Opcode::GetGpuInfo => {}
         }

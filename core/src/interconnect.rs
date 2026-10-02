@@ -4,10 +4,10 @@ use core::{ops::Range, ptr};
 use crate::{
     BIOS_SIZE, RAM_SIZE, SystemTime,
     devices::{
-        Mmio, Schedule, cdrom::CdRom, dma::DmaController, gpu::Gpu, int::InterruptController,
-        joy::JoyBus, spu::Spu, timer::TimerController,
+        cdrom::CdRom, dma::DmaController, gpu::Gpu, int::InterruptController, joy::JoyBus,
+        spu::Spu, timer::TimerController,
     },
-    scheduler::Event,
+    scheduler::{Event, Scheduler},
 };
 
 /// RAM takes 8MiB, but 3 others are mirrors to the first 2MiB
@@ -44,6 +44,8 @@ pub enum Region {
 }
 
 pub struct Bus {
+    pub(crate) scheduler: Scheduler,
+
     // FIXME: I'd like to size into array, like Box<[T; N]>
     pub bios: Box<[u8]>,
     pub ram: Box<[u8]>,
@@ -70,6 +72,8 @@ impl Default for Bus {
             ram,
             scratchpad,
 
+            scheduler: Scheduler::default(),
+
             int_ctrl: InterruptController::default(),
             dma_ctrl: DmaController::default(),
             timer_ctrl: TimerController::default(),
@@ -85,37 +89,26 @@ impl Bus {
     pub(crate) fn handle_event(
         &mut self,
         event: Event,
-        elapsed: SystemTime,
         ram_touched: impl FnMut(u32),
-    ) -> (Option<SystemTime>, SystemTime) {
+    ) -> SystemTime {
         match event {
             Event::Gpu => {
-                for span in self.gpu.update(&mut self.int_ctrl, elapsed) {
-                    self.timer_ctrl.update(&mut self.int_ctrl, span);
-                }
-                let next_gpu_or_timer_event = self
-                    .timer_ctrl
-                    .next_event(self.gpu.hblank(), self.gpu.vblank(), |dots| {
-                        self.gpu.delay_till_dotclocks(dots)
-                    })
-                    .into_iter()
-                    .chain(self.gpu.next_event())
-                    .min();
-
-                (next_gpu_or_timer_event, 0)
+                self.gpu.update(
+                    &mut self.scheduler,
+                    &mut self.int_ctrl,
+                    &mut self.timer_ctrl,
+                );
+                0
             }
             Event::CdRom => {
-                self.cdrom.update(&mut self.int_ctrl, elapsed);
-                (self.cdrom.next_event(), 0)
+                self.cdrom.update(&mut self.scheduler, &mut self.int_ctrl);
+                0
             }
             Event::Joy => {
-                self.joy_bus.update(&mut self.int_ctrl, elapsed);
-                (self.joy_bus.next_event(), 0)
+                self.joy_bus.update(&mut self.scheduler, &mut self.int_ctrl);
+                0
             }
-            Event::Dma => {
-                let duration = DmaController::run(self, ram_touched);
-                (self.dma_ctrl.next_event(), duration)
-            }
+            Event::Dma => DmaController::run(self, ram_touched),
         }
     }
 
@@ -216,43 +209,43 @@ impl Bus {
                 let _guard = mmio_span.enter();
                 let mmio_addr = paddr - JOY_BUS.start;
                 tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "joy bus read");
-                self.joy_bus.read(buf, mmio_addr);
+                self.joy_bus.read_mmio(buf, mmio_addr);
             }
             Region::Int => {
                 let _guard = mmio_span.enter();
                 let mmio_addr = paddr - INT_CTRL.start;
                 tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "int ctrl read");
-                self.int_ctrl.read(buf, mmio_addr);
+                self.int_ctrl.read_mmio(buf, mmio_addr);
             }
             Region::Dma => {
                 let _guard = mmio_span.enter();
                 let mmio_addr = paddr - DMA_CTRL.start;
                 tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "dma ctrl read");
-                self.dma_ctrl.read(buf, mmio_addr);
+                self.dma_ctrl.read_mmio(buf, mmio_addr);
             }
             Region::Timer => {
                 let _guard = mmio_span.enter();
                 let mmio_addr = paddr - TIMER_CTRL.start;
                 tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "timer ctrl read");
-                self.timer_ctrl.read(buf, mmio_addr);
+                self.timer_ctrl.read_mmio(buf, mmio_addr);
             }
             Region::CdRom => {
                 let _guard = mmio_span.enter();
                 let mmio_addr = paddr - CDROM.start;
                 tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "cdrom read");
-                self.cdrom.read(buf, mmio_addr);
+                self.cdrom.read_mmio(buf, mmio_addr);
             }
             Region::Gpu => {
                 let _guard = mmio_span.enter();
                 let mmio_addr = paddr - GPU.start;
                 tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "gpu read");
-                self.gpu.read(buf, mmio_addr);
+                self.gpu.read_mmio(buf, mmio_addr);
             }
             Region::Spu => {
                 let _guard = mmio_span.enter();
                 let mmio_addr = paddr - SPU.start;
                 tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "spu read");
-                self.spu.read(buf, mmio_addr);
+                self.spu.read_mmio(buf, mmio_addr);
             }
             Region::HwRegs => {
                 let _guard = mmio_span.enter();
@@ -282,43 +275,47 @@ impl Bus {
                 let _guard = mmio_span.enter();
                 let mmio_addr = paddr - JOY_BUS.start;
                 tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "joy bus write");
-                self.joy_bus.write(mmio_addr, &value);
+                self.joy_bus.write_mmio(mmio_addr, &value);
             }
             Region::Int => {
                 let _guard = mmio_span.enter();
                 let mmio_addr = paddr - INT_CTRL.start;
                 tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "int ctrl write");
-                self.int_ctrl.write(mmio_addr, &value);
+                self.int_ctrl.write_mmio(mmio_addr, &value);
             }
             Region::Dma => {
                 let _guard = mmio_span.enter();
                 let mmio_addr = paddr - DMA_CTRL.start;
                 tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "dma ctrl write");
-                self.dma_ctrl.write(mmio_addr, &value);
+                self.dma_ctrl
+                    .write_mmio(&mut self.int_ctrl, mmio_addr, &value);
             }
             Region::Timer => {
                 let _guard = mmio_span.enter();
                 let mmio_addr = paddr - TIMER_CTRL.start;
                 tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "timer ctrl write");
-                self.timer_ctrl.write(mmio_addr, &value);
+                self.timer_ctrl
+                    .write_mmio(&mut self.scheduler, mmio_addr, &value);
             }
             Region::CdRom => {
                 let _guard = mmio_span.enter();
                 let mmio_addr = paddr - CDROM.start;
                 tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "cdrom write");
-                self.cdrom.write(mmio_addr, &value);
+                self.cdrom
+                    .write_mmio(&mut self.scheduler, &mut self.int_ctrl, mmio_addr, &value);
             }
             Region::Gpu => {
                 let _guard = mmio_span.enter();
                 let mmio_addr = paddr - GPU.start;
                 tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "gpu write");
-                self.gpu.write(mmio_addr, &value);
+                self.gpu
+                    .write_mmio(&mut self.scheduler, &mut self.int_ctrl, mmio_addr, &value);
             }
             Region::Spu => {
                 let _guard = mmio_span.enter();
                 let mmio_addr = paddr - SPU.start;
                 tracing::trace!(mmio_addr=%format_args!("{mmio_addr:#X}"), "spu write");
-                self.spu.write(mmio_addr, &value);
+                self.spu.write_mmio(mmio_addr, &value);
             }
             Region::HwRegs => {
                 let _guard = mmio_span.enter();

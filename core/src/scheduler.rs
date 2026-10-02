@@ -1,20 +1,20 @@
 use alloc::collections::BinaryHeap;
 use core::cmp::Reverse;
 
-use strum::{EnumCount, EnumIter, IntoEnumIterator};
+use strum::EnumCount;
 
 use crate::SystemTime;
 
 #[derive(Debug, Clone)]
 pub struct Scheduler {
     now: SystemTime,
-    generations: [u64; Event::COUNT],
+    last_update: [SystemTime; Event::COUNT],
     events: BinaryHeap<Reverse<QueuedEvent>>,
 }
 
-#[derive(EnumCount, EnumIter, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(EnumCount, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Event {
-    /// GPU and timers together.
+    /// GPU and timers share elapsed time, video edges and dot clocks.
     Gpu,
     CdRom,
     Joy,
@@ -23,28 +23,21 @@ pub enum Event {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct QueuedEvent {
-    // Keep deadline first: derived Ord determines the heap's priority.
     deadline: SystemTime,
-    scheduled_at: SystemTime,
     event: Event,
-    generation: u64,
 }
 
 impl Default for Scheduler {
     fn default() -> Self {
-        Self {
+        let mut scheduler = Self {
             now: 0,
-            generations: [0; _],
-            events: Event::iter()
-                .map(|event| QueuedEvent {
-                    scheduled_at: 0,
-                    deadline: 0,
-                    generation: 0,
-                    event,
-                })
-                .map(Reverse)
-                .collect(),
+            last_update: [0; Event::COUNT],
+            events: BinaryHeap::new(),
+        };
+        for event in [Event::Gpu, Event::Joy, Event::Dma] {
+            scheduler.schedule(event, 0);
         }
+        scheduler
     }
 }
 
@@ -56,54 +49,42 @@ impl Scheduler {
             .expect("scheduler time overflow");
     }
 
-    pub fn delay_till_next_event(&mut self) -> Option<SystemTime> {
-        self.discard_stale();
+    pub fn delay_till_next_event(&self) -> Option<SystemTime> {
         self.events
             .peek()
             .map(|entry| entry.0.deadline.saturating_sub(self.now))
     }
 
     pub fn schedule(&mut self, event: Event, delay: SystemTime) {
-        let deadline = self
-            .now
-            .checked_add(delay)
-            .expect("event deadline overflow");
-
-        self.cancel(event);
         self.events.push(Reverse(QueuedEvent {
-            deadline,
             event,
-            generation: self.generations[event as usize],
-            scheduled_at: self.now,
+            deadline: self
+                .now
+                .checked_add(delay)
+                .expect("event deadline overflow"),
         }));
     }
 
-    pub fn cancel(&mut self, event: Event) {
-        let generation = &mut self.generations[event as usize];
-        *generation = generation
-            .checked_add(1)
-            .expect("event generation overflow");
+    pub fn elapsed_since_update(&self, event: Event) -> SystemTime {
+        self.now - self.last_update[event as usize]
     }
 
-    pub fn pop_event_with_elapsed(&mut self) -> Option<(Event, SystemTime)> {
-        self.discard_stale();
+    pub fn take_elapsed(&mut self, event: Event) -> SystemTime {
+        let elapsed = self.elapsed_since_update(event);
+        self.last_update[event as usize] = self.now;
+        elapsed
+    }
 
+    pub fn remove(&mut self, event: Event) {
+        self.events.retain(|entry| entry.0.event != event);
+    }
+
+    pub fn pop(&mut self) -> Option<Event> {
         if self.events.peek()?.0.deadline > self.now {
             return None;
         }
 
-        self.events
-            .pop()
-            .map(|Reverse(entry)| (entry.event, self.now - entry.scheduled_at))
-    }
-
-    fn discard_stale(&mut self) {
-        while let Some(Reverse(entry)) = self.events.peek() {
-            if entry.generation == self.generations[entry.event as usize] {
-                break;
-            }
-
-            self.events.pop();
-        }
+        let Reverse(entry) = self.events.pop()?;
+        Some(entry.event)
     }
 }
