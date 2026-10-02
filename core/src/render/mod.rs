@@ -7,7 +7,6 @@ pub trait Renderer: 'static {
     fn state(&self) -> types::RenderState;
 
     /// Get full [`types::Vram`] slice.
-    /// FIXME : display area? 24-bit color?
     fn framebuffer(&self) -> &[u16];
 
     /// Change inner render state.

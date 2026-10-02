@@ -156,35 +156,6 @@ impl Default for Gpu {
 }
 
 impl Gpu {
-    pub fn display_size(&self) -> (usize, usize) {
-        let clocks_per_pixel = if self.display.special_368_hres {
-            7
-        } else {
-            match self.display.hres {
-                HorizontalResolution::H256 => 10,
-                HorizontalResolution::H320 => 8,
-                HorizontalResolution::H512 => 5,
-                HorizontalResolution::H640 => 4,
-            }
-        };
-
-        // here it is: https://psx-spx.consoledev.net/ps1/gpu/display-control-commands-gp1/#gp106h-horizontal-display-range-on-screen
-        let (h0, h1) = self.hrange;
-        let width = (usize::from(h1.saturating_sub(h0)) / clocks_per_pixel).wrapping_add(2) & !3;
-
-        let (v0, v1) = self.vrange;
-        let mut height = usize::from(v1.saturating_sub(v0));
-        if self.display.interlaced && self.display.vres == VerticalResolution::V480 {
-            height *= 2;
-        }
-
-        (width, height)
-    }
-
-    pub fn take_frame_ready(&mut self) -> bool {
-        mem::take(&mut self.frame_ready)
-    }
-
     pub fn stat(&self) -> GpuStat {
         let RenderState {
             draw_mode,
@@ -240,6 +211,35 @@ impl Gpu {
             } else {
                 self.clock.scanline() & 1 != 0
             })
+    }
+
+    pub fn display_size(&self) -> (usize, usize) {
+        let clocks_per_pixel = if self.display.special_368_hres {
+            7
+        } else {
+            match self.display.hres {
+                HorizontalResolution::H256 => 10,
+                HorizontalResolution::H320 => 8,
+                HorizontalResolution::H512 => 5,
+                HorizontalResolution::H640 => 4,
+            }
+        };
+
+        // here it is: https://psx-spx.consoledev.net/ps1/gpu/display-control-commands-gp1/#gp106h-horizontal-display-range-on-screen
+        let (h0, h1) = self.hrange;
+        let width = (usize::from(h1.saturating_sub(h0)) / clocks_per_pixel).wrapping_add(2) & !3;
+
+        let (v0, v1) = self.vrange;
+        let mut height = usize::from(v1.saturating_sub(v0));
+        if self.display.interlaced && self.display.vres == VerticalResolution::V480 {
+            height *= 2;
+        }
+
+        (width, height)
+    }
+
+    pub fn take_frame_ready(&mut self) -> bool {
+        mem::take(&mut self.frame_ready)
     }
 
     pub(crate) fn update(

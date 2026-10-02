@@ -85,28 +85,6 @@ bitflags::bitflags! {
     }
 }
 
-#[derive(Copy, Clone)]
-enum IrqFlag {
-    /// DataReady
-    Int1 = 1,
-    /// Complete / second response
-    Int2 = 2,
-    /// Acknowledge / first response
-    Int3 = 3,
-    /// DataEnd
-    Int4 = 4,
-    /// Error
-    Int5 = 5,
-}
-
-#[repr(u8)]
-enum ErrorCode {
-    BadSubFunction = 0x10,
-    BadParameter = 0x20,
-    BadCommand = 0x40,
-    NoDisc = 0x80,
-}
-
 pub struct CdRom {
     pub disc: Option<Box<dyn Disc>>,
     pub status: CdRomStatus,
@@ -163,6 +141,28 @@ pub enum BankIndex {
     First = 1,
     Second = 2,
     Third = 3,
+}
+
+#[derive(Copy, Clone)]
+enum IrqFlag {
+    /// DataReady
+    Int1 = 1,
+    /// Complete / second response
+    Int2 = 2,
+    /// Acknowledge / first response
+    Int3 = 3,
+    /// DataEnd
+    Int4 = 4,
+    /// Error
+    Int5 = 5,
+}
+
+#[repr(u8)]
+enum ErrorCode {
+    BadSubFunction = 0x10,
+    BadParameter = 0x20,
+    BadCommand = 0x40,
+    NoDisc = 0x80,
 }
 
 impl Default for CdRom {

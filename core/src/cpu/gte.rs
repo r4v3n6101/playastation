@@ -1,7 +1,7 @@
 //! Geometry Transformation Engine (COP2).
 //!
 //! PSX-SPX's GTE specification is used:
-//! https://psx-spx.consoledev.net/geometrytransformationenginegte/
+//! <https://psx-spx.consoledev.net/geometrytransformationenginegte/>
 //!
 //! Commands complete synchronously; the interpreter accounts for their latency.
 
@@ -26,7 +26,7 @@ pub struct Gte {
 }
 
 impl Gte {
-    pub fn read_data(&self, reg: u8) -> u32 {
+    pub(crate) fn read_data(&self, reg: u8) -> u32 {
         match reg {
             15 => self.data[14], // SXYP mirrors the newest screen coordinate.
             28 | 29 => {
@@ -39,7 +39,7 @@ impl Gte {
         }
     }
 
-    pub fn write_data(&mut self, reg: u8, value: u32) {
+    pub(crate) fn write_data(&mut self, reg: u8, value: u32) {
         match reg {
             1 | 3 | 5 | 8..=11 => {
                 self.data[usize::from(reg)] = i32::from(value as i16).cast_unsigned()
@@ -64,11 +64,11 @@ impl Gte {
         }
     }
 
-    pub fn read_control(&self, reg: u8) -> u32 {
+    pub(crate) fn read_control(&self, reg: u8) -> u32 {
         self.control[usize::from(reg)]
     }
 
-    pub fn write_control(&mut self, reg: u8, value: u32) {
+    pub(crate) fn write_control(&mut self, reg: u8, value: u32) {
         self.control[usize::from(reg)] = match reg {
             // H is unsigned for projection, but sign-extended when read by CFC2.
             4 | 12 | 20 | 26 | 27 | 29 | 30 => i32::from(value as i16).cast_unsigned(),
@@ -80,7 +80,7 @@ impl Gte {
         }
     }
 
-    pub fn execute(&mut self, command: u32) -> u64 {
+    pub(crate) fn execute(&mut self, command: u32) -> u64 {
         let shift = if command & (1 << 19) != 0 { 12 } else { 0 };
         let lm = command & (1 << 10) != 0;
         self.control[31] = 0;

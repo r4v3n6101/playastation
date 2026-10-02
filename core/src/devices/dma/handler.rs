@@ -182,6 +182,7 @@ unsafe fn load_direct_ram(bus: &mut Bus, paddr: u32) -> u32 {
             4,
         );
     }
+
     u32::from_le_bytes(buf)
 }
 
@@ -204,5 +205,6 @@ unsafe fn store_direct_ram(
             4,
         );
     }
+
     ram_touched(paddr);
 }

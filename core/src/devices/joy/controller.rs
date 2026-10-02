@@ -30,7 +30,6 @@ bitflags::bitflags! {
 /// It has no sticks.
 pub struct DigitalController {
     state: State,
-
     poll_buttons: ButtonPressedCallback,
 }
 
