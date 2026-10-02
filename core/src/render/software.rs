@@ -88,14 +88,16 @@ impl Renderer for SoftwareRenderer {
 
     fn draw_polygon(&mut self, polygon: Polygon) {
         if let Some(tex_page) = polygon.tpage {
-            self.draw_mode.set_tex_page(tex_page);
+            self.draw_mode.set_tex_page(tex_page.tex_page());
+            self.draw_mode
+                .set_texture_disable(tex_page.texture_disable());
         }
 
         let flat_color = polygon.flat_color.is_some();
         let raw_texture = polygon.raw_texture;
         // 0 means no texture at all
         let tex_depth = if let Some(tpage) = polygon.tpage {
-            match tpage.texture_depth() {
+            match tpage.tex_page().texture_depth() {
                 TextureDepth::Bpp15 => 15,
                 TextureDepth::Bpp8 => 8,
                 TextureDepth::Bpp4 => 4,
