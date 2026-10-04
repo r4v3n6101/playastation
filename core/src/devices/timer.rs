@@ -16,7 +16,7 @@ const COUNTER_PERIOD: u64 = u16::MAX as u64 + 1;
 
 bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-    pub struct TimingEvent: u8 {
+    pub(crate) struct TimingEvent: u8 {
         const HBLANK_ENTER = 1 << 0;
         const HBLANK_LEAVE = 1 << 1;
         const VBLANK_ENTER = 1 << 2;
@@ -25,7 +25,7 @@ bitflags! {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct TimingSpan {
+pub(crate) struct TimingSpan {
     pub elapsed: SystemTime,
     pub dotclocks: u64,
 
