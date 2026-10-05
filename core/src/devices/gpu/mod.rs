@@ -8,12 +8,12 @@ use crate::{
         int::InterruptController,
         timer::{TimerController, TimingEvent},
     },
+    interconnect::scheduler::{Event, Scheduler},
     render::{
         Renderer,
         noop::NoopRenderer,
         types::{RenderState, SemiTransparency, TextureDepth},
     },
-    scheduler::{Event, Scheduler},
 };
 
 use super::{read_part, write_part};

@@ -1,6 +1,6 @@
 use playastation::{
-    VRAM_HEIGHT, VRAM_WIDTH,
     devices::gpu::{Display, HorizontalResolution},
+    render::{VRAM_HEIGHT, VRAM_WIDTH},
 };
 use playastation_frontend_common::{App, EmulatorData, EmulatorHost, InputState, eframe};
 use wasm_bindgen::prelude::*;

@@ -1,4 +1,7 @@
-use crate::{RAM_SIZE, SystemTime, interconnect::Bus};
+use crate::{
+    SystemTime,
+    interconnect::{RAM_SIZE, bus::Bus},
+};
 
 use super::{CHANNELS, Channel, Direction, Step};
 
@@ -11,8 +14,8 @@ const OTC: usize = 6;
 
 /// Approximate timings of word transfer.
 ///
-/// MdecIn: 0x110 clks per 0x100 words (1 cycle/word).
-/// MdecOut: 0x110 clks per 0x100 words (1 cycle/word).
+/// `MdecIn`: 0x110 clks per 0x100 words (1 cycle/word).
+/// `MdecOut`: 0x110 clks per 0x100 words (1 cycle/word).
 /// GPU: 0x110 clks per 0x100 words (1 cycle/word).
 /// CDROM/BIOS: 0x1800 clks per 0x100 words (24 cycles/word).
 /// CDROM/Games: 0x2800 clks per 0x100 words (40 cycles/word).
@@ -101,8 +104,7 @@ pub fn do_block(
 
             match chan.chcr.direction() {
                 Direction::FromRam => match ch {
-                    MDEC_IN => {}
-                    MDEC_OUT => {}
+                    MDEC_IN | MDEC_OUT | SPU => {}
                     GPU => {
                         // SAFETY: addr masked above
                         let word = unsafe { load_direct_ram(bus, addr) };
@@ -110,12 +112,10 @@ pub fn do_block(
 
                         duration = duration.saturating_add(TIMINGS[GPU]);
                     }
-                    SPU => {}
                     _ => todo!("{ch}={chan:#?}"),
                 },
                 Direction::ToRam => match ch {
-                    MDEC_IN => {}
-                    MDEC_OUT => {}
+                    MDEC_IN | MDEC_OUT => {}
                     GPU => {
                         let word = bus.gpu.gpuread();
                         // SAFETY: addr masked above

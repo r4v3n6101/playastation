@@ -42,7 +42,7 @@ impl Gte {
     pub(crate) fn write_data(&mut self, reg: u8, value: u32) {
         match reg {
             1 | 3 | 5 | 8..=11 => {
-                self.data[usize::from(reg)] = i32::from(value as i16).cast_unsigned()
+                self.data[usize::from(reg)] = i32::from(value as i16).cast_unsigned();
             }
             7 | 16..=19 => self.data[usize::from(reg)] = value & 0xffff,
             15 => self.push_sxy(value),
@@ -123,7 +123,7 @@ impl Gte {
                 6
             }
             0x10 => {
-                self.depth_cue(self.color(self.data[6]).map(|c| c << 16), shift, lm);
+                self.depth_cue(Self::color(self.data[6]).map(|c| c << 16), shift, lm);
                 self.push_rgb();
                 8
             }
@@ -184,7 +184,7 @@ impl Gte {
             }
             0x2a => {
                 for _ in 0..3 {
-                    self.depth_cue(self.color(self.data[20]).map(|c| c << 16), shift, lm);
+                    self.depth_cue(Self::color(self.data[20]).map(|c| c << 16), shift, lm);
                     self.push_rgb();
                 }
                 17
@@ -338,7 +338,7 @@ impl Gte {
     }
 
     fn modulated_color(&self) -> [i64; 3] {
-        let rgb = self.color(self.data[6]);
+        let rgb = Self::color(self.data[6]);
         let ir = self.ir();
         array::from_fn(|i| (rgb[i] * ir[i]) << 4)
     }
@@ -422,7 +422,7 @@ impl Gte {
         let divisor = u32::from(sz) << shift;
         let index = usize::from(((divisor - 0x7fc0) >> 7) as u16);
         let reciprocal = u32::from(UNR_TABLE[index]) + 0x101;
-        let estimate = (0x2000080 - divisor * reciprocal) >> 8;
+        let estimate = (0x02000080 - divisor * reciprocal) >> 8;
         let refined = (0x80 + estimate * reciprocal) >> 8;
         (((numerator * u64::from(refined) + 0x8000) >> 16) as u32).min(0x1ffff)
     }
@@ -444,7 +444,7 @@ impl Gte {
         array::from_fn(|i| i64::from(self.data[9 + i].cast_signed()))
     }
 
-    fn color(&self, rgb: u32) -> [i64; 3] {
+    fn color(rgb: u32) -> [i64; 3] {
         array::from_fn(|i| i64::from((rgb >> (i * 8)) & 0xff))
     }
 

@@ -5,7 +5,7 @@ use strum::EnumCount;
 
 use crate::SystemTime;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct Scheduler {
     now: SystemTime,
     last_update: [SystemTime; Event::COUNT],
@@ -25,20 +25,6 @@ pub enum Event {
 struct QueuedEvent {
     deadline: SystemTime,
     event: Event,
-}
-
-impl Default for Scheduler {
-    fn default() -> Self {
-        let mut scheduler = Self {
-            now: 0,
-            last_update: [0; Event::COUNT],
-            events: BinaryHeap::new(),
-        };
-        for event in [Event::Gpu, Event::Joy, Event::Dma] {
-            scheduler.schedule(event, 0);
-        }
-        scheduler
-    }
 }
 
 impl Scheduler {

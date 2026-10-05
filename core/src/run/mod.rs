@@ -5,7 +5,7 @@ use crate::{
     SystemTime,
     cpu::{Cpu, Exception, PendingJump},
     formats::psexe::{BoxedExeFile, ExeHeader},
-    interconnect::Bus,
+    interconnect::bus::Bus,
 };
 
 mod backend;
@@ -50,7 +50,7 @@ impl Console {
             backend::StopReason::ExeLoad => self.load_exe(),
             backend::StopReason::Exception(exc) => self.handle_exception(exc),
             backend::StopReason::Stalled => tracing::warn!("CPU has no progress"),
-            _ => {}
+            backend::StopReason::UnitEnded => {}
         }
 
         total_elapsed
@@ -58,7 +58,7 @@ impl Console {
 
     fn print_char(&mut self, ch: char) {
         if let Some(printf) = &mut self.printf {
-            (printf)(ch)
+            (printf)(ch);
         }
     }
 

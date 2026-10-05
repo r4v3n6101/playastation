@@ -6,7 +6,7 @@ use modular_bitfield::prelude::*;
 use crate::{
     SystemTime,
     devices::int::{InterruptController, InterruptFlags},
-    scheduler::{Event, Scheduler},
+    interconnect::scheduler::{Event, Scheduler},
 };
 
 use super::{read_part, write_part};

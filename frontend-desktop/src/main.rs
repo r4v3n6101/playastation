@@ -3,7 +3,7 @@ use std::{fs, path::PathBuf, sync::Arc, thread};
 use clap::Parser;
 use crossbeam_utils::atomic::AtomicCell;
 use playastation::{
-    CPU_FREQ,
+    cpu::CPU_FREQ,
     devices::joy::{
         Slot,
         controller::{Button, DigitalController},

@@ -30,8 +30,8 @@ impl Spu {
 
     pub(crate) fn write_mmio(&mut self, maddr: u32, value: &[u8]) {
         // TODO: byte writes require the full CPU halfword on the SPU bus.
-        for (offset, bytes) in value.chunks_exact(2).enumerate() {
-            let value = u16::from_le_bytes(bytes.try_into().unwrap());
+        for (offset, &bytes) in value.as_chunks::<2>().0.iter().enumerate() {
+            let value = u16::from_le_bytes(bytes);
             match maddr + offset as u32 * 2 {
                 addr @ 0x000..=0x17F => {
                     self.voices[(addr >> 4) as usize][((addr & 0xF) >> 1) as usize] = value;

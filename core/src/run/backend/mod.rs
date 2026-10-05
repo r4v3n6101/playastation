@@ -1,7 +1,7 @@
 use crate::{
     SystemTime,
     cpu::{Cpu, Exception},
-    interconnect::Bus,
+    interconnect::bus::Bus,
 };
 
 mod cache;
@@ -54,10 +54,10 @@ impl CpuEngine {
 
             if let StopReason::UnitEnded = result.stop_reason {
                 // Prevent deadloop
-                if result.cycles_elapsed != before {
-                    continue;
-                } else {
+                if result.cycles_elapsed == before {
                     result.stop_reason = StopReason::Stalled;
+                } else {
+                    continue;
                 }
             }
 
@@ -80,10 +80,10 @@ impl CpuEngine {
             interpreter::run_block(result, cpu, bus, &mut self.cache);
         }
 
-        self.catch_bios_hook(result, cpu);
+        Self::catch_bios_hook(result, cpu);
     }
 
-    fn catch_bios_hook(&self, result: &mut ExecutionResult, cpu: &Cpu) {
+    fn catch_bios_hook(result: &mut ExecutionResult, cpu: &Cpu) {
         if cpu.pc == 0x80030000 {
             result.stop_reason = StopReason::ExeLoad;
         } else if (cpu.pc == 0xA0 && cpu.gpr[9] == 0x3C) || (cpu.pc == 0xB0 && cpu.gpr[9] == 0x3D) {

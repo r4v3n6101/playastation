@@ -1,16 +1,21 @@
 use derive_more::Debug;
 
-use crate::interconnect::Bus;
+use crate::interconnect::bus::Bus;
 
-pub use cop0::{Cop0, Exception};
-pub use gte::Gte;
-pub use ins::Instruction;
-pub use mmu::{Mmu, TranslationResult};
+pub use self::{
+    cop0::{Cop0, Exception},
+    gte::Gte,
+    ins::Instruction,
+    mmu::{Mmu, TranslationResult},
+};
 
 mod cop0;
 mod gte;
 mod ins;
 mod mmu;
+
+/// CPU frequency in cycles per second.
+pub const CPU_FREQ: u64 = 33_868_800;
 
 #[derive(Debug, Copy, Clone)]
 pub struct Cpu {

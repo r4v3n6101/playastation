@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 
 use crate::{
     cpu::{Cpu, Exception, Instruction},
-    interconnect::Bus,
+    interconnect::bus::Bus,
 };
 
 /// Fetch single instruction by `cpu.pc` and decode it
@@ -13,9 +13,9 @@ pub fn fetch_and_decode_single(cpu: &mut Cpu, bus: &mut Bus) -> Result<Instructi
 /// Fetch block of instructions and decode them.
 /// It may be size of `limit`, but usually it's contiguous block until control flow change like branch or jump.
 pub fn fetch_and_decode_block(
-    limit: usize,
     cpu: &mut Cpu,
     bus: &mut Bus,
+    limit: usize,
 ) -> Vec<Result<Instruction, Exception>> {
     let mut pc = cpu.pc;
     let mut pending_delay_slot = cpu.pending_jump.is_some();

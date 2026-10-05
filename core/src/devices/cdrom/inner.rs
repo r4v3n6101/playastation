@@ -51,15 +51,15 @@ impl Command {
             Self::Bad { cmd } => {
                 tracing::warn!(cmd=%format_args!("{:#X}", cmd), "bad cdrom command");
 
-                cdrom.raise_err(ErrorCode::BadCommand, int_ctrl);
+                cdrom.raise_err(int_ctrl, ErrorCode::BadCommand);
             }
             Self::Test { subcommand: _ } => {
                 cdrom.push_response(&[0x94, 0x09, 0x19, 0xC0]);
-                cdrom.raise_int(IrqFlag::Int3, int_ctrl);
+                cdrom.raise_int(int_ctrl, IrqFlag::Int3);
             }
             Self::Getstat => {
                 cdrom.push_response(&[cdrom.status.bits()]);
-                cdrom.raise_int(IrqFlag::Int3, int_ctrl);
+                cdrom.raise_int(int_ctrl, IrqFlag::Int3);
             }
             Self::InitFirst => {
                 cdrom.cancel_read();
@@ -77,43 +77,43 @@ impl Command {
                 cdrom.pending_sector = None;
 
                 cdrom.push_response(&[cdrom.status.bits()]);
-                cdrom.raise_int(IrqFlag::Int3, int_ctrl);
+                cdrom.raise_int(int_ctrl, IrqFlag::Int3);
 
                 cdrom.queue_task(Self::InitSecond, CDROM_SECOND_DELAY);
             }
             Self::InitSecond => {
                 cdrom.push_response(&[cdrom.status.bits()]);
-                cdrom.raise_int(IrqFlag::Int2, int_ctrl);
+                cdrom.raise_int(int_ctrl, IrqFlag::Int2);
             }
             Self::GetIdFirst => {
                 cdrom.push_response(&[cdrom.status.bits()]);
-                cdrom.raise_int(IrqFlag::Int3, int_ctrl);
+                cdrom.raise_int(int_ctrl, IrqFlag::Int3);
 
                 cdrom.queue_task(Self::GetIdSecond, CDROM_SECOND_DELAY);
             }
             Self::GetIdSecond => {
                 // Eurotour!
                 cdrom.push_response(&[0x02, 0x00, 0x20, 0x00, b'S', b'C', b'E', b'E']);
-                cdrom.raise_int(IrqFlag::Int2, int_ctrl);
+                cdrom.raise_int(int_ctrl, IrqFlag::Int2);
             }
             Self::Setfilter { file, channel } => {
                 cdrom.filter_file = file;
                 cdrom.filter_channel = channel;
 
                 cdrom.push_response(&[cdrom.status.bits()]);
-                cdrom.raise_int(IrqFlag::Int3, int_ctrl);
+                cdrom.raise_int(int_ctrl, IrqFlag::Int3);
             }
             Self::Setmode { mode } => {
                 cdrom.mode = CdRomMode::from_bits_truncate(mode);
 
                 cdrom.push_response(&[cdrom.status.bits()]);
-                cdrom.raise_int(IrqFlag::Int3, int_ctrl);
+                cdrom.raise_int(int_ctrl, IrqFlag::Int3);
             }
             Self::Setloc { mm, ss, ff } => {
                 cdrom.msf_loc = Some([mm, ss, ff]);
 
                 cdrom.push_response(&[cdrom.status.bits()]);
-                cdrom.raise_int(IrqFlag::Int3, int_ctrl);
+                cdrom.raise_int(int_ctrl, IrqFlag::Int3);
             }
             Self::SeekFirst => {
                 cdrom.cancel_read();
@@ -126,7 +126,7 @@ impl Command {
                     .remove(CdRomStatus::READING | CdRomStatus::PLAYING);
 
                 cdrom.push_response(&[cdrom.status.bits()]);
-                cdrom.raise_int(IrqFlag::Int3, int_ctrl);
+                cdrom.raise_int(int_ctrl, IrqFlag::Int3);
 
                 cdrom.queue_task(Self::SeekSecond, CDROM_SEEK_DELAY);
             }
@@ -134,7 +134,7 @@ impl Command {
                 cdrom.status.remove(CdRomStatus::SEEKING);
 
                 cdrom.push_response(&[cdrom.status.bits()]);
-                cdrom.raise_int(IrqFlag::Int2, int_ctrl);
+                cdrom.raise_int(int_ctrl, IrqFlag::Int2);
             }
             Self::Read => {
                 cdrom.cancel_read();
@@ -151,7 +151,7 @@ impl Command {
                 cdrom.read_second_delivery_attempt = false;
 
                 cdrom.push_response(&[cdrom.status.bits()]);
-                cdrom.raise_int(IrqFlag::Int3, int_ctrl);
+                cdrom.raise_int(int_ctrl, IrqFlag::Int3);
 
                 cdrom.queue_task(Self::SectorReady, cdrom.read_sector_delay());
             }
@@ -186,14 +186,14 @@ impl Command {
                 let Some(disc) = cdrom.disc.as_mut() else {
                     cdrom.status.remove(CdRomStatus::READING);
                     cdrom.read_second_delivery_attempt = false;
-                    cdrom.raise_err(ErrorCode::NoDisc, int_ctrl);
+                    cdrom.raise_err(int_ctrl, ErrorCode::NoDisc);
                     return;
                 };
 
                 let Some(raw_sector) = disc.read_sector(cdrom.cursor_lba) else {
                     cdrom.status.remove(CdRomStatus::READING);
                     cdrom.read_second_delivery_attempt = false;
-                    cdrom.raise_err(ErrorCode::BadParameter, int_ctrl);
+                    cdrom.raise_err(int_ctrl, ErrorCode::BadParameter);
                     return;
                 };
 
@@ -209,7 +209,7 @@ impl Command {
                 cdrom.read_second_delivery_attempt = false;
 
                 cdrom.push_response(&[cdrom.status.bits()]);
-                cdrom.raise_int(IrqFlag::Int1, int_ctrl);
+                cdrom.raise_int(int_ctrl, IrqFlag::Int1);
 
                 cdrom.queue_task(Self::SectorReady, cdrom.read_sector_delay());
             }
@@ -224,25 +224,25 @@ impl Command {
                 cdrom.data_fifo.clear();
 
                 cdrom.push_response(&[cdrom.status.bits()]);
-                cdrom.raise_int(IrqFlag::Int3, int_ctrl);
+                cdrom.raise_int(int_ctrl, IrqFlag::Int3);
 
                 cdrom.queue_task(Self::PauseSecond, CDROM_SECOND_DELAY);
             }
             Self::PauseSecond => {
                 cdrom.push_response(&[cdrom.status.bits()]);
-                cdrom.raise_int(IrqFlag::Int2, int_ctrl);
+                cdrom.raise_int(int_ctrl, IrqFlag::Int2);
             }
             Self::Mute => {
                 cdrom.mute = true;
 
                 cdrom.push_response(&[cdrom.status.bits()]);
-                cdrom.raise_int(IrqFlag::Int3, int_ctrl);
+                cdrom.raise_int(int_ctrl, IrqFlag::Int3);
             }
             Self::Demute => {
                 cdrom.mute = false;
 
                 cdrom.push_response(&[cdrom.status.bits()]);
-                cdrom.raise_int(IrqFlag::Int3, int_ctrl);
+                cdrom.raise_int(int_ctrl, IrqFlag::Int3);
             }
             Self::GetTn => {
                 // Single data track fallback.
@@ -252,7 +252,7 @@ impl Command {
                     0x01, // last track, BCD
                 ]);
 
-                cdrom.raise_int(IrqFlag::Int3, int_ctrl);
+                cdrom.raise_int(int_ctrl, IrqFlag::Int3);
             }
             Self::GetTd { track } => {
                 let track = ((track >> 4) * 10) + (track & 0x0F);
@@ -260,11 +260,7 @@ impl Command {
                 let (minutes, seconds) = match track {
                     // track 0 = total disc length.
                     0 => {
-                        let sectors = cdrom
-                            .disc
-                            .as_ref()
-                            .map(|disc| disc.sector_count())
-                            .unwrap_or(0);
+                        let sectors = cdrom.disc.as_ref().map_or(0, |disc| disc.sector_count());
 
                         let total_seconds = sectors / 75;
                         ((total_seconds / 60) as u8, (total_seconds % 60) as u8)
@@ -272,7 +268,7 @@ impl Command {
                     // track 1 starts at 00:02:00 in absolute MSF.
                     1 => (0, 2),
                     _ => {
-                        cdrom.raise_err(ErrorCode::BadParameter, int_ctrl);
+                        cdrom.raise_err(int_ctrl, ErrorCode::BadParameter);
                         return;
                     }
                 };
@@ -283,7 +279,7 @@ impl Command {
                     bin_to_bcd(seconds),
                 ]);
 
-                cdrom.raise_int(IrqFlag::Int3, int_ctrl);
+                cdrom.raise_int(int_ctrl, IrqFlag::Int3);
             }
         }
     }

@@ -2,12 +2,12 @@ pub use eframe;
 pub use egui;
 
 use playastation::{
-    VRAM_HEIGHT, VRAM_WIDTH,
     devices::{
         cdrom::{CdRomMode, CdRomStat, CdRomStatus},
         gpu::{Display, DisplayDepth, GpuStat},
         joy::{JoyCtrl, JoyMode, JoyStat, controller::Button},
     },
+    render::{VRAM_HEIGHT, VRAM_WIDTH},
 };
 
 pub trait EmulatorHost {

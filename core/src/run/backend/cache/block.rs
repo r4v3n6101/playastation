@@ -6,9 +6,8 @@ use hashbrown::HashMap;
 use smallvec::SmallVec;
 
 use crate::{
-    RAM_SIZE,
     cpu::{Cpu, TranslationResult},
-    interconnect::{Region, region_of},
+    interconnect::{RAM_SIZE, Region, region_of},
 };
 
 const PAGE_BITS: usize = 12;

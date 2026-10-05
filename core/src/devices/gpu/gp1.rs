@@ -65,7 +65,7 @@ impl Gpu {
                 self.timing_dirty = true;
             }
             Gp1Opcode::ResetCommandBuffer => {
-                self.cmdbuf = Default::default();
+                self.cmdbuf = gp0::CmdBuf::default();
             }
             Gp1Opcode::AcknowledgeInterrupt => {
                 self.int_flag = false;

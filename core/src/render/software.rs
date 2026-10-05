@@ -3,10 +3,8 @@ use core::mem;
 
 use fixed::{FixedI64, types::extra::U32};
 
-use crate::{VRAM_HEIGHT, VRAM_WIDTH};
-
 use super::{
-    Renderer,
+    Renderer, VRAM_HEIGHT, VRAM_WIDTH,
     types::{
         Color, DrawMode, EnvParameter, Location, MaskBitSetting, Polygon, Polyline, Position, Rect,
         RenderState, SemiTransparency, Size, TextureDepth, TextureWindow, Vertex, Vram,
@@ -18,6 +16,7 @@ type FP = FixedI64<U32>;
 
 pub struct SoftwareRenderer {
     vram: Vram,
+
     draw_mode: DrawMode,
     texture_window: TextureWindow,
     draw_area: (Position, Position),
@@ -25,8 +24,9 @@ pub struct SoftwareRenderer {
     mask_bit_setting: MaskBitSetting,
 
     download_area: (Position, Size),
-    upload_area: (Position, Size),
     pop_counter: u16,
+
+    upload_area: (Position, Size),
     push_counter: u16,
 }
 
@@ -37,13 +37,14 @@ impl Default for SoftwareRenderer {
 
             draw_mode: DrawMode::new(),
             texture_window: TextureWindow::new(),
-            mask_bit_setting: MaskBitSetting::new(),
             draw_area: (Position { x: 0, y: 0 }, Position { x: 0, y: 0 }),
             draw_offset: Location { x: 0, y: 0 },
+            mask_bit_setting: MaskBitSetting::new(),
 
             download_area: (Position { x: 0, y: 0 }, Size { w: 0, h: 0 }),
-            upload_area: (Position { x: 0, y: 0 }, Size { w: 0, h: 0 }),
             pop_counter: 0,
+
+            upload_area: (Position { x: 0, y: 0 }, Size { w: 0, h: 0 }),
             push_counter: 0,
         }
     }
@@ -101,7 +102,7 @@ impl Renderer for SoftwareRenderer {
                 TextureDepth::Bpp15 => 15,
                 TextureDepth::Bpp8 => 8,
                 TextureDepth::Bpp4 => 4,
-                _ => 0,
+                TextureDepth::Reserved => 0,
             }
         } else {
             0
@@ -182,7 +183,7 @@ impl Renderer for SoftwareRenderer {
                 TextureDepth::Bpp15 => 15,
                 TextureDepth::Bpp8 => 8,
                 TextureDepth::Bpp4 => 4,
-                _ => 0,
+                TextureDepth::Reserved => 0,
             }
         } else {
             0
@@ -789,7 +790,7 @@ fn blend_bgr555(background: u16, foreground: u16, mode: SemiTransparency) -> u16
         let back = (background >> shift) & 0x1F;
         let front = (foreground >> shift) & 0x1F;
         match mode {
-            SemiTransparency::Average => (back + front) / 2,
+            SemiTransparency::Average => back.midpoint(front),
             SemiTransparency::Add => (back + front).min(0x1F),
             SemiTransparency::Subtract => back.saturating_sub(front),
             SemiTransparency::AddQuarter => (back + (front / 4)).min(0x1F),

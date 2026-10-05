@@ -36,15 +36,15 @@
 //! +------------+-------+------------------------------+--------------------------------------+
 //! ```
 //! Source: [PSX-SPX CDROM Controller I/O Ports](https://problemkaputt.de/psxspx-cdrom-controller-i-o-ports.htm).
-use alloc::{boxed::Box, collections::vec_deque::VecDeque};
+use alloc::{boxed::Box, collections::VecDeque};
 
-use modular_bitfield::*;
+use modular_bitfield::prelude::*;
 
 use crate::{
     SystemTime,
     devices::int::{InterruptController, InterruptFlags},
     formats::disk::{Disc, RawSector, sector_data},
-    scheduler::{Event as SchedulerEvent, Scheduler},
+    interconnect::scheduler::{Event, Scheduler},
 };
 
 mod inner;
@@ -98,7 +98,6 @@ pub struct CdRom {
     data_fifo: VecDeque<u8>,
 
     pending: VecDeque<inner::ScheduledCommand>,
-    read_second_delivery_attempt: bool,
 
     irq_enable: u8,
     irq_flags: u8,
@@ -108,6 +107,7 @@ pub struct CdRom {
     filter_file: u8,
     filter_channel: u8,
     pending_sector: Option<RawSector>,
+    read_second_delivery_attempt: bool,
 
     volume_cd_left_to_spu_left: u8,
     volume_cd_left_to_spu_right: u8,
@@ -145,13 +145,13 @@ pub enum BankIndex {
 
 #[derive(Copy, Clone)]
 enum IrqFlag {
-    /// DataReady
+    /// `DataReady`
     Int1 = 1,
     /// Complete / second response
     Int2 = 2,
     /// Acknowledge / first response
     Int3 = 3,
-    /// DataEnd
+    /// `DataEnd`
     Int4 = 4,
     /// Error
     Int5 = 5,
@@ -221,7 +221,7 @@ impl CdRom {
     }
 
     pub(crate) fn update(&mut self, scheduler: &mut Scheduler, int_ctrl: &mut InterruptController) {
-        let elapsed = scheduler.take_elapsed(SchedulerEvent::CdRom);
+        let elapsed = scheduler.take_elapsed(Event::CdRom);
 
         for scheduled in &mut self.pending {
             scheduled.remaining_delay = scheduled.remaining_delay.saturating_sub(elapsed);
@@ -237,11 +237,11 @@ impl CdRom {
             task.execute(self, int_ctrl);
         }
 
-        scheduler.remove(SchedulerEvent::CdRom);
+        scheduler.remove(Event::CdRom);
         if let Some(scheduled) = self.pending.front()
             && scheduled.remaining_delay != 0
         {
-            scheduler.schedule(SchedulerEvent::CdRom, scheduled.remaining_delay);
+            scheduler.schedule(Event::CdRom, scheduled.remaining_delay);
         }
     }
 
@@ -326,12 +326,12 @@ impl CdRom {
                     self.param_fifo.clear();
 
                     let remaining_delay = scheduler
-                        .elapsed_since_update(SchedulerEvent::CdRom)
+                        .elapsed_since_update(Event::CdRom)
                         .checked_add(CDROM_COMMAND_DEFAULT_DELAY)
                         .expect("cdrom task deadline overflow");
 
                     self.queue_task(cmd, remaining_delay);
-                    scheduler.schedule(SchedulerEvent::CdRom, CDROM_COMMAND_DEFAULT_DELAY);
+                    scheduler.schedule(Event::CdRom, CDROM_COMMAND_DEFAULT_DELAY);
                 }
                 // TODO : Audio
                 // Index::First => self.sound_map_data_out = value,
@@ -345,7 +345,7 @@ impl CdRom {
                         self.param_fifo.push_back(value);
                     } else {
                         tracing::warn!(cap=%PARAM_FIFO_CAP, "cdrom parameter fifo overflow");
-                        self.raise_int(IrqFlag::Int5, int_ctrl);
+                        self.raise_int(int_ctrl, IrqFlag::Int5);
                     }
                 }
                 BankIndex::First => {
@@ -384,12 +384,12 @@ impl CdRom {
                         self.param_fifo.clear();
                     }
 
-                    scheduler.schedule(SchedulerEvent::CdRom, 0);
+                    scheduler.schedule(Event::CdRom, 0);
                 }
                 BankIndex::Second => self.volume_cd_left_to_spu_right = value,
                 // TODO : Audio
                 // Index::Third => self.volume_apply(value),
-                _ => {}
+                BankIndex::Third => {}
             },
             _ => unreachable!(),
         }
@@ -438,9 +438,9 @@ impl CdRom {
         self.cursor_lba = lba.max(0) as usize;
     }
 
-    fn raise_err(&mut self, err: ErrorCode, int_ctrl: &mut InterruptController) {
+    fn raise_err(&mut self, int_ctrl: &mut InterruptController, err: ErrorCode) {
         self.push_response(&[(self.status | CdRomStatus::ERROR).bits(), err as u8]);
-        self.raise_int(IrqFlag::Int5, int_ctrl);
+        self.raise_int(int_ctrl, IrqFlag::Int5);
     }
 
     fn push_response(&mut self, data: &[u8]) {
@@ -448,7 +448,7 @@ impl CdRom {
         self.response_fifo.extend(data);
     }
 
-    fn raise_int(&mut self, int: IrqFlag, int_ctrl: &mut InterruptController) {
+    fn raise_int(&mut self, int_ctrl: &mut InterruptController, int: IrqFlag) {
         let was_asserted = self.irq_signal();
         self.irq_flags = int as u8;
         if !was_asserted && self.irq_signal() {

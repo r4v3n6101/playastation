@@ -1,6 +1,5 @@
-use core::mem;
-
 use alloc::{boxed::Box, collections::VecDeque};
+use core::mem;
 
 use modular_bitfield::prelude::*;
 use strum::EnumCount;
@@ -8,7 +7,7 @@ use strum::EnumCount;
 use crate::{
     SystemTime,
     devices::int::{InterruptController, InterruptFlags},
-    scheduler::{Event, Scheduler},
+    interconnect::scheduler::{Event, Scheduler},
 };
 
 use super::{read_part, write_part};
@@ -133,14 +132,13 @@ pub struct JoyCtrl {
 impl Default for JoyBus {
     fn default() -> Self {
         Self {
-            devs: [const { None }; _],
-            selection: Selection::default(),
-
-            rx_fifo: VecDeque::with_capacity(16),
-
             mode: JoyMode::new(),
             ctrl: JoyCtrl::new(),
             baud: 0,
+
+            selection: Selection::default(),
+            devs: [const { None }; _],
+            rx_fifo: VecDeque::with_capacity(16),
 
             irq_pending: false,
             ack_delay: None,

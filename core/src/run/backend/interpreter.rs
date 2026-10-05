@@ -2,7 +2,7 @@ use core::mem;
 
 use crate::{
     cpu::{Cop0, Cpu, Exception, Instruction, PendingJump, PendingLoad, TranslationResult},
-    interconnect::Bus,
+    interconnect::bus::Bus,
 };
 
 use super::{
@@ -102,7 +102,7 @@ pub fn run_block(
                 ctx.cache.insert(
                     paddr,
                     CodeBlock {
-                        ops: decoder::fetch_and_decode_block(BLOCK_DECODER_LIMIT, ctx.cpu, ctx.bus),
+                        ops: decoder::fetch_and_decode_block(ctx.cpu, ctx.bus, BLOCK_DECODER_LIMIT),
                     },
                 )
             } else {

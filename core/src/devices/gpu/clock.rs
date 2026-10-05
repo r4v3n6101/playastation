@@ -3,7 +3,8 @@ use core::iter;
 use bitflags::bitflags;
 
 use crate::{
-    CPU_FREQ, SystemTime,
+    SystemTime,
+    cpu::CPU_FREQ,
     devices::timer::{TimingEvent, TimingSpan},
 };
 

@@ -2,6 +2,11 @@ pub mod noop;
 pub mod software;
 pub mod types;
 
+/// Width of VRAM buffer.
+pub const VRAM_WIDTH: usize = 1024;
+/// Height of VRAM buffer.
+pub const VRAM_HEIGHT: usize = 512;
+
 pub trait Renderer: 'static {
     /// Gather inner fields into [`types::RenderState`].
     fn state(&self) -> types::RenderState;

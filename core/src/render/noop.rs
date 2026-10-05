@@ -1,33 +1,33 @@
-use alloc::boxed::Box;
-use core::{cell::OnceCell, mem};
-
-use crate::{VRAM_HEIGHT, VRAM_WIDTH};
+use core::mem;
 
 use super::{
-    Renderer,
+    Renderer, VRAM_HEIGHT, VRAM_WIDTH,
     types::{
         Color, DrawMode, EnvParameter, MaskBitSetting, Polygon, Polyline, Position, Rect,
         RenderState, Size,
     },
 };
 
+// Rust/LLVM puts only static mut arrays into .bss
+static mut EMPTY: [u16; VRAM_WIDTH * VRAM_HEIGHT] = [0; _];
+
 #[derive(Debug)]
 pub struct NoopRenderer {
     download_area: (Position, Size),
-    upload_area: (Position, Size),
     pop_counter: u16,
+
+    upload_area: (Position, Size),
     push_counter: u16,
-    framebuffer: OnceCell<Box<[u16]>>,
 }
 
 impl Default for NoopRenderer {
     fn default() -> Self {
         Self {
             download_area: (Position { x: 0, y: 0 }, Size { w: 0, h: 0 }),
-            upload_area: (Position { x: 0, y: 0 }, Size { w: 0, h: 0 }),
             pop_counter: 0,
+
+            upload_area: (Position { x: 0, y: 0 }, Size { w: 0, h: 0 }),
             push_counter: 0,
-            framebuffer: OnceCell::new(),
         }
     }
 }
@@ -43,8 +43,8 @@ impl Renderer for NoopRenderer {
     }
 
     fn framebuffer(&self) -> &[u16] {
-        self.framebuffer
-            .get_or_init(|| alloc::vec![0; VRAM_WIDTH * VRAM_HEIGHT].into_boxed_slice())
+        // SAFETY: it's just for reading
+        unsafe { (&raw const EMPTY).as_ref_unchecked() }
     }
 
     fn set_parameter(&mut self, param: EnvParameter) {
@@ -107,9 +107,6 @@ impl Renderer for NoopRenderer {
     }
 
     fn reset(&mut self) {
-        *self = Self {
-            framebuffer: mem::take(&mut self.framebuffer),
-            ..Self::default()
-        };
+        mem::take(self);
     }
 }
