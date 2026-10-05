@@ -1,4 +1,5 @@
-use core::mem;
+use alloc::boxed::Box;
+use core::{cell::OnceCell, mem};
 
 use crate::{VRAM_HEIGHT, VRAM_WIDTH};
 
@@ -16,6 +17,7 @@ pub struct NoopRenderer {
     upload_area: (Position, Size),
     pop_counter: u16,
     push_counter: u16,
+    framebuffer: OnceCell<Box<[u16]>>,
 }
 
 impl Default for NoopRenderer {
@@ -25,6 +27,7 @@ impl Default for NoopRenderer {
             upload_area: (Position { x: 0, y: 0 }, Size { w: 0, h: 0 }),
             pop_counter: 0,
             push_counter: 0,
+            framebuffer: OnceCell::new(),
         }
     }
 }
@@ -40,7 +43,8 @@ impl Renderer for NoopRenderer {
     }
 
     fn framebuffer(&self) -> &[u16] {
-        &[0; VRAM_WIDTH * VRAM_HEIGHT]
+        self.framebuffer
+            .get_or_init(|| alloc::vec![0; VRAM_WIDTH * VRAM_HEIGHT].into_boxed_slice())
     }
 
     fn set_parameter(&mut self, param: EnvParameter) {
@@ -103,6 +107,9 @@ impl Renderer for NoopRenderer {
     }
 
     fn reset(&mut self) {
-        mem::take(self);
+        *self = Self {
+            framebuffer: mem::take(&mut self.framebuffer),
+            ..Self::default()
+        };
     }
 }
