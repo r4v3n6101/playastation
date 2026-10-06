@@ -24,10 +24,10 @@ pub struct SoftwareRenderer {
     mask_bit_setting: MaskBitSetting,
 
     download_area: (Position, Size),
-    pop_counter: u16,
+    pop_counter: u32,
 
     upload_area: (Position, Size),
-    push_counter: u16,
+    push_counter: u32,
 }
 
 impl Default for SoftwareRenderer {
@@ -55,7 +55,7 @@ impl Renderer for SoftwareRenderer {
         RenderState {
             draw_mode: self.draw_mode,
             mask_bit_setting: self.mask_bit_setting,
-            vram_read_active: u32::from(self.pop_counter)
+            vram_read_active: self.pop_counter
                 < (u32::from(self.download_area.1.w) * u32::from(self.download_area.1.h)),
         }
     }
@@ -107,68 +107,39 @@ impl Renderer for SoftwareRenderer {
         } else {
             0
         };
-        let mut rasterize = |a, b, c, d| match (flat_color, tex_depth, raw_texture) {
+        let mut rasterize = |vertices| match (flat_color, tex_depth, raw_texture) {
             // 15BPP, textured, flat
-            (true, 15, false) => self.rasterize_triangle::<true, 15, false>(a, b, c, d),
+            (true, 15, false) => self.rasterize_triangle::<true, 15, false>(&polygon, vertices),
             // 15BPP, textured, Gouraud
-            (false, 15, false) => self.rasterize_triangle::<false, 15, false>(a, b, c, d),
+            (false, 15, false) => self.rasterize_triangle::<false, 15, false>(&polygon, vertices),
 
             // 8BPP, textured, flat
-            (true, 8, false) => self.rasterize_triangle::<true, 8, false>(a, b, c, d),
+            (true, 8, false) => self.rasterize_triangle::<true, 8, false>(&polygon, vertices),
             // 8BPP, textured, Gouraud
-            (false, 8, false) => self.rasterize_triangle::<false, 8, false>(a, b, c, d),
+            (false, 8, false) => self.rasterize_triangle::<false, 8, false>(&polygon, vertices),
 
             // 4BPP, textured, flat
-            (true, 4, false) => self.rasterize_triangle::<true, 4, false>(a, b, c, d),
+            (true, 4, false) => self.rasterize_triangle::<true, 4, false>(&polygon, vertices),
             // 4BPP, textured, Gouraud
-            (false, 4, false) => self.rasterize_triangle::<false, 4, false>(a, b, c, d),
+            (false, 4, false) => self.rasterize_triangle::<false, 4, false>(&polygon, vertices),
 
             // 15BPP, textured, raw texture
-            (_, 15, true) => self.rasterize_triangle::<false, 15, true>(a, b, c, d),
+            (_, 15, true) => self.rasterize_triangle::<false, 15, true>(&polygon, vertices),
             // 8BPP, textured, raw texture
-            (_, 8, true) => self.rasterize_triangle::<false, 8, true>(a, b, c, d),
+            (_, 8, true) => self.rasterize_triangle::<false, 8, true>(&polygon, vertices),
             // 4BPP, textured, raw texture
-            (_, 4, true) => self.rasterize_triangle::<false, 4, true>(a, b, c, d),
+            (_, 4, true) => self.rasterize_triangle::<false, 4, true>(&polygon, vertices),
 
             // untextured, flat
-            (true, _, _) => self.rasterize_triangle::<true, 0, false>(a, b, c, d),
+            (true, _, _) => self.rasterize_triangle::<true, 0, false>(&polygon, vertices),
             // untextured, Gouraud
-            (false, _, _) => self.rasterize_triangle::<false, 0, false>(a, b, c, d),
+            (false, _, _) => self.rasterize_triangle::<false, 0, false>(&polygon, vertices),
         };
-        match polygon.vertices.len() {
-            3 => {
-                rasterize(
-                    polygon.flat_color,
-                    polygon.clut,
-                    polygon.semi_transparent,
-                    [
-                        polygon.vertices[0],
-                        polygon.vertices[1],
-                        polygon.vertices[2],
-                    ],
-                );
-            }
-            4 => {
-                rasterize(
-                    polygon.flat_color,
-                    polygon.clut,
-                    polygon.semi_transparent,
-                    [
-                        polygon.vertices[0],
-                        polygon.vertices[1],
-                        polygon.vertices[2],
-                    ],
-                );
-                rasterize(
-                    polygon.flat_color,
-                    polygon.clut,
-                    polygon.semi_transparent,
-                    [
-                        polygon.vertices[1],
-                        polygon.vertices[2],
-                        polygon.vertices[3],
-                    ],
-                );
+        match polygon.vertices.as_slice() {
+            [a, b, c] => rasterize([*a, *b, *c]),
+            [a, b, c, d] => {
+                rasterize([*a, *b, *c]);
+                rasterize([*b, *c, *d]);
             }
             _ => {}
         }
@@ -216,7 +187,7 @@ impl Renderer for SoftwareRenderer {
             for i in 0..w {
                 let (x, y) = (x + i, y + j);
                 if (0..VRAM_WIDTH).contains(&x) && (0..VRAM_HEIGHT).contains(&y) {
-                    self.vram[y * VRAM_WIDTH + x] = rgb888_to_bgr555(r, g, b);
+                    self.vram[y * VRAM_WIDTH + x] = rgb888_to_bgr555(r, g, b, 0);
                 }
             }
         }
@@ -286,17 +257,21 @@ impl Renderer for SoftwareRenderer {
         for y in 0..h {
             for x in 0..w {
                 let (x, y) = (sx + x, sy + y);
-                if (0..VRAM_WIDTH).contains(&x) && (0..VRAM_HEIGHT).contains(&y) {
-                    tmp.push_front(self.vram[y * VRAM_WIDTH + x]);
-                }
+                let pixel = if (0..VRAM_WIDTH).contains(&x) && (0..VRAM_HEIGHT).contains(&y) {
+                    self.vram[y * VRAM_WIDTH + x]
+                } else {
+                    0
+                };
+                tmp.push_front(pixel);
             }
         }
 
         for y in 0..h {
             for x in 0..w {
                 let (x, y) = (dx + x, dy + y);
+                let pixel = tmp.pop_back().unwrap();
                 if (0..VRAM_WIDTH).contains(&x) && (0..VRAM_HEIGHT).contains(&y) {
-                    self.write_pixel(x, y, tmp.pop_back().unwrap(), false);
+                    self.write_pixel(x, y, pixel, false);
                 }
             }
         }
@@ -312,11 +287,15 @@ impl SoftwareRenderer {
     #[inline(never)]
     fn rasterize_triangle<const FLAT_COLOR: bool, const DEPTH: usize, const RAW_TEXTURE: bool>(
         &mut self,
-        flat_color: Option<Color>,
-        clut: Option<Position>,
-        semi_transparent: bool,
+        polygon: &Polygon,
         vertices: [Vertex; 3],
     ) {
+        let flat_color = polygon.flat_color;
+        let clut = polygon.clut;
+        let semi_transparent = polygon.semi_transparent;
+        let dither_enabled =
+            self.draw_mode.dither_24_to_15() && !RAW_TEXTURE && (!FLAT_COLOR || DEPTH != 0);
+
         debug_assert!(matches!(DEPTH, 0 | 4 | 8 | 15));
         debug_assert!(
             DEPTH == 0 || clut.is_some(),
@@ -359,6 +338,14 @@ impl SoftwareRenderer {
         // Divide each gradient directly: rounding 1 / area first can turn an
         // exact one-texel step into slightly less than one.
         let area_divisor = i64::from(area);
+        let gradient = |a0: FP, a1: FP, a2: FP| {
+            let da10 = a1 - a0;
+            let da20 = a2 - a0;
+            (
+                (da10 * dy20 - da20 * dy10).wrapping_div_int(area_divisor),
+                (dx10 * da20 - dx20 * da10).wrapping_div_int(area_divisor),
+            )
+        };
 
         let (r0, g0, b0, dr_dx, dr_dy, dg_dx, dg_dy, db_dx, db_dy) = if !FLAT_COLOR && !RAW_TEXTURE
         {
@@ -379,30 +366,9 @@ impl SoftwareRenderer {
             let b2 = FP::from_num(c2.b);
 
             // Color gradients
-            let (dr_dx, dr_dy) = {
-                let dr10 = r1 - r0;
-                let dr20 = r2 - r0;
-                (
-                    (dr10 * dy20 - dr20 * dy10).wrapping_div_int(area_divisor),
-                    (dx10 * dr20 - dx20 * dr10).wrapping_div_int(area_divisor),
-                )
-            };
-            let (dg_dx, dg_dy) = {
-                let dg10 = g1 - g0;
-                let dg20 = g2 - g0;
-                (
-                    (dg10 * dy20 - dg20 * dy10).wrapping_div_int(area_divisor),
-                    (dx10 * dg20 - dx20 * dg10).wrapping_div_int(area_divisor),
-                )
-            };
-            let (db_dx, db_dy) = {
-                let db10 = b1 - b0;
-                let db20 = b2 - b0;
-                (
-                    (db10 * dy20 - db20 * dy10).wrapping_div_int(area_divisor),
-                    (dx10 * db20 - dx20 * db10).wrapping_div_int(area_divisor),
-                )
-            };
+            let (dr_dx, dr_dy) = gradient(r0, r1, r2);
+            let (dg_dx, dg_dy) = gradient(g0, g1, g2);
+            let (db_dx, db_dy) = gradient(b0, b1, b2);
 
             (r0, g0, b0, dr_dx, dr_dy, dg_dx, dg_dy, db_dx, db_dy)
         } else {
@@ -434,22 +400,8 @@ impl SoftwareRenderer {
             let v2 = FP::from_num(uv2.v);
 
             // UV gradients
-            let (du_dx, du_dy) = {
-                let du10 = u1 - u0;
-                let du20 = u2 - u0;
-                (
-                    (du10 * dy20 - du20 * dy10).wrapping_div_int(area_divisor),
-                    (dx10 * du20 - dx20 * du10).wrapping_div_int(area_divisor),
-                )
-            };
-            let (dv_dx, dv_dy) = {
-                let dv10 = v1 - v0;
-                let dv20 = v2 - v0;
-                (
-                    (dv10 * dy20 - dv20 * dy10).wrapping_div_int(area_divisor),
-                    (dx10 * dv20 - dx20 * dv10).wrapping_div_int(area_divisor),
-                )
-            };
+            let (du_dx, du_dy) = gradient(u0, u1, u2);
+            let (dv_dx, dv_dy) = gradient(v0, v1, v2);
 
             (clut, u0, v0, du_dx, du_dy, dv_dx, dv_dy)
         } else {
@@ -525,6 +477,11 @@ impl SoftwareRenderer {
                 debug_assert_eq!(w0 + w1 + w2, area.abs());
 
                 if inside {
+                    let dither = if dither_enabled {
+                        dither_offset(x, y)
+                    } else {
+                        0
+                    };
                     let color = if DEPTH != 0 {
                         self.sample_texture::<DEPTH>(
                             clut,
@@ -536,24 +493,37 @@ impl SoftwareRenderer {
                                 texel
                             } else if FLAT_COLOR {
                                 let flat_color = unsafe { flat_color.unwrap_unchecked() };
-                                modulate_bgr555(texel, flat_color.r, flat_color.g, flat_color.b)
+                                modulate_bgr555(
+                                    texel,
+                                    flat_color.r,
+                                    flat_color.g,
+                                    flat_color.b,
+                                    dither,
+                                )
                             } else {
                                 modulate_bgr555(
                                     texel,
                                     fp_to_u8_color(r),
                                     fp_to_u8_color(g),
                                     fp_to_u8_color(b),
+                                    dither,
                                 )
                             }
                         })
                     } else if FLAT_COLOR {
                         let flat_color = unsafe { flat_color.unwrap_unchecked() };
-                        Some(rgb888_to_bgr555(flat_color.r, flat_color.g, flat_color.b))
+                        Some(rgb888_to_bgr555(
+                            flat_color.r,
+                            flat_color.g,
+                            flat_color.b,
+                            0,
+                        ))
                     } else {
                         Some(rgb888_to_bgr555(
                             fp_to_u8_color(r),
                             fp_to_u8_color(g),
                             fp_to_u8_color(b),
+                            dither,
                         ))
                     };
 
@@ -672,10 +642,10 @@ impl SoftwareRenderer {
                     if RAW_TEXTURE {
                         texel
                     } else {
-                        modulate_bgr555(texel, r, g, b)
+                        modulate_bgr555(texel, r, g, b, 0)
                     }
                 } else {
-                    rgb888_to_bgr555(r, g, b)
+                    rgb888_to_bgr555(r, g, b, 0)
                 };
 
                 self.write_pixel(
@@ -806,24 +776,43 @@ fn fp_to_u8_color(v: FP) -> u8 {
 }
 
 #[inline(always)]
-fn rgb888_to_bgr555(r: u8, g: u8, b: u8) -> u16 {
-    let r5 = (r >> 3) as u16;
-    let g5 = (g >> 3) as u16;
-    let b5 = (b >> 3) as u16;
+fn rgb888_to_bgr555(r: u8, g: u8, b: u8, dither: i16) -> u16 {
+    let r5 = quantize_channel(i16::from(r), dither);
+    let g5 = quantize_channel(i16::from(g), dither);
+    let b5 = quantize_channel(i16::from(b), dither);
 
     r5 | (g5 << 5) | (b5 << 10)
 }
 
 #[inline(always)]
-fn modulate_bgr555(texel: u16, r: u8, g: u8, b: u8) -> u16 {
+fn modulate_bgr555(texel: u16, r: u8, g: u8, b: u8, dither: i16) -> u16 {
     let tr = texel & 0x1F;
     let tg = (texel >> 5) & 0x1F;
     let tb = (texel >> 10) & 0x1F;
     let mask = texel & 0x8000;
 
-    let r = ((tr * r as u16) >> 7).min(0x1F);
-    let g = ((tg * g as u16) >> 7).min(0x1F);
-    let b = ((tb * b as u16) >> 7).min(0x1F);
+    // Keep the low three color bits until after dithering; modulation can exceed 255.
+    let r = quantize_channel(((tr * r as u16) >> 4) as i16, dither);
+    let g = quantize_channel(((tg * g as u16) >> 4) as i16, dither);
+    let b = quantize_channel(((tb * b as u16) >> 4) as i16, dither);
 
     mask | r | (g << 5) | (b << 10)
+}
+
+#[inline(always)]
+fn quantize_channel(color: i16, dither: i16) -> u16 {
+    ((color + dither).clamp(0, 255) >> 3) as u16
+}
+
+#[inline(always)]
+fn dither_offset(x: i32, y: i32) -> i16 {
+    // The pattern is anchored to VRAM, after applying the drawing offset.
+    const MATRIX: [[i16; 4]; 4] = [
+        [-4, 0, -3, 1],
+        [2, -2, 3, -1],
+        [-3, 1, -4, 0],
+        [3, -1, 2, -2],
+    ];
+
+    MATRIX[(y & 3) as usize][(x & 3) as usize]
 }
