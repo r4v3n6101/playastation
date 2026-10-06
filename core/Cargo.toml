@@ -2,6 +2,13 @@
 name = "playastation"
 version.workspace = true
 edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "A PlayStation emulator core written in Rust"
+readme = "README.md"
+keywords = ["playstation", "psx", "emulator", "gaming"]
+categories = ["emulators"]
 
 [dependencies]
 # Traces

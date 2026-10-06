@@ -26,6 +26,7 @@
         "aarch64-darwin"
       ];
       imports = [
+        ./shell.nix
         (inputs.import-tree [
           ./nix
           ./core

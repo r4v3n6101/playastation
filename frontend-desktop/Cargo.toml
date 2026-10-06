@@ -2,6 +2,7 @@
 name = "playastation-desktop"
 version.workspace = true
 edition.workspace = true
+publish = false
 
 [dependencies]
 tracing = "0.1.44"

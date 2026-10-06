@@ -2,6 +2,7 @@
 name = "playastation-frontend-common"
 version.workspace = true
 edition.workspace = true
+publish = false
 
 [dependencies]
 playastation = { path = "../core" }
