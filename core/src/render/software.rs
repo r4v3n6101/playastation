@@ -1,32 +1,34 @@
 use alloc::collections::VecDeque;
-use core::mem;
+use core::{mem, num::Wrapping};
 
-use fixed::{FixedI64, types::extra::U32};
+use euclid::{
+    default::{Box2D, Point2D as Point2, Rect as Rect2, Vector2D as Vec2, Vector3D as Vec3},
+    point2, rect, size2, vec2, vec3,
+};
 
 use super::{
     Renderer, VRAM_HEIGHT, VRAM_WIDTH,
     types::{
-        Color, DrawMode, EnvParameter, Location, MaskBitSetting, Polygon, Polyline, Position, Rect,
+        Color, DrawMode, EnvParameter, MaskBitSetting, Polygon, Polyline, Position, Rect,
         RenderState, SemiTransparency, Size, TextureDepth, TextureWindow, Vertex, Vram,
     },
 };
 
-/// Fixed point calculation for rasterizator.
-type FP = FixedI64<U32>;
+const VRAM_BOUNDS: Box2D<usize> = Box2D::new(point2(0, 0), point2(VRAM_WIDTH, VRAM_HEIGHT));
 
 pub struct SoftwareRenderer {
     vram: Vram,
 
     draw_mode: DrawMode,
     texture_window: TextureWindow,
-    draw_area: (Position, Position),
-    draw_offset: Location,
+    draw_area: Box2D<i32>,
+    draw_offset: Vec2<i32>,
     mask_bit_setting: MaskBitSetting,
 
-    download_area: (Position, Size),
+    to_download: Rect2<usize>,
     pop_counter: u32,
 
-    upload_area: (Position, Size),
+    to_upload: Rect2<usize>,
     push_counter: u32,
 }
 
@@ -37,14 +39,14 @@ impl Default for SoftwareRenderer {
 
             draw_mode: DrawMode::new(),
             texture_window: TextureWindow::new(),
-            draw_area: (Position { x: 0, y: 0 }, Position { x: 0, y: 0 }),
-            draw_offset: Location { x: 0, y: 0 },
+            draw_area: Box2D::new(point2(0, 0), point2(1, 1)),
+            draw_offset: vec2(0, 0),
             mask_bit_setting: MaskBitSetting::new(),
 
-            download_area: (Position { x: 0, y: 0 }, Size { w: 0, h: 0 }),
+            to_download: rect(0, 0, 0, 0),
             pop_counter: 0,
 
-            upload_area: (Position { x: 0, y: 0 }, Size { w: 0, h: 0 }),
+            to_upload: rect(0, 0, 0, 0),
             push_counter: 0,
         }
     }
@@ -55,8 +57,7 @@ impl Renderer for SoftwareRenderer {
         RenderState {
             draw_mode: self.draw_mode,
             mask_bit_setting: self.mask_bit_setting,
-            vram_read_active: self.pop_counter
-                < (u32::from(self.download_area.1.w) * u32::from(self.download_area.1.h)),
+            vram_read_active: (self.pop_counter as usize) < self.to_download.area(),
         }
     }
 
@@ -73,13 +74,16 @@ impl Renderer for SoftwareRenderer {
                 self.texture_window = texture_window;
             }
             EnvParameter::DrawAreaTopLeft(position) => {
-                self.draw_area.0 = position;
+                self.draw_area.min = point2(position.x, position.y).max(point2(0, 0)).cast();
             }
             EnvParameter::DrawAreaBottomRight(position) => {
-                self.draw_area.1 = position;
+                // GP0 includes the bottom-right pixel; `euclid` boxes exclude max.
+                self.draw_area.max =
+                    (point2(position.x, position.y).min(VRAM_BOUNDS.max - vec2(1, 1)) + vec2(1, 1))
+                        .cast();
             }
             EnvParameter::DrawOffset(location) => {
-                self.draw_offset = location;
+                self.draw_offset = vec2(location.x, location.y);
             }
             EnvParameter::MaskBitSetting(mask_bit_setting) => {
                 self.mask_bit_setting = mask_bit_setting;
@@ -175,90 +179,71 @@ impl Renderer for SoftwareRenderer {
         }
     }
 
-    fn fill_vram_area(
-        &mut self,
-        Position { x, y }: Position,
-        Size { w, h }: Size,
-        Color { r, g, b }: Color,
-    ) {
-        let w = w as usize;
-        let h = h as usize;
-        for j in 0..h {
-            for i in 0..w {
-                let (x, y) = (x + i, y + j);
-                if (0..VRAM_WIDTH).contains(&x) && (0..VRAM_HEIGHT).contains(&y) {
-                    self.vram[y * VRAM_WIDTH + x] = rgb888_to_bgr555(r, g, b, 0);
-                }
+    fn fill_vram_area(&mut self, pos: Position, size: Size, color: Color) {
+        let bounds =
+            Box2D::from_origin_and_size(point2(pos.x, pos.y), size2(size.w, size.h).cast());
+
+        let Some(bounds) = bounds.intersection(&VRAM_BOUNDS) else {
+            return;
+        };
+
+        let color = rgb888_to_bgr555(vec3(color.r, color.g, color.b), 0);
+        for y in bounds.y_range() {
+            for x in bounds.x_range() {
+                self.vram[vram_index(point2(x, y))] = color;
             }
         }
     }
 
     fn prepare_vram_for_read(&mut self, pos: Position, size: Size) {
-        self.download_area = (pos, size);
+        self.to_download = rect(pos.x, pos.y, size.w.into(), size.h.into());
         self.pop_counter = 0;
     }
 
     fn pop_pixel(&mut self) -> Option<u16> {
-        let (Position { x, y }, Size { w, h }) = self.download_area;
-        if w == 0 || h == 0 {
+        let download = self.to_download;
+        let i = self.pop_counter as usize;
+        if i >= download.area() {
             return None;
         }
 
-        let w = w as usize;
-        let h = h as usize;
-        let i = self.pop_counter as usize;
-        if i < w * h {
-            let x = (x + i % w) & (VRAM_WIDTH - 1);
-            let y = (y + i / w) & (VRAM_HEIGHT - 1);
+        let pos =
+            wrap_vram(download.origin + vec2(i % download.size.width, i / download.size.width));
+        self.pop_counter += 1;
 
-            self.pop_counter += 1;
-            return Some(self.vram[y * VRAM_WIDTH + x]);
-        }
-
-        None
+        Some(self.vram[vram_index(pos)])
     }
 
     fn prepare_vram_for_write(&mut self, pos: Position, size: Size) {
-        self.upload_area = (pos, size);
+        self.to_upload = rect(pos.x, pos.y, size.w.into(), size.h.into());
         self.push_counter = 0;
     }
 
     fn push_pixel(&mut self, pixel: u16) {
-        let (Position { x, y }, Size { w, h }) = self.upload_area;
-
-        if w == 0 || h == 0 {
+        let upload = self.to_upload;
+        let i = self.push_counter as usize;
+        if i >= upload.area() {
             return;
         }
 
-        let w = w as usize;
-        let h = h as usize;
-        let i = self.push_counter as usize;
-        if i < w * h {
-            let x = (x + i % w) & (VRAM_WIDTH - 1);
-            let y = (y + i / w) & (VRAM_HEIGHT - 1);
-
-            self.write_pixel(x, y, pixel, false);
-            self.push_counter += 1;
-        }
+        let pos = wrap_vram(upload.origin + vec2(i % upload.size.width, i / upload.size.width));
+        self.write_pixel(pos, pixel, false);
+        self.push_counter += 1;
     }
 
-    fn mirror_vram_area(
-        &mut self,
-        Position { x: sx, y: sy }: Position,
-        Position { x: dx, y: dy }: Position,
-        Size { w, h }: Size,
-    ) {
-        let w = w as usize;
-        let h = h as usize;
+    fn mirror_vram_area(&mut self, src: Position, dest: Position, size: Size) {
+        let size = size2(size.w, size.h).cast::<usize>();
+        let src = Box2D::from_origin_and_size(point2(src.x, src.y), size);
+        let dest = Box2D::from_origin_and_size(point2(dest.x, dest.y), size);
 
         // areas may overlap
-        let mut tmp = VecDeque::with_capacity(w * h);
+        let mut tmp = VecDeque::with_capacity(size.area());
 
-        for y in 0..h {
-            for x in 0..w {
-                let (x, y) = (sx + x, sy + y);
-                let pixel = if (0..VRAM_WIDTH).contains(&x) && (0..VRAM_HEIGHT).contains(&y) {
-                    self.vram[y * VRAM_WIDTH + x]
+        for y in src.y_range() {
+            for x in src.x_range() {
+                let pos = point2(x, y);
+                let pixel = if VRAM_BOUNDS.contains(pos) {
+                    self.vram[vram_index(pos)]
                 } else {
                     0
                 };
@@ -266,12 +251,12 @@ impl Renderer for SoftwareRenderer {
             }
         }
 
-        for y in 0..h {
-            for x in 0..w {
-                let (x, y) = (dx + x, dy + y);
+        for y in dest.y_range() {
+            for x in dest.x_range() {
+                let pos = point2(x, y);
                 let pixel = tmp.pop_back().unwrap();
-                if (0..VRAM_WIDTH).contains(&x) && (0..VRAM_HEIGHT).contains(&y) {
-                    self.write_pixel(x, y, pixel, false);
+                if VRAM_BOUNDS.contains(pos) {
+                    self.write_pixel(pos, pixel, false);
                 }
             }
         }
@@ -290,7 +275,7 @@ impl SoftwareRenderer {
         polygon: &Polygon,
         vertices: [Vertex; 3],
     ) {
-        let flat_color = polygon.flat_color;
+        let flat_color = polygon.flat_color.map(|c| vec3(c.r, c.g, c.b));
         let clut = polygon.clut;
         let semi_transparent = polygon.semi_transparent;
         let dither_enabled =
@@ -314,247 +299,154 @@ impl SoftwareRenderer {
             "flat polygon must have flat color"
         );
 
-        let draw_area = (self.draw_area.0, self.draw_area.1);
-        let draw_offset = self.draw_offset;
+        let points @ [p0, p1, p2] =
+            vertices.map(|v| point2(v.location.x, v.location.y) + self.draw_offset);
+        let mut bounds = Box2D::from_points(points);
 
-        let x0 = vertices[0].location.x + draw_offset.x;
-        let x1 = vertices[1].location.x + draw_offset.x;
-        let x2 = vertices[2].location.x + draw_offset.x;
+        // Width/height between extreme vertices; abs_diff avoids signed overflow.
+        let span = bounds.min.zip(bounds.max, i32::abs_diff);
 
-        let y0 = vertices[0].location.y + draw_offset.y;
-        let y1 = vertices[1].location.y + draw_offset.y;
-        let y2 = vertices[2].location.y + draw_offset.y;
+        if span.x >= VRAM_WIDTH as u32 || span.y >= VRAM_HEIGHT as u32 {
+            return;
+        }
 
-        let area = cross2(x0, y0, x1, y1, x2, y2);
+        let edges @ [edge10, edge20] = [p1 - p0, p2 - p0];
+        let area = edge10.cross(edge20);
         if area == 0 {
             return;
         }
 
-        let dx10 = FP::from_num(x1) - FP::from_num(x0);
-        let dy10 = FP::from_num(y1) - FP::from_num(y0);
-        let dx20 = FP::from_num(x2) - FP::from_num(x0);
-        let dy20 = FP::from_num(y2) - FP::from_num(y0);
+        let [edge10, edge20] = edges.map(|edge| edge.cast::<i64>());
+        let area_divisor = i64::from(area);
 
         // Divide each gradient directly: rounding 1 / area first can turn an
         // exact one-texel step into slightly less than one.
-        let area_divisor = i64::from(area);
-        let gradient = |a0: FP, a1: FP, a2: FP| {
-            let da10 = a1 - a0;
-            let da20 = a2 - a0;
-            (
-                (da10 * dy20 - da20 * dy10).wrapping_div_int(area_divisor),
-                (dx10 * da20 - dx20 * da10).wrapping_div_int(area_divisor),
+        let interpolate = |a0: u8, a1: u8, a2: u8| {
+            let origin = u32::from(a0) << ATTRIBUTE_FRAC_BITS;
+            let [da1, da2] = [a1, a2].map(|a| i64::from(a) - i64::from(a0));
+
+            // Keep products and signed division wide; wrap only the finished steps.
+            let gradient = vec2(
+                da1 * edge20.y - da2 * edge10.y,
+                edge10.x * da2 - edge20.x * da1,
             )
+            .map(|n| ((n << ATTRIBUTE_FRAC_BITS) / area_divisor) as u32);
+
+            AttributePlane { origin, gradient }
         };
 
-        let (r0, g0, b0, dr_dx, dr_dy, dg_dx, dg_dy, db_dx, db_dy) = if !FLAT_COLOR && !RAW_TEXTURE
-        {
-            let c0 = unsafe { vertices[0].color.unwrap_unchecked() };
-            let c1 = unsafe { vertices[1].color.unwrap_unchecked() };
-            let c2 = unsafe { vertices[2].color.unwrap_unchecked() };
-
-            let r0 = FP::from_num(c0.r);
-            let r1 = FP::from_num(c1.r);
-            let r2 = FP::from_num(c2.r);
-
-            let g0 = FP::from_num(c0.g);
-            let g1 = FP::from_num(c1.g);
-            let g2 = FP::from_num(c2.g);
-
-            let b0 = FP::from_num(c0.b);
-            let b1 = FP::from_num(c1.b);
-            let b2 = FP::from_num(c2.b);
-
-            // Color gradients
-            let (dr_dx, dr_dy) = gradient(r0, r1, r2);
-            let (dg_dx, dg_dy) = gradient(g0, g1, g2);
-            let (db_dx, db_dy) = gradient(b0, b1, b2);
-
-            (r0, g0, b0, dr_dx, dr_dy, dg_dx, dg_dy, db_dx, db_dy)
+        let color_planes = if !FLAT_COLOR && !RAW_TEXTURE {
+            let [c0, c1, c2] = vertices.map(|v| unsafe { v.color.unwrap_unchecked() });
+            [
+                interpolate(c0.r, c1.r, c2.r),
+                interpolate(c0.g, c1.g, c2.g),
+                interpolate(c0.b, c1.b, c2.b),
+            ]
         } else {
-            (
-                FP::ZERO,
-                FP::ZERO,
-                FP::ZERO,
-                FP::ZERO,
-                FP::ZERO,
-                FP::ZERO,
-                FP::ZERO,
-                FP::ZERO,
-                FP::ZERO,
-            )
+            [AttributePlane::default(); 3]
         };
 
-        let (clut, u0, v0, du_dx, du_dy, dv_dx, dv_dy) = if DEPTH != 0 {
+        let (clut, uv_planes) = if DEPTH != 0 {
             let clut = unsafe { clut.unwrap_unchecked() };
-            let uv0 = unsafe { vertices[0].texcords.unwrap_unchecked() };
-            let uv1 = unsafe { vertices[1].texcords.unwrap_unchecked() };
-            let uv2 = unsafe { vertices[2].texcords.unwrap_unchecked() };
-
-            let u0 = FP::from_num(uv0.u);
-            let u1 = FP::from_num(uv1.u);
-            let u2 = FP::from_num(uv2.u);
-
-            let v0 = FP::from_num(uv0.v);
-            let v1 = FP::from_num(uv1.v);
-            let v2 = FP::from_num(uv2.v);
-
-            // UV gradients
-            let (du_dx, du_dy) = gradient(u0, u1, u2);
-            let (dv_dx, dv_dy) = gradient(v0, v1, v2);
-
-            (clut, u0, v0, du_dx, du_dy, dv_dx, dv_dy)
-        } else {
+            let [uv0, uv1, uv2] = vertices.map(|v| unsafe { v.texcords.unwrap_unchecked() });
             (
-                Position { x: 0, y: 0 },
-                FP::ZERO,
-                FP::ZERO,
-                FP::ZERO,
-                FP::ZERO,
-                FP::ZERO,
-                FP::ZERO,
+                point2(clut.x, clut.y),
+                [
+                    interpolate(uv0.u, uv1.u, uv2.u),
+                    interpolate(uv0.v, uv1.v, uv2.v),
+                ],
             )
+        } else {
+            (point2(0, 0), [AttributePlane::default(); 2])
         };
 
-        // bounding box (clipped to reduce cycle loops)
-        let clip_min_x = (draw_area.0.x as i32).max(0);
-        let clip_max_x = (draw_area.1.x as i32).min(VRAM_WIDTH as i32 - 1);
-        let clip_min_y = (draw_area.0.y as i32).max(0);
-        let clip_max_y = (draw_area.1.y as i32).min(VRAM_HEIGHT as i32 - 1);
-
-        if clip_min_x > clip_max_x || clip_min_y > clip_max_y {
+        // Include the last integer coordinate in euclid's half-open box.
+        bounds.max = bounds.max.map(|v| v.saturating_add(1));
+        let Some(bounds) = bounds.intersection(&self.draw_area) else {
             return;
-        }
-
-        let min_x = x0.min(x1).min(x2).max(clip_min_x).min(clip_max_x);
-        let max_x = x0.max(x1).max(x2).max(clip_min_x).min(clip_max_x);
-        let min_y = y0.min(y1).min(y2).max(clip_min_y).min(clip_max_y);
-        let max_y = y0.max(y1).max(y2).max(clip_min_y).min(clip_max_y);
-
-        if min_x > max_x || min_y > max_y {
-            return;
-        }
+        };
 
         let winding = area.signum();
-        let w0_dx = (y1 - y2) * winding;
-        let w1_dx = (y2 - y0) * winding;
-        let w2_dx = (y0 - y1) * winding;
-
-        let w0_dy = (x2 - x1) * winding;
-        let w1_dy = (x0 - x2) * winding;
-        let w2_dy = (x1 - x0) * winding;
+        let edges = [p2 - p1, p0 - p2, p1 - p0].map(|edge| edge * winding);
 
         // Include only top/left edges so shared edges are blended exactly once.
-        let w0_min = i32::from(!is_top_left_edge((x2 - x1) * winding, (y2 - y1) * winding));
-        let w1_min = i32::from(!is_top_left_edge((x0 - x2) * winding, (y0 - y2) * winding));
-        let w2_min = i32::from(!is_top_left_edge((x1 - x0) * winding, (y1 - y0) * winding));
+        let edge_min = edges.map(|edge| i32::from(!is_top_left_edge(edge)));
+        let edge_dx = edges.map(|edge| -edge.y);
+        let edge_dy = edges.map(|edge| edge.x);
 
-        let mut w0_row = cross2(x1, y1, x2, y2, min_x, min_y) * winding;
-        let mut w1_row = cross2(x2, y2, x0, y0, min_x, min_y) * winding;
-        let mut w2_row = cross2(x0, y0, x1, y1, min_x, min_y) * winding;
-        let rounding_bias = FP::ONE / 2;
+        let mut edge_row = [
+            edges[0].cross(bounds.min - p1),
+            edges[1].cross(bounds.min - p2),
+            edges[2].cross(bounds.min - p0),
+        ];
+        let color_dx: Vec3<_> = color_planes.map(|plane| plane.gradient.x).into();
+        let uv_dx: Vec2<_> = uv_planes.map(|plane| plane.gradient.x).into();
 
-        for y in min_y..=max_y {
-            let mut w0 = w0_row;
-            let mut w1 = w1_row;
-            let mut w2 = w2_row;
+        for y in bounds.y_range() {
+            let mut weights = edge_row;
 
-            let dy = FP::from_num(y) - FP::from_num(y0);
-            let dx = FP::from_num(min_x) - FP::from_num(x0);
+            let offset = point2(bounds.min.x, y) - p0;
+            let mut rgb: Vec3<_> = color_planes.map(|plane| plane.at(offset)).into();
+            let mut uv: Vec2<_> = uv_planes.map(|plane| plane.at(offset)).into();
 
-            // Round interpolated attributes to the nearest texel/color value.
-            // This bias applies to attributes, not to screen coordinates.
-            let mut r = r0 + rounding_bias + dr_dx * dx + dr_dy * dy;
-            let mut g = g0 + rounding_bias + dg_dx * dx + dg_dy * dy;
-            let mut b = b0 + rounding_bias + db_dx * dx + db_dy * dy;
-
-            let mut u = u0 + rounding_bias + du_dx * dx + du_dy * dy;
-            let mut v = v0 + rounding_bias + dv_dx * dx + dv_dy * dy;
-
-            for x in min_x..=max_x {
+            for x in bounds.x_range() {
                 // Edge functions are normalized for either winding (no backface culling).
-                let inside = w0 >= w0_min && w1 >= w1_min && w2 >= w2_min;
-                debug_assert_eq!(w0 + w1 + w2, area.abs());
+                let inside = weights[0] >= edge_min[0]
+                    && weights[1] >= edge_min[1]
+                    && weights[2] >= edge_min[2];
+                debug_assert_eq!(weights[0] + weights[1] + weights[2], area.abs());
 
                 if inside {
+                    let pos = point2(x, y);
                     let dither = if dither_enabled {
-                        dither_offset(x, y)
+                        dither_offset(pos)
                     } else {
                         0
                     };
                     let color = if DEPTH != 0 {
-                        self.sample_texture::<DEPTH>(
-                            clut,
-                            u.wrapping_to_num::<u8>(),
-                            v.wrapping_to_num::<u8>(),
-                        )
-                        .map(|texel| {
-                            if RAW_TEXTURE {
-                                texel
-                            } else if FLAT_COLOR {
-                                let flat_color = unsafe { flat_color.unwrap_unchecked() };
-                                modulate_bgr555(
-                                    texel,
-                                    flat_color.r,
-                                    flat_color.g,
-                                    flat_color.b,
-                                    dither,
-                                )
-                            } else {
-                                modulate_bgr555(
-                                    texel,
-                                    fp_to_u8_color(r),
-                                    fp_to_u8_color(g),
-                                    fp_to_u8_color(b),
-                                    dither,
-                                )
-                            }
-                        })
+                        self.sample_texture::<DEPTH>(clut, uv.map(attribute_to_u8))
+                            .map(|texel| {
+                                if RAW_TEXTURE {
+                                    texel
+                                } else if FLAT_COLOR {
+                                    let flat_color = unsafe { flat_color.unwrap_unchecked() };
+                                    modulate_bgr555(texel, flat_color, dither)
+                                } else {
+                                    modulate_bgr555(texel, rgb.map(attribute_to_u8), dither)
+                                }
+                            })
                     } else if FLAT_COLOR {
                         let flat_color = unsafe { flat_color.unwrap_unchecked() };
-                        Some(rgb888_to_bgr555(
-                            flat_color.r,
-                            flat_color.g,
-                            flat_color.b,
-                            0,
-                        ))
+                        Some(rgb888_to_bgr555(flat_color, 0))
                     } else {
-                        Some(rgb888_to_bgr555(
-                            fp_to_u8_color(r),
-                            fp_to_u8_color(g),
-                            fp_to_u8_color(b),
-                            dither,
-                        ))
+                        Some(rgb888_to_bgr555(rgb.map(attribute_to_u8), dither))
                     };
 
                     if let Some(color) = color {
                         self.write_pixel(
-                            x as usize,
-                            y as usize,
+                            pos.cast::<usize>(),
                             color,
                             semi_transparent && (DEPTH == 0 || color & 0x8000 != 0),
                         );
                     }
                 }
 
-                w0 += w0_dx;
-                w1 += w1_dx;
-                w2 += w2_dx;
+                for i in 0..3 {
+                    weights[i] += edge_dx[i];
+                }
 
                 if !FLAT_COLOR && !RAW_TEXTURE {
-                    r += dr_dx;
-                    g += dg_dx;
-                    b += db_dx;
+                    rgb = rgb.zip(color_dx, u32::wrapping_add);
                 }
 
                 if DEPTH != 0 {
-                    u += du_dx;
-                    v += dv_dx;
+                    uv = uv.zip(uv_dx, u32::wrapping_add);
                 }
             }
-            w0_row += w0_dy;
-            w1_row += w1_dy;
-            w2_row += w2_dy;
+
+            for i in 0..3 {
+                edge_row[i] += edge_dy[i];
+            }
         }
     }
 
@@ -572,69 +464,33 @@ impl SoftwareRenderer {
             "textured rect must have CLUT"
         );
 
-        let draw_area = (self.draw_area.0, self.draw_area.1);
-        let draw_offset = self.draw_offset;
-
-        let pos = Location {
-            x: rect.location.x + draw_offset.x,
-            y: rect.location.y + draw_offset.y,
+        let origin = point2(rect.location.x, rect.location.y) + self.draw_offset;
+        let bounds = Box2D::from_origin_and_size(origin, size2(rect.size.w, rect.size.h).cast());
+        let Some(bounds) = bounds.intersection(&self.draw_area) else {
+            return;
         };
 
-        let Color { r, g, b } = rect.flat_color;
+        let color = rect.flat_color;
+        let rgb = vec3(color.r, color.g, color.b);
+        let uv_step = vec2(
+            self.draw_mode.texture_rectangle_x_flip(),
+            self.draw_mode.texture_rectangle_y_flip(),
+        )
+        .map(|flip| if flip { -1 } else { 1 });
 
-        let rect_w = rect.size.w as i32;
-        let rect_h = rect.size.h as i32;
-
-        if rect_w <= 0 || rect_h <= 0 {
-            return;
-        }
-
-        let rect_min_x = pos.x;
-        let rect_min_y = pos.y;
-        let rect_max_x = pos.x + rect_w - 1;
-        let rect_max_y = pos.y + rect_h - 1;
-
-        let clip_min_x = (draw_area.0.x as i32).max(0);
-        let clip_min_y = (draw_area.0.y as i32).max(0);
-        let clip_max_x = (draw_area.1.x as i32).min(VRAM_WIDTH as i32 - 1);
-        let clip_max_y = (draw_area.1.y as i32).min(VRAM_HEIGHT as i32 - 1);
-
-        if clip_min_x > clip_max_x || clip_min_y > clip_max_y {
-            return;
-        }
-
-        let min_x = rect_min_x.max(clip_min_x);
-        let min_y = rect_min_y.max(clip_min_y);
-        let max_x = rect_max_x.min(clip_max_x);
-        let max_y = rect_max_y.min(clip_max_y);
-
-        if min_x > max_x || min_y > max_y {
-            return;
-        }
-
-        for y in min_y..=max_y {
-            let j = (y - pos.y) as u8;
-
-            for x in min_x..=max_x {
-                let i = (x - pos.x) as u8;
+        for y in bounds.y_range() {
+            for x in bounds.x_range() {
+                let pos = point2(x, y);
 
                 let color = if DEPTH != 0 {
                     let uv = unsafe { rect.texcoords.unwrap_unchecked() };
 
-                    let u = if self.draw_mode.texture_rectangle_x_flip() {
-                        uv.u.wrapping_sub(i)
-                    } else {
-                        uv.u.wrapping_add(i)
-                    };
-
-                    let v = if self.draw_mode.texture_rectangle_y_flip() {
-                        uv.v.wrapping_sub(j)
-                    } else {
-                        uv.v.wrapping_add(j)
-                    };
-
-                    let Some(texel) =
-                        self.sample_texture::<DEPTH>(unsafe { rect.clut.unwrap_unchecked() }, u, v)
+                    // Sprite offsets fit in i32; only the final UVs wrap to 8 bits.
+                    let offset = (pos - origin).component_mul(uv_step);
+                    let uv = vec2(uv.u, uv.v).cast::<i32>() + offset;
+                    let uv = uv.map(|v| v & 0xFF).cast::<u8>();
+                    let clut = unsafe { rect.clut.unwrap_unchecked() };
+                    let Some(texel) = self.sample_texture::<DEPTH>(point2(clut.x, clut.y), uv)
                     else {
                         continue;
                     };
@@ -642,15 +498,14 @@ impl SoftwareRenderer {
                     if RAW_TEXTURE {
                         texel
                     } else {
-                        modulate_bgr555(texel, r, g, b, 0)
+                        modulate_bgr555(texel, rgb, 0)
                     }
                 } else {
-                    rgb888_to_bgr555(r, g, b, 0)
+                    rgb888_to_bgr555(rgb, 0)
                 };
 
                 self.write_pixel(
-                    x as usize,
-                    y as usize,
+                    pos.cast::<usize>(),
                     color,
                     rect.semi_transparent && (DEPTH == 0 || color & 0x8000 != 0),
                 );
@@ -659,8 +514,8 @@ impl SoftwareRenderer {
     }
 
     #[inline(always)]
-    fn write_pixel(&mut self, x: usize, y: usize, mut color: u16, semi_transparent: bool) {
-        let pixel = &mut self.vram[y * VRAM_WIDTH + x];
+    fn write_pixel(&mut self, pos: Point2<usize>, mut color: u16, semi_transparent: bool) {
+        let pixel = &mut self.vram[vram_index(pos)];
 
         if self.mask_bit_setting.check_mask_before_drawing() && *pixel & 0x8000 != 0 {
             return;
@@ -677,18 +532,20 @@ impl SoftwareRenderer {
     }
 
     #[inline(always)]
-    fn sample_texture<const DEPTH: usize>(&self, clut: Position, u: u8, v: u8) -> Option<u16> {
+    fn sample_texture<const DEPTH: usize>(&self, clut: Point2<usize>, uv: Vec2<u8>) -> Option<u16> {
         debug_assert!(matches!(DEPTH, 0 | 4 | 8 | 15));
 
-        let (base_x, base_y) = (
-            self.draw_mode.tex_page().texture_page_x_base() as usize * 64,
-            self.draw_mode.tex_page().texture_page_y_base() as usize * 256,
-        );
-        let (u, v) = self.apply_texture_window(u, v);
+        let page = self.draw_mode.tex_page();
+        let base = point2(
+            u16::from(page.texture_page_x_base()) * 64,
+            u16::from(page.texture_page_y_base()) * 256,
+        )
+        .cast::<usize>();
+        let uv = self.apply_texture_window(uv).cast::<usize>();
         let color = match DEPTH {
-            4 => self.fetch_clut_color(clut, self.fetch_index::<4>(base_x, base_y, u, v)),
-            8 => self.fetch_clut_color(clut, self.fetch_index::<8>(base_x, base_y, u, v)),
-            15 => self.fetch_15bpp(base_x, base_y, u, v),
+            4 => self.fetch_clut_color(clut, self.fetch_index::<4>(base, uv)),
+            8 => self.fetch_clut_color(clut, self.fetch_index::<8>(base, uv)),
+            15 => self.fetch_15bpp(base, uv),
             _ => unreachable!(),
         };
 
@@ -697,115 +554,128 @@ impl SoftwareRenderer {
     }
 
     #[inline(always)]
-    fn apply_texture_window(&self, u: u8, v: u8) -> (u8, u8) {
-        fn apply_texture_window_coord(coord: u8, mask: u8, offset: u8) -> u8 {
-            (coord & !(mask << 3)) | ((offset & mask) << 3)
-        }
-        (
-            apply_texture_window_coord(
-                u,
-                self.texture_window.mask_x(),
-                self.texture_window.offset_x(),
-            ),
-            apply_texture_window_coord(
-                v,
-                self.texture_window.mask_y(),
-                self.texture_window.offset_y(),
-            ),
-        )
+    fn apply_texture_window(&self, uv: Vec2<u8>) -> Vec2<u8> {
+        let mask_x = self.texture_window.mask_x() << 3;
+        let mask_y = self.texture_window.mask_y() << 3;
+        let offset_x = (self.texture_window.offset_x() << 3) & mask_x;
+        let offset_y = (self.texture_window.offset_y() << 3) & mask_y;
+
+        vec2((uv.x & !mask_x) | offset_x, (uv.y & !mask_y) | offset_y)
     }
 
     #[inline(always)]
-    fn fetch_index<const BPP: usize>(&self, base_x: usize, base_y: usize, u: u8, v: u8) -> u8 {
+    fn fetch_index<const BPP: usize>(&self, base: Point2<usize>, uv: Vec2<usize>) -> u8 {
         let texels_per_pixel = 16 / BPP;
-        let x = (base_x + (u as usize / texels_per_pixel)) & (VRAM_WIDTH - 1);
-        let y = (base_y + v as usize) & (VRAM_HEIGHT - 1);
+        let pos = wrap_vram(base + vec2(uv.x / texels_per_pixel, uv.y));
+        let word = unsafe { *self.vram.get_unchecked(vram_index(pos)) };
 
-        let word = unsafe { *self.vram.get_unchecked(y * VRAM_WIDTH + x) };
-
-        let shift = (u as usize % texels_per_pixel) * BPP;
+        let shift = (uv.x % texels_per_pixel) * BPP;
         ((word >> shift) & ((1 << BPP) - 1)) as u8
     }
 
     #[inline(always)]
-    fn fetch_15bpp(&self, base_x: usize, base_y: usize, u: u8, v: u8) -> u16 {
-        let x = (base_x + u as usize) & (VRAM_WIDTH - 1);
-        let y = (base_y + v as usize) & (VRAM_HEIGHT - 1);
-
-        unsafe { *self.vram.get_unchecked(y * VRAM_WIDTH + x) }
+    fn fetch_15bpp(&self, base: Point2<usize>, uv: Vec2<usize>) -> u16 {
+        let pos = wrap_vram(base + uv);
+        unsafe { *self.vram.get_unchecked(vram_index(pos)) }
     }
 
     #[inline(always)]
-    fn fetch_clut_color(&self, clut: Position, index: u8) -> u16 {
-        let x = (clut.x + index as usize) & (VRAM_WIDTH - 1);
-        let y = clut.y & (VRAM_HEIGHT - 1);
-
-        unsafe { *self.vram.get_unchecked(y * VRAM_WIDTH + x) }
+    fn fetch_clut_color(&self, clut: Point2<usize>, index: u8) -> u16 {
+        let pos = wrap_vram(clut + vec2(usize::from(index), 0));
+        unsafe { *self.vram.get_unchecked(vram_index(pos)) }
     }
 }
 
 #[inline(always)]
-fn cross2(ax: i32, ay: i32, bx: i32, by: i32, px: i32, py: i32) -> i32 {
-    (bx - ax) * (py - ay) - (by - ay) * (px - ax)
+fn wrap_vram(pos: Point2<usize>) -> Point2<usize> {
+    point2(pos.x & (VRAM_WIDTH - 1), pos.y & (VRAM_HEIGHT - 1))
 }
 
 #[inline(always)]
-fn is_top_left_edge(dx: i32, dy: i32) -> bool {
-    dy < 0 || (dy == 0 && dx > 0)
+fn vram_index(pos: Point2<usize>) -> usize {
+    pos.y * VRAM_WIDTH + pos.x
+}
+
+// RGB/UV gradients are stored in units of 1/4096.
+// Each truncated gradient contributes < 1/4096 error per pixel on its axis.
+// At most 1023 horizontal and 511 vertical steps keep the accumulated error
+// below 0.375 of a color level or texel, before rounding to u8.
+const ATTRIBUTE_FRAC_BITS: u32 = 12;
+
+#[derive(Clone, Copy, Default)]
+struct AttributePlane {
+    origin: u32,
+    gradient: Vec2<u32>,
+}
+
+impl AttributePlane {
+    #[inline(always)]
+    fn at(self, offset: Vec2<i32>) -> u32 {
+        let offset = offset.map(|v| Wrapping(v.cast_unsigned()));
+        // Round attributes to the nearest texel/color, without shifting coverage.
+        let rounding_bias = 1 << (ATTRIBUTE_FRAC_BITS - 1);
+        // Negative slopes and extrapolation wrap; sampling keeps only a byte.
+        (self.origin + rounding_bias).wrapping_add(self.gradient.map(Wrapping).dot(offset).0)
+    }
+}
+
+#[inline(always)]
+fn is_top_left_edge(edge: Vec2<i32>) -> bool {
+    edge.y < 0 || (edge.y == 0 && edge.x > 0)
 }
 
 #[inline(always)]
 fn blend_bgr555(background: u16, foreground: u16, mode: SemiTransparency) -> u16 {
-    let blend_channel = |shift: u32| {
-        let back = (background >> shift) & 0x1F;
-        let front = (foreground >> shift) & 0x1F;
-        match mode {
-            SemiTransparency::Average => back.midpoint(front),
-            SemiTransparency::Add => (back + front).min(0x1F),
-            SemiTransparency::Subtract => back.saturating_sub(front),
-            SemiTransparency::AddQuarter => (back + (front / 4)).min(0x1F),
-        }
+    let back = unpack_bgr555(background);
+    let front = unpack_bgr555(foreground);
+    let color = match mode {
+        SemiTransparency::Average => back.zip(front, u16::midpoint),
+        SemiTransparency::Add => (back + front).min(Vec3::splat(0x1F)),
+        SemiTransparency::Subtract => back.zip(front, u16::saturating_sub),
+        SemiTransparency::AddQuarter => (back + front / 4).min(Vec3::splat(0x1F)),
     };
 
-    (foreground & 0x8000) | blend_channel(0) | (blend_channel(5) << 5) | (blend_channel(10) << 10)
+    (foreground & 0x8000) | pack_bgr555(color)
 }
 
 #[inline(always)]
-fn fp_to_u8_color(v: FP) -> u8 {
-    v.clamp(FP::from_num(0), FP::from_num(255)).to_num::<u8>()
+fn unpack_bgr555(color: u16) -> Vec3<u16> {
+    vec3(color, color >> 5, color >> 10).map(|c| c & 0x1F)
 }
 
 #[inline(always)]
-fn rgb888_to_bgr555(r: u8, g: u8, b: u8, dither: i16) -> u16 {
-    let r5 = quantize_channel(i16::from(r), dither);
-    let g5 = quantize_channel(i16::from(g), dither);
-    let b5 = quantize_channel(i16::from(b), dither);
-
-    r5 | (g5 << 5) | (b5 << 10)
+fn pack_bgr555(color: Vec3<u16>) -> u16 {
+    color.x | (color.y << 5) | (color.z << 10)
 }
 
 #[inline(always)]
-fn modulate_bgr555(texel: u16, r: u8, g: u8, b: u8, dither: i16) -> u16 {
-    let tr = texel & 0x1F;
-    let tg = (texel >> 5) & 0x1F;
-    let tb = (texel >> 10) & 0x1F;
-    let mask = texel & 0x8000;
+fn attribute_to_u8(value: u32) -> u8 {
+    (value >> ATTRIBUTE_FRAC_BITS) as u8
+}
 
+#[inline(always)]
+fn rgb888_to_bgr555(rgb: Vec3<u8>, dither: i16) -> u16 {
+    pack_bgr555(rgb.cast::<i16>().map(|c| quantize_channel(c, dither)))
+}
+
+#[inline(always)]
+fn modulate_bgr555(texel: u16, rgb: Vec3<u8>, dither: i16) -> u16 {
     // Keep the low three color bits until after dithering; modulation can exceed 255.
-    let r = quantize_channel(((tr * r as u16) >> 4) as i16, dither);
-    let g = quantize_channel(((tg * g as u16) >> 4) as i16, dither);
-    let b = quantize_channel(((tb * b as u16) >> 4) as i16, dither);
+    // Each product is at most 31 * 255 = 7905, so u16 retains the full precision.
+    let product = unpack_bgr555(texel).component_mul(rgb.cast::<u16>());
+    let color = product.map(|c| c >> 4).cast::<i16>();
+    let color = color.map(|c| quantize_channel(c, dither));
 
-    mask | r | (g << 5) | (b << 10)
+    (texel & 0x8000) | pack_bgr555(color)
 }
 
 #[inline(always)]
 fn quantize_channel(color: i16, dither: i16) -> u16 {
-    ((color + dither).clamp(0, 255) >> 3) as u16
+    ((color + dither).clamp(0, 255) >> 3).cast_unsigned()
 }
 
 #[inline(always)]
-fn dither_offset(x: i32, y: i32) -> i16 {
+fn dither_offset(pos: Point2<i32>) -> i16 {
     // The pattern is anchored to VRAM, after applying the drawing offset.
     const MATRIX: [[i16; 4]; 4] = [
         [-4, 0, -3, 1],
@@ -814,5 +684,6 @@ fn dither_offset(x: i32, y: i32) -> i16 {
         [3, -1, 2, -2],
     ];
 
-    MATRIX[(y & 3) as usize][(x & 3) as usize]
+    let pos = pos.map(|v| v & 3).cast::<usize>();
+    MATRIX[pos.y][pos.x]
 }
