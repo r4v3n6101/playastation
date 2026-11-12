@@ -3,8 +3,8 @@ use core::ops::Deref;
 
 use derive_more::Debug;
 use yoke::Yoke;
-use zerocopy::{SplitAt, TryFromBytes, little_endian::U32};
-use zerocopy_derive::{FromZeros, Immutable, KnownLayout};
+use zerocopy::{SplitAt as _, TryFromBytes, little_endian::U32};
+use zerocopy_derive::{FromZeros, Immutable, KnownLayout, SplitAt};
 
 #[derive(Debug)]
 pub struct BoxedExeFile(Yoke<&'static ExeFile, Box<[u8]>>);
