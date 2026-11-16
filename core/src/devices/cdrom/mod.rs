@@ -43,13 +43,14 @@ use modular_bitfield::prelude::*;
 use crate::{
     SystemTime,
     devices::int::{InterruptController, InterruptFlags},
-    formats::disk::{Disc, RawSector, sector_data},
+    disc::{Disc, RawSector},
     interconnect::scheduler::{Event, Scheduler},
 };
 
 mod inner;
 
 const PARAM_FIFO_CAP: usize = 16;
+const LEAD_IN_SECTORS: usize = 150;
 
 const CDROM_COMMAND_DEFAULT_DELAY: SystemTime = 0x1100;
 const CDROM_SECOND_DELAY: SystemTime = 0x3000;
@@ -103,6 +104,8 @@ pub struct CdRom {
     irq_flags: u8,
 
     cursor_lba: usize,
+    position_lba: usize,
+    play_track: u8,
     msf_loc: Option<[u8; 3]>,
     filter_file: u8,
     filter_channel: u8,
@@ -185,6 +188,8 @@ impl Default for CdRom {
             irq_flags: 0,
 
             cursor_lba: 0,
+            position_lba: 0,
+            play_track: 1,
             msf_loc: None,
             filter_file: 0,
             filter_channel: 0,
@@ -296,7 +301,11 @@ impl CdRom {
                             let ff = self.param_fifo.pop_front().unwrap_or(0);
                             inner::Command::Setloc { mm, ss, ff }
                         }
+                        0x03 => inner::Command::Play {
+                            track: self.param_fifo.pop_front().unwrap_or(0),
+                        },
                         0x06 | 0x1B => inner::Command::Read,
+                        0x08 => inner::Command::StopFirst,
                         0x09 => inner::Command::PauseFirst,
                         0x0A => inner::Command::InitFirst,
                         0x0B => inner::Command::Mute,
@@ -310,6 +319,7 @@ impl CdRom {
                             let mode = self.param_fifo.pop_front().unwrap_or(0);
                             inner::Command::Setmode { mode }
                         }
+                        0x11 => inner::Command::GetlocP,
                         0x13 => inner::Command::GetTn,
                         0x14 => {
                             let track = self.param_fifo.pop_front().unwrap_or(0);
@@ -368,9 +378,11 @@ impl CdRom {
 
                         self.data_fifo.clear();
                         if self.mode.contains(CdRomMode::WHOLE_SECTOR) {
-                            self.data_fifo.extend(data);
+                            self.data_fifo.extend(&data[12..]);
                         } else {
-                            self.data_fifo.extend(sector_data(&data));
+                            // ???
+                            let offset = if data[15] == 1 { 16 } else { 24 };
+                            self.data_fifo.extend(&data[offset..][..2048]);
                         }
                     } else if self.pending_sector.is_some() {
                         self.data_fifo.clear();
@@ -425,17 +437,12 @@ impl CdRom {
     }
 
     fn apply_setloc(&mut self) {
-        let Some([mm, ss, ff]) = self.msf_loc.take() else {
+        let Some(msf) = self.msf_loc.take() else {
             return;
         };
 
-        let minutes = bcd_to_bin(mm) as i32;
-        let seconds = bcd_to_bin(ss) as i32;
-        let frames = bcd_to_bin(ff) as i32;
-
-        let lba = ((minutes * 60) + seconds) * 75 + frames - 150;
-
-        self.cursor_lba = lba.max(0) as usize;
+        self.cursor_lba = msf_to_lba(msf);
+        self.position_lba = self.cursor_lba;
     }
 
     fn raise_err(&mut self, int_ctrl: &mut InterruptController, err: ErrorCode) {
@@ -467,4 +474,20 @@ fn bcd_to_bin(value: u8) -> u8 {
 
 fn bin_to_bcd(value: u8) -> u8 {
     ((value / 10) << 4) | (value % 10)
+}
+
+fn msf_to_lba([mm, ss, ff]: [u8; 3]) -> usize {
+    let minutes = bcd_to_bin(mm) as usize;
+    let seconds = bcd_to_bin(ss) as usize;
+    let frames = bcd_to_bin(ff) as usize;
+
+    (((minutes * 60) + seconds) * 75 + frames).saturating_sub(LEAD_IN_SECTORS)
+}
+
+fn sector_to_msf(sectors: usize) -> [u8; 3] {
+    [
+        bin_to_bcd((sectors / (60 * 75)) as u8),
+        bin_to_bcd(((sectors / 75) % 60) as u8),
+        bin_to_bcd((sectors % 75) as u8),
+    ]
 }
