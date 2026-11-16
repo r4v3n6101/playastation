@@ -37,3 +37,14 @@ zerocopy-derive = "0.8.48"
 
 # Software rendering
 euclid = { version = "0.22.14", default-features = false }
+
+[dev-dependencies]
+criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "cpu"
+harness = false
+
+[[bench]]
+name = "cpu_memory"
+harness = false
