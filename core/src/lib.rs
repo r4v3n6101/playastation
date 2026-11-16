@@ -4,6 +4,7 @@ extern crate alloc;
 
 pub mod cpu;
 pub mod devices;
+pub mod disc;
 pub mod formats;
 pub mod interconnect;
 pub mod render;

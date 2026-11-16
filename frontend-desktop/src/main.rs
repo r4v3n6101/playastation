@@ -8,16 +8,14 @@ use playastation::{
         Slot,
         controller::{Button, DigitalController},
     },
-    formats::{
-        disk::{Disc, RawSector},
-        psexe::BoxedExeFile,
-    },
+    formats::psexe::BoxedExeFile,
     render::software::SoftwareRenderer,
     run::Console,
 };
 use playastation_frontend_common::{App, EmulatorData, EmulatorHost, InputState, eframe, egui};
 use triple_buffer::{Input, Output};
 
+mod disc;
 mod time;
 
 #[derive(Parser)]
@@ -26,8 +24,9 @@ struct Args {
     bios: PathBuf,
     #[arg(long)]
     rom: Option<PathBuf>,
-    #[arg(long)]
-    bin: Option<PathBuf>,
+    /// Raw BIN or a CUE sheet describing all data/audio tracks.
+    #[arg(long, aliases = ["bin", "cue"])]
+    disc: Option<PathBuf>,
 }
 
 struct Host {
@@ -110,10 +109,8 @@ fn spawn_emulator_thread(
             ));
         }
 
-        if let Some(bin_path) = &args.bin {
-            console.bus.cdrom.disc = Some(Box::new(BinFile {
-                data: fs::read(bin_path).unwrap(),
-            }));
+        if let Some(path) = &args.disc {
+            console.bus.cdrom.disc = Some(Box::new(disc::open(path).unwrap()));
         }
 
         console.bus.gpu.renderer = Box::new(SoftwareRenderer::default());
@@ -153,21 +150,4 @@ fn spawn_emulator_thread(
             }
         }
     });
-}
-
-// TODO : move to core
-struct BinFile {
-    data: Vec<u8>,
-}
-
-impl Disc for BinFile {
-    fn read_sector(&mut self, lba: usize) -> Option<RawSector> {
-        let chunk = self.data.get(lba * 2352 + 12..)?.get(..2340)?;
-
-        Some(chunk.try_into().unwrap())
-    }
-
-    fn sector_count(&self) -> usize {
-        self.data.len() / 2352
-    }
 }

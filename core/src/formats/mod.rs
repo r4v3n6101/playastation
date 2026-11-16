@@ -1,2 +1,2 @@
-pub mod disk;
+pub mod cue;
 pub mod psexe;
