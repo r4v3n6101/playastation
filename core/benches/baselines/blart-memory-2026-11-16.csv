@@ -1,0 +1,7 @@
+workload,instructions,engine_size,empty_heap,filled_heap,cleared_heap,fill_allocations
+alu,40961,48,12288,12824,12304,10
+branches,40961,48,12288,13280,12320,19
+ram_copy,32769,48,12288,12728,12304,9
+dispatch_64,513,48,12288,27584,12560,284
+dispatch_4096,32769,48,12288,946576,28688,17750
+invalidation,1281,48,12288,12680,12304,2052

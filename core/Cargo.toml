@@ -25,10 +25,6 @@ snafu = { version = "0.9.2", default-features = false, features = ["rust_1_81"] 
 smallvec = { version = "1.15.1", default-features = false }
 smallbox = { version = "0.8.8", default-features = false, features = ["coerce"] }
 
-# Code cache (block pages)
-fnv = { version = "1.0.7", default-features = false}
-hashbrown = { version = "0.17.1", default-features = false}
-
 # File formats
 peg = { version = "0.8.6", default-features = false }
 yoke = { version = "0.8.2", default-features = false, features = ["alloc"] }

@@ -4,6 +4,7 @@ use core::{cell::Cell, ops::Deref};
 use crate::machine::cpu::{Cpu, Exception, Instruction};
 
 mod block;
+mod index;
 
 #[derive(Default)]
 pub struct CodeCache {

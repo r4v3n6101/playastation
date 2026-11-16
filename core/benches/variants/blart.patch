@@ -1,0 +1,108 @@
+diff --git a/Cargo.lock b/Cargo.lock
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -524,4 +524,14 @@
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
++
++[[package]]
++name = "blart"
++version = "0.6.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "ae1603d9509f17c9b9fd537683f6b173337a9391139fb08da9aac53e2bd6e8cb"
++dependencies = [
++ "paste",
++ "zerocopy",
++]
+
+ [[package]]
+@@ -1307,10 +1317,4 @@
+
+ [[package]]
+-name = "fnv"
+-version = "1.0.7"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
+-
+-[[package]]
+ name = "foldhash"
+ version = "0.1.5"
+@@ -2606,4 +2610,10 @@
+
+ [[package]]
++name = "paste"
++version = "1.0.15"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
++
++[[package]]
+ name = "peniko"
+ version = "0.6.1"
+@@ -2721,9 +2731,8 @@
+ dependencies = [
+  "bitflags 2.13.0",
++ "blart",
+  "criterion",
+  "derive_more",
+  "fixed",
+- "fnv",
+- "hashbrown 0.17.1",
+  "modular-bitfield",
+  "smallbox",
+diff --git a/core/Cargo.toml b/core/Cargo.toml
+--- a/core/Cargo.toml
++++ b/core/Cargo.toml
+@@ -26,6 +26,5 @@
+
+ # Code cache (block pages)
+-fnv = { version = "1.0.7", default-features = false}
+-hashbrown = { version = "0.17.1", default-features = false}
++blart = { version = "0.6.0", default-features = false }
+
+ # File formats
+diff --git a/core/src/run/backend/cache/block.rs b/core/src/run/backend/cache/block.rs
+--- a/core/src/run/backend/cache/block.rs
++++ b/core/src/run/backend/cache/block.rs
+@@ -2,6 +2,5 @@
+ use core::mem;
+
+-use fnv::FnvBuildHasher;
+-use hashbrown::HashMap;
++use blart::TreeMap;
+ use smallvec::SmallVec;
+
+@@ -21,5 +20,5 @@
+ pub struct PagedCache<T> {
+     /// `phys_pc` -> [`Cached`]
+-    by_pc: HashMap<u32, Rc<Cached<T>>, FnvBuildHasher>,
++    by_pc: TreeMap<[u8; 4], Rc<Cached<T>>, 4>,
+     /// Page -> array of [`Cached`]
+     pages: Box<[Vec<u32>; PAGES]>,
+@@ -34,5 +33,5 @@
+     fn default() -> Self {
+         Self {
+-            by_pc: HashMap::default(),
++            by_pc: TreeMap::with_prefix_len(),
+             pages: Box::new([const { Vec::new() }; _]),
+         }
+@@ -51,5 +50,5 @@
+             let page = page_of(paddr);
+             while let Some(phys_pc) = self.pages[page].pop() {
+-                if let Some(block) = self.by_pc.remove(&phys_pc) {
++                if let Some(block) = self.by_pc.remove(&phys_pc.to_be_bytes()) {
+                     let other_pages = block.pages.iter().copied().filter(|&p| p != page);
+                     self.unlink_pages(phys_pc, other_pages);
+@@ -73,5 +72,5 @@
+
+         let phys_pc = maybe_cut_ram_mirrors(phys_pc);
+-        self.by_pc.get(&phys_pc).map(Rc::clone)
++        self.by_pc.get(&phys_pc.to_be_bytes()).map(Rc::clone)
+     }
+
+@@ -96,5 +95,5 @@
+         let block = Rc::new(Cached { entry, pages });
+
+-        if let Some(old) = self.by_pc.insert(phys_pc, Rc::clone(&block)) {
++        if let Some(old) = self.by_pc.insert(phys_pc.to_be_bytes(), Rc::clone(&block)) {
+             self.unlink_pages(phys_pc, old.pages.iter().copied());
+         }

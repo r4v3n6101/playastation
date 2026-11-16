@@ -1,14 +1,14 @@
 use alloc::{boxed::Box, rc::Rc, vec::Vec};
 use core::mem;
 
-use fnv::FnvBuildHasher;
-use hashbrown::HashMap;
 use smallvec::SmallVec;
 
 use crate::machine::{
     cpu::{Cpu, TranslationResult},
     interconnect::{RAM_SIZE, Region, region_of},
 };
+
+use super::index::BlockIndex;
 
 const PAGE_BITS: usize = 12;
 const PAGE_SIZE: usize = 1 << PAGE_BITS;
@@ -20,7 +20,7 @@ pub trait CacheEntry {
 
 pub struct PagedCache<T> {
     /// `phys_pc` -> [`Cached`]
-    by_pc: HashMap<u32, Rc<Cached<T>>, FnvBuildHasher>,
+    by_pc: BlockIndex<Rc<Cached<T>>>,
     /// Page -> array of [`Cached`]
     pages: Box<[Vec<u32>; PAGES]>,
 }
@@ -33,7 +33,7 @@ pub struct Cached<T> {
 impl<T> Default for PagedCache<T> {
     fn default() -> Self {
         Self {
-            by_pc: HashMap::default(),
+            by_pc: BlockIndex::default(),
             pages: Box::new([const { Vec::new() }; _]),
         }
     }

@@ -20,6 +20,9 @@ Criterion keeps the full samples and estimates under
 `$CARGO_TARGET_DIR/criterion` (or `target/criterion` by default). Committed
 baseline summaries are in `baselines/`.
 
+The [three-way cache comparison](baselines/cache-index-2026-11-16.md) records
+HashMap, blart and the custom page table, including allocation measurements.
+
 ## What is measured
 
 `cpu.rs` runs identical MIPS programs through `CpuEngine`. The only difference
