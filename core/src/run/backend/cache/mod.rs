@@ -1,5 +1,5 @@
 use alloc::{rc::Rc, vec::Vec};
-use core::ops::Deref;
+use core::{cell::Cell, ops::Deref};
 
 use crate::machine::cpu::{Cpu, Exception, Instruction};
 
@@ -12,6 +12,7 @@ pub struct CodeCache {
 
 pub struct CodeBlock {
     pub ops: Vec<Result<Instruction, Exception>>,
+    pub hits: Cell<u64>,
 }
 
 pub struct CodeBlockHandle {

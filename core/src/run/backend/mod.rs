@@ -1,15 +1,29 @@
+use alloc::boxed::Box;
+use core::cell::Cell;
+
 use crate::{
     SystemTime,
-    machine::cpu::{Cpu, Exception},
-    machine::interconnect::bus::Bus,
+    machine::{
+        cpu::{Cpu, Exception, TranslationResult},
+        interconnect::bus::Bus,
+    },
 };
+
+pub use policy::{DefaultPolicy, ExecutionMode, ExecutionPolicy, PolicyContext};
 
 mod cache;
 mod decoder;
 mod interpreter;
+mod policy;
 
-const BLOCK_THRESHOLD: SystemTime = 8;
+const BLOCK_DECODER_LIMIT: usize = 1024;
 
+pub struct ExecutionResult {
+    pub cycles_elapsed: SystemTime,
+    pub stop_reason: StopReason,
+}
+
+#[derive(Debug)]
 pub enum StopReason {
     UnitEnded,
     Stalled,
@@ -18,14 +32,18 @@ pub enum StopReason {
     Exception(Exception),
 }
 
-pub struct ExecutionResult {
-    pub cycles_elapsed: SystemTime,
-    pub stop_reason: StopReason,
+pub struct CpuEngine {
+    pub policy: Box<dyn ExecutionPolicy>,
+    cache: cache::CodeCache,
 }
 
-#[derive(Default)]
-pub struct CpuEngine {
-    cache: cache::CodeCache,
+impl Default for CpuEngine {
+    fn default() -> Self {
+        Self {
+            policy: Box::new(DefaultPolicy),
+            cache: cache::CodeCache::default(),
+        }
+    }
 }
 
 impl CpuEngine {
@@ -50,7 +68,8 @@ impl CpuEngine {
             }
 
             let before = result.cycles_elapsed;
-            self.run_unit(&mut result, cpu, bus, budget);
+            let remaining = budget - result.cycles_elapsed;
+            self.run_unit(&mut result, cpu, bus, remaining);
 
             if let StopReason::UnitEnded = result.stop_reason {
                 // Prevent deadloop
@@ -74,10 +93,36 @@ impl CpuEngine {
         bus: &mut Bus,
         budget: SystemTime,
     ) {
-        if budget < BLOCK_THRESHOLD {
-            interpreter::run_single(result, cpu, bus, &mut self.cache);
-        } else {
-            interpreter::run_block(result, cpu, bus, &mut self.cache);
+        // TODO : don't like searching a block for a dead simple ins-by-ins interpreter
+        let block = self.cache.get(cpu);
+        let mode = self.policy.select(PolicyContext {
+            budget,
+            hits: block.as_ref().map_or(0, |block| block.hits.get()),
+        });
+
+        match mode {
+            ExecutionMode::Interpreter => {
+                interpreter::run_single(result, cpu, bus, &mut self.cache);
+            }
+            ExecutionMode::CachedInterpreter => {
+                let block = block.unwrap_or_else(|| {
+                    let TranslationResult::PhysAddr(paddr) = cpu.mmu.translate_addr(cpu.pc) else {
+                        panic!("non-executable memory");
+                    };
+
+                    self.cache.insert(
+                        paddr,
+                        cache::CodeBlock {
+                            ops: decoder::fetch_and_decode_block(cpu, bus, BLOCK_DECODER_LIMIT),
+                            hits: Cell::new(0),
+                        },
+                    )
+                });
+
+                // TODO : there? not sure
+                block.hits.update(|hits| hits.saturating_add(1));
+                interpreter::run_block(result, cpu, bus, &mut self.cache, &block);
+            }
         }
 
         Self::catch_bios_hook(result, cpu);

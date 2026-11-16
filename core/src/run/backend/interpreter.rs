@@ -7,7 +7,7 @@ use crate::machine::{
 
 use super::{
     ExecutionResult, StopReason,
-    cache::{CodeBlock, CodeBlockHandle, CodeCache},
+    cache::{CodeBlockHandle, CodeCache},
     decoder,
 };
 
@@ -15,8 +15,6 @@ const MULT_LATENCY: u64 = 10;
 const DIV_LATENCY: u64 = 35;
 const LOAD_LATENCY: u64 = 3;
 const STORE_LATENCY: u64 = 2;
-
-const BLOCK_DECODER_LIMIT: usize = 1024;
 
 struct Context<'a> {
     result: &'a mut ExecutionResult,
@@ -71,6 +69,7 @@ pub fn run_block(
     cpu: &mut Cpu,
     bus: &mut Bus,
     cache: &mut CodeCache,
+    handle: &CodeBlockHandle,
 ) {
     struct Observer<'a> {
         block: &'a CodeBlockHandle,
@@ -95,24 +94,8 @@ pub fn run_block(
         cache,
     };
 
-    let handle = match ctx.cache.get(ctx.cpu) {
-        Some(handle) => handle,
-        None => {
-            if let TranslationResult::PhysAddr(paddr) = ctx.cpu.mmu.translate_addr(ctx.cpu.pc) {
-                ctx.cache.insert(
-                    paddr,
-                    CodeBlock {
-                        ops: decoder::fetch_and_decode_block(ctx.cpu, ctx.bus, BLOCK_DECODER_LIMIT),
-                    },
-                )
-            } else {
-                panic!("non-executable memory")
-            }
-        }
-    };
-
     for decoded in &handle.ops {
-        let success = step_decoded(&mut ctx, Observer { block: &handle }, *decoded);
+        let success = step_decoded(&mut ctx, Observer { block: handle }, *decoded);
 
         if !success {
             break;

@@ -1,6 +1,11 @@
 use alloc::{boxed::Box, string::String};
 use core::mem;
 
+pub use backend::{
+    CpuEngine, DefaultPolicy, ExecutionMode, ExecutionPolicy, ExecutionResult, PolicyContext,
+    StopReason,
+};
+
 use crate::{
     SystemTime,
     formats::psexe::{BoxedExeFile, ExeHeader},
@@ -16,11 +21,15 @@ pub struct Console {
     pub bus: Bus,
     pub pending_exe: Option<BoxedExeFile>,
     pub printf: Option<Box<dyn FnMut(char)>>,
-    /// CPU engine for code execution, with some optimizations.
+    /// CPU engine for code execution, with `some` optimizations.
     engine: backend::CpuEngine,
 }
 
 impl Console {
+    pub fn set_exec_policy(&mut self, new: impl ExecutionPolicy + 'static) {
+        self.engine.policy = Box::new(new);
+    }
+
     pub fn step(&mut self) -> SystemTime {
         let budget = self
             .bus
