@@ -1,6 +1,6 @@
 use core::mem;
 
-use crate::{
+use crate::machine::{
     cpu::{Cop0, Cpu, Exception, Instruction, PendingJump, PendingLoad, TranslationResult},
     interconnect::bus::Bus,
 };

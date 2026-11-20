@@ -3,7 +3,7 @@ use core::ptr;
 
 use crate::{
     SystemTime,
-    devices::{
+    machine::devices::{
         cdrom::CdRom, dma::DmaController, gpu::Gpu, int::InterruptController, joy::JoyBus,
         spu::Spu, timer::TimerController,
     },

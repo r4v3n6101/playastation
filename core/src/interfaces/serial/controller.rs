@@ -1,6 +1,6 @@
 use alloc::boxed::Box;
 
-use super::SerialDevice;
+use crate::interfaces::serial::SerialDevice;
 
 type ButtonPressedCallback = Box<dyn FnMut() -> Button>;
 

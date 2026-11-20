@@ -1,3 +1,5 @@
+pub mod cue;
+
 pub const RAW_SECTOR_SIZE: usize = 2352;
 
 /// A complete raw CD sector, including the synchronization prefix.

@@ -4,8 +4,8 @@ use bitflags::bitflags;
 
 use crate::{
     SystemTime,
-    cpu::CPU_FREQ,
-    devices::timer::{TimingEvent, TimingSpan},
+    machine::cpu::CPU_FREQ,
+    machine::devices::timer::{TimingEvent, TimingSpan},
 };
 
 use super::{DEFAULT_HRANGE, DEFAULT_VRANGE, HorizontalResolution, VideoMode};

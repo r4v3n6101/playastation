@@ -6,29 +6,20 @@ use strum::EnumCount;
 
 use crate::{
     SystemTime,
-    devices::int::{InterruptController, InterruptFlags},
-    interconnect::scheduler::{Event, Scheduler},
+    interfaces::serial::SerialDevice,
+    machine::{
+        devices::int::{InterruptController, InterruptFlags},
+        interconnect::scheduler::{Event, Scheduler},
+    },
 };
 
 use super::{read_part, write_part};
-
-pub mod controller;
 
 const POLL_INTERVAL: SystemTime = 100;
 
 // Approximate peripheral response delay and ACK pulse width in CPU clocks.
 const ACK_DELAY: SystemTime = 100;
 const ACK_PULSE: SystemTime = 100;
-
-pub trait SerialDevice {
-    /// Starts a new transfer before receiving its address byte.
-    fn begin_transfer(&mut self);
-
-    /// # Returns
-    ///
-    /// Received byte and ACK for the next byte.
-    fn exchange(&mut self, tx: u8) -> (u8, bool);
-}
 
 pub struct JoyBus {
     pub mode: JoyMode,

@@ -3,8 +3,8 @@ use modular_bitfield::prelude::*;
 
 use crate::{
     SystemTime,
-    devices::int::{InterruptController, InterruptFlags},
-    interconnect::{bus::Bus, scheduler::Event},
+    machine::devices::int::{InterruptController, InterruptFlags},
+    machine::interconnect::{bus::Bus, scheduler::Event},
 };
 
 use super::{read_part, write_part};

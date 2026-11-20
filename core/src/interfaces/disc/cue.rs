@@ -1,11 +1,11 @@
-use alloc::{vec, vec::Vec};
+use alloc::{string::String, vec, vec::Vec};
 use core::ops::Range;
 
-use snafu::{OptionExt as _, Snafu, ensure};
+use snafu::{Snafu, ensure};
 
-use crate::disc::{Disc, RAW_SECTOR_SIZE, RawSector, Track, TrackMode};
+use crate::formats::cue::{CueFile, CueSheet, CueTrack};
 
-use super::parser::{CueFile, CueSheet, CueTrack};
+use super::{Disc, RAW_SECTOR_SIZE, RawSector, Track, TrackMode};
 
 /// A byte source. Its length must remain unchanged while the image is mounted.
 pub trait DiscSource {
@@ -16,41 +16,19 @@ pub trait DiscSource {
     fn read_at(&mut self, offset: u64, buffer: &mut RawSector) -> Result<(), Self::Error>;
 }
 
-pub struct DiscImage<S> {
-    sources: Vec<S>,
-    tracks: Vec<Track>,
-    segments: Vec<Segment>,
-    sector_count: usize,
-}
-
-struct Segment {
-    disc_range: Range<usize>,
-    source: SegmentSource,
-}
-
-#[derive(Clone, Copy)]
-enum SegmentSource {
-    Data { source: usize, file_sector: usize },
-    Zero,
-}
-
 #[derive(Debug, Snafu)]
-pub enum DiscImageError {
+#[snafu(context(suffix(false)))]
+pub enum CueDiscError {
     #[snafu(display("expected {expected} BIN sources, got {actual}"))]
     SourceCount { expected: usize, actual: usize },
+    #[snafu(display(
+        "{} must have a nonzero length divisible by {RAW_SECTOR_SIZE}",
+        file_name.as_deref().unwrap_or("BIN source")
+    ))]
+    InvalidSourceSize { file_name: Option<String> },
 
     #[snafu(display("disc and every BIN source must contain tracks"))]
     NoTracks,
-
-    #[snafu(display(
-        "BIN source {} must have a nonzero length divisible by {RAW_SECTOR_SIZE}",
-        source + 1
-    ))]
-    InvalidSourceSize {
-        #[snafu(source(false))]
-        source: usize,
-    },
-
     #[snafu(display("track {track} indexes overlap or exceed BIN length"))]
     InvalidTrack { track: usize },
 
@@ -58,139 +36,161 @@ pub enum DiscImageError {
     TooLarge,
 }
 
-impl<S: DiscSource> DiscImage<S> {
+pub struct CueDisc<S> {
+    tracks: Vec<Track>,
+    track_data: Vec<TrackData<S>>,
+    sector_count: usize,
+}
+
+struct TrackData<S> {
+    source: S,
+    disc_range: Range<usize>,
+    file_sector: usize,
+}
+
+impl<S: DiscSource> CueDisc<S> {
     /// Sources correspond to FILE entries, in the same order.
-    pub fn from_cue(cue: &CueSheet<'_>, sources: Vec<S>) -> Result<Self, DiscImageError> {
+    /// Each source is cloned for its tracks.
+    pub fn from_cue(cue: &CueSheet<'_>, sources: Vec<S>) -> Result<Self, CueDiscError>
+    where
+        S: Clone,
+    {
         ensure!(
             sources.len() == cue.files.len(),
-            SourceCountSnafu {
+            SourceCount {
                 expected: cue.files.len(),
                 actual: sources.len(),
             }
         );
         ensure!(
             !cue.files.is_empty() && cue.files.iter().all(|file| !file.tracks.is_empty()),
-            NoTracksSnafu
+            NoTracks
         );
 
         let mut image = Self {
-            sources,
             tracks: Vec::new(),
-            segments: Vec::new(),
+            track_data: Vec::new(),
             sector_count: 0,
         };
 
-        for (source, file) in cue.files.iter().enumerate() {
-            image.append_file(source, file)?;
+        for (file, source) in cue.files.iter().zip(sources) {
+            let file_sectors = sectors_in_source(source.byte_len(), Some(file.name))?;
+            image.append_file(source, file, file_sectors)?;
         }
 
         Ok(image)
     }
 
-    pub fn from_bin(source: S, mode: TrackMode) -> Result<Self, DiscImageError> {
-        let sector_count = sectors_in_source(source.byte_len(), 0)?;
+    pub fn from_bin(source: S, mode: TrackMode) -> Result<Self, CueDiscError> {
+        let sector_count = sectors_in_source(source.byte_len(), None)?;
         Ok(Self {
-            sources: vec![source],
             tracks: vec![Track {
                 start_lba: 0,
                 pregap_sectors: 0,
                 mode,
             }],
-            segments: vec![Segment {
+            track_data: vec![TrackData {
+                source,
                 disc_range: 0..sector_count,
-                source: SegmentSource::Data {
-                    source: 0,
-                    file_sector: 0,
-                },
+                file_sector: 0,
             }],
             sector_count,
         })
     }
 
-    fn append_file(&mut self, source: usize, file: &CueFile<'_>) -> Result<(), DiscImageError> {
-        let file_sectors = sectors_in_source(self.sources[source].byte_len(), source)?;
-        for (index, track) in file.tracks.iter().enumerate() {
+    fn append_file(
+        &mut self,
+        source: S,
+        file: &CueFile<'_>,
+        file_sectors: usize,
+    ) -> Result<(), CueDiscError>
+    where
+        S: Clone,
+    {
+        let mut tracks = file.tracks.iter().peekable();
+
+        while let Some(track) = tracks.next() {
             // The first track's lead-in/pregap is outside disc LBA 0.
             let file_start = if self.tracks.is_empty() {
                 track.index1
             } else {
                 track.index0.unwrap_or(track.index1)
             };
-            let file_end = file
-                .tracks
-                .get(index + 1)
+            let file_end = tracks
+                .peek()
                 .map_or(file_sectors, |next| next.index0.unwrap_or(next.index1));
+
+            let file_range = file_start..file_end;
             ensure!(
-                file_start <= track.index1 && track.index1 < file_end && file_end <= file_sectors,
-                InvalidTrackSnafu {
+                file_range.contains(&track.index1) && file_end <= file_sectors,
+                InvalidTrack {
                     track: self.tracks.len() + 1,
                 }
             );
 
-            self.append_track(source, track, file_start..file_end)?;
+            self.append_track(source.clone(), track, file_range)?;
         }
         Ok(())
     }
 
     fn append_track(
         &mut self,
-        source: usize,
+        source: S,
         track: &CueTrack,
         file_range: Range<usize>,
-    ) -> Result<(), DiscImageError> {
+    ) -> Result<(), CueDiscError> {
         let pregap = if self.tracks.is_empty() {
             0
         } else {
             track.pregap
         };
-        let pregap_start = self.append(pregap, SegmentSource::Zero)?;
-        let data_start = self.append(
-            file_range.end - file_range.start,
-            SegmentSource::Data {
-                source,
-                file_sector: file_range.start,
-            },
-        )?;
+        let pregap_start = self.sector_count;
+        let data_start = pregap_start
+            .checked_add(pregap)
+            .ok_or(CueDiscError::TooLarge)?;
+        let data_end = data_start
+            .checked_add(file_range.len())
+            .ok_or(CueDiscError::TooLarge)?;
+        let end = data_end
+            .checked_add(track.postgap)
+            .ok_or(CueDiscError::TooLarge)?;
         let start_lba = data_start + (track.index1 - file_range.start);
+
         self.tracks.push(Track {
             start_lba,
             pregap_sectors: start_lba - pregap_start,
             mode: track.mode,
         });
-        self.append(track.postgap, SegmentSource::Zero)?;
-        Ok(())
-    }
-
-    fn append(&mut self, sectors: usize, source: SegmentSource) -> Result<usize, DiscImageError> {
-        let start = self.sector_count;
-        let end = start.checked_add(sectors).context(TooLargeSnafu)?;
-        if sectors != 0 {
-            self.segments.push(Segment {
-                disc_range: start..end,
-                source,
-            });
-        }
+        self.track_data.push(TrackData {
+            source,
+            disc_range: data_start..data_end,
+            file_sector: file_range.start,
+        });
         self.sector_count = end;
-        Ok(start)
+
+        Ok(())
     }
 }
 
-impl<S: DiscSource> Disc for DiscImage<S> {
+impl<S: DiscSource> Disc for CueDisc<S> {
     fn read_sector(&mut self, lba: usize) -> Option<RawSector> {
-        let segment = self
-            .segments
-            .iter()
-            .find(|segment| segment.disc_range.contains(&lba))?;
-        let mut sector = [0; RAW_SECTOR_SIZE];
-        if let SegmentSource::Data {
-            source,
-            file_sector,
-        } = segment.source
-        {
-            let file_sector = file_sector + (lba - segment.disc_range.start);
-            let offset = file_sector as u64 * RAW_SECTOR_SIZE as u64;
-            self.sources[source].read_at(offset, &mut sector).ok()?;
+        if lba >= self.sector_count {
+            return None;
         }
+
+        let data = self
+            .track_data
+            .iter_mut()
+            .find(|data| data.disc_range.contains(&lba));
+
+        // Sectors outside file data but within the disc are virtual gaps.
+        let mut sector = [0; RAW_SECTOR_SIZE];
+        if let Some(data) = data {
+            let file_sector = data.file_sector + (lba - data.disc_range.start);
+            let offset = file_sector as u64 * RAW_SECTOR_SIZE as u64;
+            data.source.read_at(offset, &mut sector).ok()?;
+        }
+
         Some(sector)
     }
 
@@ -203,19 +203,22 @@ impl<S: DiscSource> Disc for DiscImage<S> {
     }
 }
 
-fn sectors_in_source(byte_len: u64, source: usize) -> Result<usize, DiscImageError> {
+fn sectors_in_source(byte_len: u64, file_name: Option<&str>) -> Result<usize, CueDiscError> {
     ensure!(
         byte_len != 0 && byte_len.is_multiple_of(RAW_SECTOR_SIZE as u64),
-        InvalidSourceSizeSnafu { source }
+        InvalidSourceSize {
+            file_name: file_name.map(String::from),
+        }
     );
 
-    usize::try_from(byte_len / RAW_SECTOR_SIZE as u64).map_err(|_| DiscImageError::TooLarge)
+    usize::try_from(byte_len / RAW_SECTOR_SIZE as u64).map_err(|_| CueDiscError::TooLarge)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[derive(Clone)]
     struct MemorySource(Vec<u8>);
 
     impl DiscSource for MemorySource {
@@ -244,7 +247,7 @@ mod tests {
 
     #[test]
     fn single_bin_reads_whole_sectors_in_any_order() {
-        let mut disc = DiscImage::from_bin(source(&[0x11, 0x22, 0x33]), TrackMode::Mode2).unwrap();
+        let mut disc = CueDisc::from_bin(source(&[0x11, 0x22, 0x33]), TrackMode::Mode2).unwrap();
         assert_eq!(disc.sector_count(), 3);
         assert_eq!(
             disc.tracks(),
@@ -278,7 +281,7 @@ mod tests {
 "#,
         )
         .unwrap();
-        let mut disc = DiscImage::from_cue(
+        let mut disc = CueDisc::from_cue(
             &cue,
             vec![source(&[0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17])],
         )
@@ -323,7 +326,7 @@ FILE audio.bin BINARY
 "#,
         )
         .unwrap();
-        let mut disc = DiscImage::from_cue(
+        let mut disc = CueDisc::from_cue(
             &cue,
             vec![source(&[0xa1, 0xa2]), source(&[0xb0, 0xb1, 0xb2, 0xb3])],
         )
@@ -343,8 +346,8 @@ FILE audio.bin BINARY
     fn rejects_empty_or_partial_sources() {
         for size in [0, RAW_SECTOR_SIZE - 1, RAW_SECTOR_SIZE + 1] {
             assert!(matches!(
-                DiscImage::from_bin(MemorySource(vec![0; size]), TrackMode::Mode2),
-                Err(DiscImageError::InvalidSourceSize { source: 0 })
+                CueDisc::from_bin(MemorySource(vec![0; size]), TrackMode::Mode2),
+                Err(CueDiscError::InvalidSourceSize { file_name: None })
             ));
         }
 
@@ -352,16 +355,20 @@ FILE audio.bin BINARY
             r#"FILE data.bin BINARY
   TRACK 01 MODE2/2352
     INDEX 01 00:00:00
-FILE empty.bin BINARY
+FILE "audio/Track 02.bin" BINARY
   TRACK 02 AUDIO
     INDEX 01 00:00:00
 "#,
         )
         .unwrap();
-        assert!(matches!(
-            DiscImage::from_cue(&cue, vec![source(&[1]), source(&[])]),
-            Err(DiscImageError::InvalidSourceSize { source: 1 })
-        ));
+        let error = CueDisc::from_cue(&cue, vec![source(&[1]), source(&[])])
+            .err()
+            .unwrap();
+        assert!(
+            matches!(&error, CueDiscError::InvalidSourceSize { file_name: Some(name) }
+            if name == "audio/Track 02.bin")
+        );
+        assert!(alloc::format!("{error}").contains("audio/Track 02.bin"));
     }
 
     #[test]
@@ -387,8 +394,8 @@ FILE empty.bin BINARY
         ] {
             let cue = CueSheet::parse(text).unwrap();
             assert!(matches!(
-                DiscImage::from_cue(&cue, vec![source(&[1, 2, 3])]),
-                Err(DiscImageError::InvalidTrack { track: 1 })
+                CueDisc::from_cue(&cue, vec![source(&[1, 2, 3])]),
+                Err(CueDiscError::InvalidTrack { track: 1 })
             ));
         }
     }
@@ -405,16 +412,16 @@ FILE empty.bin BINARY
         for sources in [vec![], vec![source(&[1]), source(&[2])]] {
             let count = sources.len();
             assert!(matches!(
-                DiscImage::from_cue(&cue, sources),
-                Err(DiscImageError::SourceCount { expected: 1, actual }) if actual == count
+                CueDisc::from_cue(&cue, sources),
+                Err(CueDiscError::SourceCount { expected: 1, actual }) if actual == count
             ));
         }
         assert!(matches!(
-            DiscImage::<MemorySource>::from_cue(&CueSheet { files: vec![] }, vec![]),
-            Err(DiscImageError::NoTracks)
+            CueDisc::<MemorySource>::from_cue(&CueSheet { files: vec![] }, vec![]),
+            Err(CueDiscError::NoTracks)
         ));
         assert!(matches!(
-            DiscImage::from_cue(
+            CueDisc::from_cue(
                 &CueSheet {
                     files: vec![CueFile {
                         name: "empty.bin",
@@ -423,7 +430,7 @@ FILE empty.bin BINARY
                 },
                 vec![source(&[1])],
             ),
-            Err(DiscImageError::NoTracks)
+            Err(CueDiscError::NoTracks)
         ));
     }
 
@@ -438,8 +445,8 @@ FILE empty.bin BINARY
         .unwrap();
         cue.files[0].tracks[0].postgap = usize::MAX;
         assert!(matches!(
-            DiscImage::from_cue(&cue, vec![source(&[1])]),
-            Err(DiscImageError::TooLarge)
+            CueDisc::from_cue(&cue, vec![source(&[1])]),
+            Err(CueDiscError::TooLarge)
         ));
     }
 }

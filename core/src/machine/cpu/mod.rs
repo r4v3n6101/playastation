@@ -1,6 +1,6 @@
 use derive_more::Debug;
 
-use crate::interconnect::bus::Bus;
+use crate::machine::interconnect::bus::Bus;
 
 pub use self::{
     cop0::{Cop0, Exception},

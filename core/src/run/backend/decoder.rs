@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use crate::{
+use crate::machine::{
     cpu::{Cpu, Exception, Instruction},
     interconnect::bus::Bus,
 };

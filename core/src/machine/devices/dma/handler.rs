@@ -1,6 +1,6 @@
 use crate::{
     SystemTime,
-    interconnect::{RAM_SIZE, bus::Bus},
+    machine::interconnect::{RAM_SIZE, bus::Bus},
 };
 
 use super::{CHANNELS, Channel, Direction, Step};

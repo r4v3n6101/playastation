@@ -2,12 +2,9 @@
 
 extern crate alloc;
 
-pub mod cpu;
-pub mod devices;
-pub mod disc;
 pub mod formats;
-pub mod interconnect;
-pub mod render;
+pub mod interfaces;
+pub mod machine;
 pub mod run;
 
 /// This is CPU time in cycles.

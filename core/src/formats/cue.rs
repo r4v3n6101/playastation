@@ -2,7 +2,7 @@ use alloc::{format, string::String, vec, vec::Vec};
 
 use snafu::Snafu;
 
-use crate::disc::TrackMode;
+use crate::interfaces::disc::TrackMode;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CueSheet<'a> {
