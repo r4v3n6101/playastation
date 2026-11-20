@@ -3,13 +3,12 @@ use std::{fs, path::PathBuf, sync::Arc, thread};
 use clap::Parser;
 use crossbeam_utils::atomic::AtomicCell;
 use playastation::{
-    cpu::CPU_FREQ,
-    devices::joy::{
-        Slot,
-        controller::{Button, DigitalController},
-    },
     formats::psexe::BoxedExeFile,
-    render::software::SoftwareRenderer,
+    interfaces::{
+        render::software::SoftwareRenderer,
+        serial::controller::{Button, DigitalController},
+    },
+    machine::{cpu::CPU_FREQ, devices::joy::Slot},
     run::Console,
 };
 use playastation_frontend_common::{App, EmulatorData, EmulatorHost, InputState, eframe, egui};

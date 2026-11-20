@@ -1,12 +1,12 @@
 use crate::{
     SystemTime,
-    devices::int::InterruptController,
-    disc::{RawSector, TrackMode},
+    interfaces::disc::{RawSector, TrackMode},
+    machine::devices::int::InterruptController,
 };
 
 use super::{
-    CDROM_SECOND_DELAY, CDROM_SEEK_DELAY, CdRom, CdRomMode, CdRomStatus, ErrorCode, IrqFlag,
-    LEAD_IN_SECTORS, bcd_to_bin, bin_to_bcd, msf_to_lba, sector_to_msf,
+    CDROM_SECOND_DELAY, CDROM_SEEK_DELAY, CdRom, CdRomMode, CdRomStatus, ErrorCode, IrqFlag, Msf,
+    bcd_to_bin, bin_to_bcd,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,7 +25,7 @@ pub enum Command {
     SeekSecond,
     Read,
     Play { track: u8 },
-    SectorReady,
+    SectorReady { retry: bool },
     StopFirst,
     StopSecond,
     PauseFirst,
@@ -55,7 +55,7 @@ impl Command {
             Self::InitSecond
                 | Self::GetIdSecond
                 | Self::SeekSecond
-                | Self::SectorReady
+                | Self::SectorReady { .. }
                 | Self::PauseSecond
                 | Self::StopSecond
         )
@@ -124,7 +124,8 @@ fn execute_command(
             reply_status(cdrom, int_ctrl, IrqFlag::Int3);
         }
         Command::Setloc { mm, ss, ff } => {
-            cdrom.msf_loc = Some([mm, ss, ff]);
+            let msf = Msf::from_bcd([mm, ss, ff]).ok_or(ErrorCode::BadParameter)?;
+            cdrom.msf_loc = Some(msf);
 
             reply_status(cdrom, int_ctrl, IrqFlag::Int3);
         }
@@ -211,26 +212,26 @@ fn execute_command(
                 CdRomStatus::MOTOR_ON | CdRomStatus::PLAYING,
             );
         }
-        Command::SectorReady => {
+        Command::SectorReady { retry } => {
             let step = if cdrom.status.contains(CdRomStatus::PLAYING) {
                 play_sector(cdrom, int_ctrl)
             } else if cdrom.status.contains(CdRomStatus::READING) {
-                read_sector(cdrom, int_ctrl)
+                read_sector(cdrom, int_ctrl, retry)
             } else {
-                cdrom.read_second_delivery_attempt = false;
-                SectorStep::Stopped
+                return Ok(());
             };
 
-            match step {
+            let retry = match step {
                 SectorStep::Advance => {
                     cdrom.position_lba = cdrom.cursor_lba;
                     cdrom.cursor_lba = cdrom.cursor_lba.wrapping_add(1);
+                    false
                 }
-                SectorStep::Retry => {}
+                SectorStep::Retry => true,
                 SectorStep::Stopped => return Ok(()),
-            }
+            };
 
-            cdrom.queue_task(Command::SectorReady, cdrom.read_sector_delay());
+            cdrom.queue_task(Command::SectorReady { retry }, cdrom.read_sector_delay());
         }
     }
 
@@ -252,7 +253,7 @@ fn get_td_response(cdrom: &CdRom, track: u8) -> Result<[u8; 3], ErrorCode> {
             .ok_or(ErrorCode::BadParameter)?
             .start_lba
     };
-    let [minutes, seconds, _] = sector_to_msf(lba + LEAD_IN_SECTORS);
+    let [minutes, seconds, _] = Msf::from_lba(lba).to_bcd();
 
     Ok([cdrom.status.bits(), minutes, seconds])
 }
@@ -263,26 +264,21 @@ fn get_loc_p_response(cdrom: &CdRom) -> Result<[u8; 8], ErrorCode> {
         .track_at(cdrom.position_lba)
         .ok_or(ErrorCode::BadParameter)?;
 
-    let relative = sector_to_msf(cdrom.position_lba.abs_diff(track.start_lba));
-    let absolute = sector_to_msf(cdrom.position_lba + LEAD_IN_SECTORS);
+    let [rel_m, rel_s, rel_f] =
+        Msf::from_frames(cdrom.position_lba.abs_diff(track.start_lba)).to_bcd();
+    let [abs_m, abs_s, abs_f] = Msf::from_lba(cdrom.position_lba).to_bcd();
     let index = u8::from(cdrom.position_lba >= track.start_lba);
 
     Ok([
         bin_to_bcd(number),
         index,
-        relative[0],
-        relative[1],
-        relative[2],
-        absolute[0],
-        absolute[1],
-        absolute[2],
+        rel_m,
+        rel_s,
+        rel_f,
+        abs_m,
+        abs_s,
+        abs_f,
     ])
-}
-
-fn clear_transfer(cdrom: &mut CdRom) {
-    cdrom.cancel_read();
-    cdrom.pending_sector = None;
-    cdrom.data_fifo.clear();
 }
 
 fn start_transfer(cdrom: &mut CdRom, int_ctrl: &mut InterruptController, status: CdRomStatus) {
@@ -293,14 +289,23 @@ fn start_transfer(cdrom: &mut CdRom, int_ctrl: &mut InterruptController, status:
     cdrom.status.insert(status);
 
     reply_status(cdrom, int_ctrl, IrqFlag::Int3);
-    cdrom.queue_task(Command::SectorReady, cdrom.read_sector_delay());
+    cdrom.queue_task(
+        Command::SectorReady { retry: false },
+        cdrom.read_sector_delay(),
+    );
+}
+
+fn clear_transfer(cdrom: &mut CdRom) {
+    cdrom.cancel_read();
+    cdrom.pending_sector = None;
+    cdrom.data_fifo.clear();
 }
 
 fn set_play_position(cdrom: &mut CdRom, track: u8) -> Result<(), ErrorCode> {
     let disc = cdrom.disc.as_ref().ok_or(ErrorCode::NoDisc)?;
 
     let lba = if track == 0 {
-        cdrom.msf_loc.map(msf_to_lba).unwrap_or(cdrom.cursor_lba)
+        cdrom.msf_loc.map(Msf::to_lba).unwrap_or(cdrom.cursor_lba)
     } else {
         // Out-of-range track numbers restart the current track.
         disc.tracks()
@@ -320,10 +325,9 @@ fn set_play_position(cdrom: &mut CdRom, track: u8) -> Result<(), ErrorCode> {
     Ok(())
 }
 
-fn read_sector(cdrom: &mut CdRom, int_ctrl: &mut InterruptController) -> SectorStep {
+fn read_sector(cdrom: &mut CdRom, int_ctrl: &mut InterruptController, retry: bool) -> SectorStep {
     if cdrom.pending_sector.is_some() {
-        if !cdrom.read_second_delivery_attempt {
-            cdrom.read_second_delivery_attempt = true;
+        if !retry {
             tracing::warn!(
                 next_lba = cdrom.cursor_lba,
                 "cdrom sector pending, giving CPU second chance"
@@ -336,7 +340,6 @@ fn read_sector(cdrom: &mut CdRom, int_ctrl: &mut InterruptController) -> SectorS
             "cdrom sector overrun: dropping previous pending sector"
         );
         cdrom.pending_sector = None;
-        cdrom.read_second_delivery_attempt = false;
     }
 
     let result = cdrom
@@ -352,7 +355,6 @@ fn read_sector(cdrom: &mut CdRom, int_ctrl: &mut InterruptController) -> SectorS
         Ok(sector) => sector,
         Err(err) => {
             cdrom.status.remove(CdRomStatus::READING);
-            cdrom.read_second_delivery_attempt = false;
             cdrom.raise_err(int_ctrl, err);
             return SectorStep::Stopped;
         }
@@ -360,7 +362,6 @@ fn read_sector(cdrom: &mut CdRom, int_ctrl: &mut InterruptController) -> SectorS
 
     if !is_xa_audio_sector(cdrom, &raw_sector) {
         cdrom.pending_sector = Some(raw_sector);
-        cdrom.read_second_delivery_attempt = false;
         reply_status(cdrom, int_ctrl, IrqFlag::Int1);
     }
 
@@ -368,8 +369,6 @@ fn read_sector(cdrom: &mut CdRom, int_ctrl: &mut InterruptController) -> SectorS
 }
 
 fn play_sector(cdrom: &mut CdRom, int_ctrl: &mut InterruptController) -> SectorStep {
-    const BCD_UNITS_MASK: u8 = 0x0f;
-    const BCD_TENS_PARITY_BIT: u8 = 0x10;
     const RELATIVE_TIME_FLAG: u8 = 0x80;
 
     let Some(disc) = cdrom.disc.as_ref() else {
@@ -401,20 +400,17 @@ fn play_sector(cdrom: &mut CdRom, int_ctrl: &mut InterruptController) -> SectorS
         return SectorStep::Advance;
     }
 
-    let absolute = sector_to_msf(cdrom.cursor_lba + LEAD_IN_SECTORS);
-    if absolute[2] & BCD_UNITS_MASK != 0 {
-        return SectorStep::Advance;
-    }
-
-    let relative_report = absolute[2] & BCD_TENS_PARITY_BIT != 0;
-    let [minutes, mut seconds, frames] = if relative_report {
-        sector_to_msf(cdrom.cursor_lba.abs_diff(track.start_lba))
-    } else {
-        absolute
+    // https://github.com/stenzek/duckstation/blob/983acec71ec706c3d436f0c70e88e58f6c88df0a/src/core/cdrom.cpp#L4101-L4122
+    let absolute = Msf::from_lba(cdrom.cursor_lba);
+    let [minutes, seconds, frames] = match absolute.frame {
+        0 | 20 | 40 | 60 => absolute.to_bcd(),
+        10 | 30 | 50 | 70 => {
+            let relative = Msf::from_frames(cdrom.cursor_lba.abs_diff(track.start_lba));
+            let [minutes, seconds, frames] = relative.to_bcd();
+            [minutes, seconds | RELATIVE_TIME_FLAG, frames]
+        }
+        _ => return SectorStep::Advance,
     };
-    if relative_report {
-        seconds |= RELATIVE_TIME_FLAG;
-    }
 
     cdrom.push_response(&[
         cdrom.status.bits(),

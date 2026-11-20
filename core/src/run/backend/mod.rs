@@ -1,7 +1,7 @@
 use crate::{
     SystemTime,
-    cpu::{Cpu, Exception},
-    interconnect::bus::Bus,
+    machine::cpu::{Cpu, Exception},
+    machine::interconnect::bus::Bus,
 };
 
 mod cache;

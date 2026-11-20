@@ -5,7 +5,7 @@ use fnv::FnvBuildHasher;
 use hashbrown::HashMap;
 use smallvec::SmallVec;
 
-use crate::{
+use crate::machine::{
     cpu::{Cpu, TranslationResult},
     interconnect::{RAM_SIZE, Region, region_of},
 };

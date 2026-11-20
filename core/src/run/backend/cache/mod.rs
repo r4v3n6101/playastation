@@ -1,7 +1,7 @@
 use alloc::{rc::Rc, vec::Vec};
 use core::ops::Deref;
 
-use crate::cpu::{Cpu, Exception, Instruction};
+use crate::machine::cpu::{Cpu, Exception, Instruction};
 
 mod block;
 

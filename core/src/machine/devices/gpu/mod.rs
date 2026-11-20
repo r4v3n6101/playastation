@@ -4,16 +4,16 @@ use core::mem;
 use modular_bitfield::prelude::*;
 
 use crate::{
-    devices::{
-        int::InterruptController,
-        timer::{TimerController, TimingEvent},
-    },
-    interconnect::scheduler::{Event, Scheduler},
-    render::{
+    interfaces::render::{
         Renderer,
         noop::NoopRenderer,
         types::{RenderState, SemiTransparency, TextureDepth},
     },
+    machine::devices::{
+        int::InterruptController,
+        timer::{TimerController, TimingEvent},
+    },
+    machine::interconnect::scheduler::{Event, Scheduler},
 };
 
 use super::{read_part, write_part};

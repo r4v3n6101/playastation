@@ -4,11 +4,11 @@ use smallbox::{SmallBox, space::S32};
 use smallvec::SmallVec;
 
 use crate::{
-    devices::int::{InterruptController, InterruptFlags},
-    render::types::{
+    interfaces::render::types::{
         Color, DrawMode, EnvParameter, Location, MaskBitSetting, POLYGON_STACK_LIMIT,
         POLYLINE_STACK_LIMIT, Polygon, Polyline, Position, Rect, Size, TextureWindow, UV, Vertex,
     },
+    machine::devices::int::{InterruptController, InterruptFlags},
 };
 
 use super::Gpu;
@@ -761,7 +761,7 @@ fn parse_uv(cmd: u32) -> UV {
 
 #[cfg(test)]
 mod tests {
-    use crate::render::types::{Color, Location, Size};
+    use crate::interfaces::render::types::{Color, Location, Size};
 
     use super::{super::Gpu, LinePacket, PacketBuilder, PolygonPacket, RectPacket};
 

@@ -38,19 +38,19 @@ A host using PlayaStation is responsible for providing:
 
 The core itself does not access the filesystem or sleep to maintain real-time emulation.
 
-Disc images are provided by implementing `disc::Disc`. Controller input can be provided through `DigitalController`, and rendered VRAM is exposed through the configured `Renderer`.
+Disc images are provided by implementing `interfaces::disc::Disc`. Controller input can be provided through `DigitalController`, and rendered VRAM is exposed through the configured `Renderer`.
 
 A minimal host can look like this:
 
 ```rust
 use playastation::{
-    devices::joy::{
+    machine::devices::joy::{
         controller::{Button, DigitalController},
         Slot,
     },
-    disc::{Disc, RawSector},
-    interconnect::BIOS_SIZE,
-    render::software::SoftwareRenderer,
+    interfaces::disc::{Disc, RawSector},
+    machine::interconnect::BIOS_SIZE,
+    interfaces::render::software::SoftwareRenderer,
     run::Console,
 };
 
@@ -101,13 +101,13 @@ fn main() {
 
 `Disc::read_sector()` operates on `RawSector`, a complete 2352-byte CD sector, including its 12-byte synchronization prefix. `Disc::tracks()` describes the disc TOC: each track's mode, INDEX 01 LBA, and preceding INDEX 00 pregap. It defaults to one Mode 2 data track for plain BIN images.
 
-`formats::cue::CueSheet::parse()` parses CUE text without filesystem access or `std`. It supports BINARY files with AUDIO, MODE1/2352, and MODE2/2352 tracks, shared or separate BIN files, INDEX 00/01, PREGAP, and POSTGAP. It returns file-relative indexes. `disc::DiscImage::from_cue()` validates the BIN sizes and track boundaries and resolves these indexes into disc LBAs. Sources implement `disc::DiscSource` to expose their byte length and read raw sectors at byte offsets; filesystem access stays in the frontend. Track numbers must run consecutively from 01, with at most 99 tracks.
+`formats::cue::CueSheet::parse()` parses CUE text without filesystem access or `std`. It supports BINARY files with AUDIO, MODE1/2352, and MODE2/2352 tracks, shared or separate BIN files, INDEX 00/01, PREGAP, and POSTGAP. It returns file-relative indexes. `interfaces::disc::cue::CueDisc::from_cue()` validates the BIN sizes and track boundaries and resolves these indexes into disc LBAs. Sources implement `interfaces::disc::cue::DiscSource` to expose their byte length and read raw sectors at byte offsets; filesystem access stays in the frontend. CUE sources must also implement `Clone`: each track holds its own source handle, and the desktop frontend holds the same mutex across the seek and read on the shared file. Track numbers must run consecutively from 01, with at most 99 tracks.
 
 The desktop frontend opens CUE sheets with `--disc /path/to/game.cue` (`--cue` and `--bin` are aliases). Referenced BIN paths are resolved relative to the CUE file. Opening a raw BIN directly still presents a single-track disc; use the CUE sheet to include CD-DA tracks.
 
 CD-DA playback advances the drive position and emits position reports and end-of-track interrupts. Audio sample mixing is not implemented yet.
 
-For more specialized integrations, custom rendering can be implemented through `render::Renderer`.
+For more specialized integrations, custom rendering can be implemented through `interfaces::render::Renderer`.
 
 ## Limitations
 

@@ -3,9 +3,9 @@ use core::mem;
 
 use crate::{
     SystemTime,
-    cpu::{Cpu, Exception, PendingJump},
     formats::psexe::{BoxedExeFile, ExeHeader},
-    interconnect::bus::Bus,
+    machine::cpu::{Cpu, Exception, PendingJump},
+    machine::interconnect::bus::Bus,
 };
 
 mod backend;
@@ -90,7 +90,7 @@ impl Console {
             self.cpu.pc = ipc.get();
             self.cpu.gpr[28] = igp.get();
             if ispb.get() != 0 {
-                self.cpu.gpr[29] = ispb.get() + ispoff.get();
+                self.cpu.gpr[29] = ispb.get().wrapping_add(ispoff.get());
                 self.cpu.gpr[30] = self.cpu.gpr[29];
             }
 

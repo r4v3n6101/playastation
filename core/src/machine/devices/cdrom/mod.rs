@@ -42,15 +42,14 @@ use modular_bitfield::prelude::*;
 
 use crate::{
     SystemTime,
-    devices::int::{InterruptController, InterruptFlags},
-    disc::{Disc, RawSector},
-    interconnect::scheduler::{Event, Scheduler},
+    interfaces::disc::{Disc, RawSector},
+    machine::devices::int::{InterruptController, InterruptFlags},
+    machine::interconnect::scheduler::{Event, Scheduler},
 };
 
 mod inner;
 
 const PARAM_FIFO_CAP: usize = 16;
-const LEAD_IN_SECTORS: usize = 150;
 
 const CDROM_COMMAND_DEFAULT_DELAY: SystemTime = 0x1100;
 const CDROM_SECOND_DELAY: SystemTime = 0x3000;
@@ -106,11 +105,10 @@ pub struct CdRom {
     cursor_lba: usize,
     position_lba: usize,
     play_track: u8,
-    msf_loc: Option<[u8; 3]>,
+    msf_loc: Option<Msf>,
     filter_file: u8,
     filter_channel: u8,
     pending_sector: Option<RawSector>,
-    read_second_delivery_attempt: bool,
 
     volume_cd_left_to_spu_left: u8,
     volume_cd_left_to_spu_right: u8,
@@ -194,7 +192,6 @@ impl Default for CdRom {
             filter_file: 0,
             filter_channel: 0,
             pending_sector: None,
-            read_second_delivery_attempt: false,
 
             volume_cd_left_to_spu_left: 0,
             volume_cd_left_to_spu_right: 0,
@@ -424,8 +421,7 @@ impl CdRom {
 
     fn cancel_read(&mut self) {
         self.pending
-            .retain(|scheduled| scheduled.cmd != inner::Command::SectorReady);
-        self.read_second_delivery_attempt = false;
+            .retain(|scheduled| !matches!(scheduled.cmd, inner::Command::SectorReady { .. }));
     }
 
     fn read_sector_delay(&self) -> SystemTime {
@@ -441,7 +437,7 @@ impl CdRom {
             return;
         };
 
-        self.cursor_lba = msf_to_lba(msf);
+        self.cursor_lba = msf.to_lba();
         self.position_lba = self.cursor_lba;
     }
 
@@ -468,26 +464,69 @@ impl CdRom {
     }
 }
 
+#[derive(Clone, Copy)]
+struct Msf {
+    minute: u8,
+    second: u8,
+    frame: u8,
+}
+
+impl Msf {
+    const FRAMES_PER_SECOND: usize = 75;
+    const LEAD_IN_SECONDS: usize = 2;
+
+    fn from_bcd([mm, ss, ff]: [u8; 3]) -> Option<Self> {
+        if !bcd_in_range(mm, 0x99) || !bcd_in_range(ss, 0x59) || !bcd_in_range(ff, 0x74) {
+            return None;
+        }
+
+        Some(Self {
+            minute: bcd_to_bin(mm),
+            second: bcd_to_bin(ss),
+            frame: bcd_to_bin(ff),
+        })
+    }
+
+    fn from_frames(frames: usize) -> Self {
+        Self::from_frames_with_offset(frames, 0)
+    }
+
+    fn from_lba(lba: usize) -> Self {
+        Self::from_frames_with_offset(lba, Self::LEAD_IN_SECONDS)
+    }
+
+    fn from_frames_with_offset(frames: usize, offset_seconds: usize) -> Self {
+        let seconds = frames / Self::FRAMES_PER_SECOND + offset_seconds;
+        Self {
+            minute: (seconds / 60) as u8,
+            second: (seconds % 60) as u8,
+            frame: (frames % Self::FRAMES_PER_SECOND) as u8,
+        }
+    }
+
+    fn to_bcd(self) -> [u8; 3] {
+        [
+            bin_to_bcd(self.minute),
+            bin_to_bcd(self.second),
+            bin_to_bcd(self.frame),
+        ]
+    }
+
+    fn to_lba(self) -> usize {
+        let seconds = usize::from(self.minute) * 60 + usize::from(self.second);
+        let frames = seconds * Self::FRAMES_PER_SECOND + usize::from(self.frame);
+        frames.saturating_sub(Self::LEAD_IN_SECONDS * Self::FRAMES_PER_SECOND)
+    }
+}
+
+fn bcd_in_range(value: u8, max: u8) -> bool {
+    value <= max && (value & 0x0F) <= 9
+}
+
 fn bcd_to_bin(value: u8) -> u8 {
     ((value >> 4) * 10) + (value & 0x0F)
 }
 
 fn bin_to_bcd(value: u8) -> u8 {
     ((value / 10) << 4) | (value % 10)
-}
-
-fn msf_to_lba([mm, ss, ff]: [u8; 3]) -> usize {
-    let minutes = bcd_to_bin(mm) as usize;
-    let seconds = bcd_to_bin(ss) as usize;
-    let frames = bcd_to_bin(ff) as usize;
-
-    (((minutes * 60) + seconds) * 75 + frames).saturating_sub(LEAD_IN_SECTORS)
-}
-
-fn sector_to_msf(sectors: usize) -> [u8; 3] {
-    [
-        bin_to_bcd((sectors / (60 * 75)) as u8),
-        bin_to_bcd(((sectors / 75) % 60) as u8),
-        bin_to_bcd((sectors % 75) as u8),
-    ]
 }
