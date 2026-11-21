@@ -115,7 +115,7 @@ impl Console {
         self.cpu.cop0.exception_enter(
             exception,
             self.cpu.pc,
-            self.cpu.pending_jump.map(PendingJump::target),
+            self.cpu.pending_jump.take().map(PendingJump::target),
         );
         self.cpu.pc = self.cpu.cop0.exception_handler();
     }
