@@ -91,7 +91,7 @@ impl Bus {
 
     // Inlined because RAM/BIOS hot paths are needed for caller
     #[inline(always)]
-    pub(crate) fn load<const N: usize>(&mut self, paddr: u32) -> [u8; N] {
+    pub(crate) fn load<const N: usize>(&mut self, paddr: u32) -> Option<[u8; N]> {
         let mut buf = [0; N];
 
         // Aligned access is faster due to check of `start` only
@@ -103,7 +103,7 @@ impl Bus {
                     ptr::copy_nonoverlapping(self.ram.as_ptr().byte_add(addr), buf.as_mut_ptr(), N);
                 }
 
-                return buf;
+                return Some(buf);
             } else if BIOS.contains(&paddr) {
                 // SAFETY: same as above
                 unsafe {
@@ -115,7 +115,7 @@ impl Bus {
                     );
                 }
 
-                return buf;
+                return Some(buf);
             } else if SCRATCHPAD.contains(&paddr) {
                 // SAFETY: same as above
                 unsafe {
@@ -127,13 +127,11 @@ impl Bus {
                     );
                 }
 
-                return buf;
+                return Some(buf);
             }
         }
 
-        self.load_slow_path::<N>(&mut buf, paddr);
-
-        buf
+        self.load_slow_path(&mut buf, paddr).then_some(buf)
     }
 
     // Inlining: same as above
@@ -173,7 +171,7 @@ impl Bus {
 
     #[cold]
     #[inline(never)]
-    fn load_slow_path<const N: usize>(&mut self, buf: &mut [u8], paddr: u32) {
+    fn load_slow_path(&mut self, buf: &mut [u8], paddr: u32) -> bool {
         let mmio_span = tracing::trace_span!(
             target: "bus.mmio",
             "load",
@@ -230,8 +228,10 @@ impl Bus {
             Region::Ram => unimplemented!(),
             Region::Bios => unimplemented!(),
             Region::Scratchpad => unimplemented!(),
-            Region::Expansion1 | Region::Expansion2 | Region::Unmapped => {}
+            Region::Expansion1 | Region::Expansion2 => {}
+            Region::Unmapped => return false,
         }
+        true
     }
 
     #[cold]

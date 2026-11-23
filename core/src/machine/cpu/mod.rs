@@ -100,25 +100,6 @@ impl Cpu {
     }
 
     #[inline(always)]
-    pub(crate) fn read_bus<const N: usize>(
-        &self,
-        bus: &mut Bus,
-        vaddr: u32,
-    ) -> Result<[u8; N], Exception> {
-        if !vaddr.is_multiple_of(N as u32) {
-            return Err(Exception::UnalignedLoad { bad_vaddr: vaddr });
-        }
-
-        let paddr = match self.mmu.translate_addr(vaddr) {
-            TranslationResult::PhysAddr(res) => res,
-            TranslationResult::CacheControl => return Ok([0; _]),
-            TranslationResult::Unmapped => return Err(Exception::DataBus { bad_vaddr: vaddr }),
-        };
-
-        Ok(bus.load(paddr))
-    }
-
-    #[inline(always)]
     pub(crate) fn write_bus<const N: usize>(
         &mut self,
         bus: &mut Bus,
@@ -138,5 +119,37 @@ impl Cpu {
         bus.store(paddr, val);
 
         Ok(())
+    }
+
+    #[inline(always)]
+    pub(crate) fn read_bus<const N: usize>(
+        &self,
+        bus: &mut Bus,
+        vaddr: u32,
+    ) -> Result<[u8; N], Exception> {
+        match self.translate_load(vaddr, N as u32)? {
+            TranslationResult::PhysAddr(paddr) => bus.load(paddr),
+            TranslationResult::CacheControl => Some([0; _]),
+            TranslationResult::Unmapped => None,
+        }
+        .ok_or(Exception::DataBus { bad_vaddr: vaddr })
+    }
+
+    #[inline(always)]
+    pub(crate) fn read_pc(&self, bus: &mut Bus, pc: u32) -> Result<u32, Exception> {
+        match self.translate_load(pc, Instruction::SIZE as u32)? {
+            TranslationResult::PhysAddr(paddr) => bus.load(paddr).map(u32::from_le_bytes),
+            _ => None,
+        }
+        .ok_or(Exception::InstructionBus)
+    }
+
+    #[inline(always)]
+    fn translate_load(&self, vaddr: u32, alignment: u32) -> Result<TranslationResult, Exception> {
+        if !vaddr.is_multiple_of(alignment) {
+            return Err(Exception::UnalignedLoad { bad_vaddr: vaddr });
+        }
+
+        Ok(self.mmu.translate_addr(vaddr))
     }
 }

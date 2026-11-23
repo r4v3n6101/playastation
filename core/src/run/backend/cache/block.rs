@@ -65,7 +65,7 @@ impl<T> PagedCache<T> {
 
     pub fn get(&self, cpu: &Cpu) -> Option<Rc<Cached<T>>> {
         let TranslationResult::PhysAddr(phys_pc) = cpu.mmu.translate_addr(cpu.pc) else {
-            unimplemented!()
+            return None;
         };
 
         let phys_pc = maybe_cut_ram_mirrors(phys_pc);

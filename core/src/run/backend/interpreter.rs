@@ -98,15 +98,19 @@ pub fn run_block(
     let handle = match ctx.cache.get(ctx.cpu) {
         Some(handle) => handle,
         None => {
+            let ops = decoder::fetch_and_decode_block(ctx.cpu, ctx.bus, BLOCK_DECODER_LIMIT);
+
+            // Skip invalid block caching at all
+            if let Some(Err(exception)) = ops.first() {
+                ctx.result.stop_reason = StopReason::Exception(*exception);
+                ctx.result.cycles_elapsed = ctx.result.cycles_elapsed.saturating_add(1);
+                return;
+            }
+
             if let TranslationResult::PhysAddr(paddr) = ctx.cpu.mmu.translate_addr(ctx.cpu.pc) {
-                ctx.cache.insert(
-                    paddr,
-                    CodeBlock {
-                        ops: decoder::fetch_and_decode_block(ctx.cpu, ctx.bus, BLOCK_DECODER_LIMIT),
-                    },
-                )
+                ctx.cache.insert(paddr, CodeBlock { ops })
             } else {
-                panic!("non-executable memory")
+                unreachable!("instruction fetch must be in physical address range")
             }
         }
     };

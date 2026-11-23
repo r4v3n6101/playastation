@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 
 use crate::machine::{
     cpu::{Cpu, Exception, Instruction},
-    interconnect::bus::Bus,
+    interconnect::{RAM_SIZE, Region, bus::Bus, region_of},
 };
 
 /// Fetch single instruction by `cpu.pc` and decode it
@@ -17,11 +17,20 @@ pub fn fetch_and_decode_block(
     bus: &mut Bus,
     limit: usize,
 ) -> Vec<Result<Instruction, Exception>> {
-    let mut pc = cpu.pc;
+    let start = cpu.pc;
+
+    // RAM mirrors share blocks. Only the last mirror is followed by unmapped space.
+    let last_byte = cpu.mmu.mapped_segment(start).map_or(start, |segment| {
+        if region_of(start - segment.start) == Region::Ram {
+            start | (RAM_SIZE as u32 - 1)
+        } else {
+            segment.end - 1
+        }
+    });
     let mut pending_delay_slot = cpu.pending_jump.is_some();
 
     let mut output = Vec::new();
-    for _ in 0..limit {
+    for pc in (start..=last_byte).step_by(Instruction::SIZE).take(limit) {
         let ins = match fetch_and_decode(cpu, bus, pc) {
             Ok(ins) => ins,
             Err(exc) => {
@@ -44,31 +53,19 @@ pub fn fetch_and_decode_block(
         if ins.has_branch_delay() {
             pending_delay_slot = true;
         }
-
-        pc = pc.wrapping_add(4);
     }
 
     output
 }
 
 fn fetch_and_decode(cpu: &mut Cpu, bus: &mut Bus, pc: u32) -> Result<Instruction, Exception> {
-    let ins = match cpu.read_bus(bus, pc) {
-        Ok(word) => u32::from_le_bytes(word),
-        Err(exception) => {
-            let exception = match exception {
-                exc @ Exception::UnalignedLoad { .. } => exc,
-                _ => Exception::InstructionBus { bad_vaddr: pc },
-            };
-
-            tracing::warn!(
-                ?exception,
-                pc=%format_args!("{pc:#X}"),
-                "ins fetch failed"
-            );
-
-            return Err(exception);
-        }
-    };
+    let ins = cpu.read_pc(bus, pc).inspect_err(|exception| {
+        tracing::warn!(
+            ?exception,
+            pc=%format_args!("{pc:#X}"),
+            "ins fetch failed"
+        );
+    })?;
 
     let Some(ins) = Instruction::decode(ins) else {
         tracing::warn!(

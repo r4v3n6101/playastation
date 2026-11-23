@@ -1,7 +1,7 @@
 use core::ops::Range;
 
-// KUSEG spans 0x0000_0000..0x8000_0000. On PSX, accesses to
-// 0x2000_0000..0x8000_0000 raise an exception.
+/// KUSEG spans 0x0000_0000..0x8000_0000.
+/// On PSX, accesses to 0x2000_0000..0x8000_0000 raise an exception.
 const KUSEG: Range<u32> = 0x0000_0000..0x2000_0000;
 const KSEG0: Range<u32> = 0x8000_0000..0xA000_0000;
 const KSEG1: Range<u32> = 0xA000_0000..0xC000_0000;
@@ -23,12 +23,20 @@ impl Mmu {
     /// Translate a virtual address from segments into physical one.
     #[inline(always)]
     pub fn translate_addr(&self, vaddr: u32) -> TranslationResult {
+        match self.mapped_segment(vaddr) {
+            Some(segment) => TranslationResult::PhysAddr(vaddr - segment.start),
+            None if vaddr == CACHE_CONTROL => TranslationResult::CacheControl,
+            None => TranslationResult::Unmapped,
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn mapped_segment(&self, vaddr: u32) -> Option<Range<u32>> {
         match vaddr {
-            x if KUSEG.contains(&x) || KSEG0.contains(&x) || KSEG1.contains(&x) => {
-                TranslationResult::PhysAddr(x & 0x1FFF_FFFF)
-            }
-            CACHE_CONTROL => TranslationResult::CacheControl,
-            _ => TranslationResult::Unmapped,
+            x if KUSEG.contains(&x) => Some(KUSEG),
+            x if KSEG0.contains(&x) => Some(KSEG0),
+            x if KSEG1.contains(&x) => Some(KSEG1),
+            _ => None,
         }
     }
 }

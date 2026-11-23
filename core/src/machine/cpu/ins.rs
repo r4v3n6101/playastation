@@ -76,6 +76,8 @@ pub enum Instruction {
 }
 
 impl Instruction {
+    pub const SIZE: usize = size_of::<u32>();
+
     pub fn decode(ins: u32) -> Option<Self> {
         let rs = ((ins >> 21) & 0x1F) as u8;
         let rt = ((ins >> 16) & 0x1F) as u8;

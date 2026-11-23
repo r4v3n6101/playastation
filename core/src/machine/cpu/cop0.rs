@@ -62,7 +62,7 @@ pub enum Exception {
     Interrupt = 0x00,
     UnalignedLoad { bad_vaddr: u32 } = 0x04,
     UnalignedStore { bad_vaddr: u32 } = 0x05,
-    InstructionBus { bad_vaddr: u32 } = 0x06,
+    InstructionBus = 0x06,
     DataBus { bad_vaddr: u32 } = 0x07,
     Syscall = 0x08,
     Break = 0x09,
@@ -123,10 +123,7 @@ impl Cop0 {
 
         cause.set_excode(exception.discriminant() as u8);
         match exception {
-            Exception::UnalignedLoad { bad_vaddr }
-            | Exception::UnalignedStore { bad_vaddr }
-            | Exception::InstructionBus { bad_vaddr }
-            | Exception::DataBus { bad_vaddr } => {
+            Exception::UnalignedLoad { bad_vaddr } | Exception::UnalignedStore { bad_vaddr } => {
                 self.regs[Self::BAD_VADDR_IDX] = bad_vaddr;
             }
             Exception::CoprocessorUnusable { cop: coprocessor } => {
